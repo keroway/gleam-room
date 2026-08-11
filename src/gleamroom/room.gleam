@@ -177,6 +177,19 @@ pub type Message {
   /// 空でなければ何もせず動き続け、`reply_to` に `False` を返す。
   /// registry はこの結果を見て Dict から外すかを決める。
   ShutdownIfEmpty(reply_to: Subject(Bool))
+  /// 参加者の接続プロセスが死んだときに届く（#56 / #35）。
+  ///
+  /// 参加者は WebSocket の接続プロセスと 1 対 1 で対応する。接続が死んだのに
+  /// Leave が届かない経路が複数ある:
+  ///
+  ///   - `Join` がタイムアウトし、**遅れて成立した**（接続側は自分が参加者だと
+  ///     知らないので Leave を送れない、#33）
+  ///   - 接続プロセスがクラッシュした
+  ///   - 突然の切断で `on_close` が走らなかった（#35）
+  ///
+  /// 原因ごとに塞ぐより「**接続が死んだら参加者も消える**」という不変条件を
+  /// 1 つ置くほうが確実。監視は join を受けた時点で張る。
+  SessionDown(pid: process.Pid)
 }
 
 /// The actor's own state: the domain `RoomState` plus the set of connected
@@ -184,14 +197,36 @@ pub type Message {
 /// `RoomState` so the pure state transitions stay testable without a
 /// process or a notion of "subscriber".
 type ActorState {
-  ActorState(room: RoomState, subscribers: Dict(String, Subject(RoomEvent)))
+  ActorState(
+    room: RoomState,
+    subscribers: Dict(String, Subject(RoomEvent)),
+    /// 監視中の接続プロセス pid → ParticipantId の文字列表現（#56）。
+    /// exit メッセージは pid しか運ばないため逆引きが要る。
+    sessions: Dict(process.Pid, String),
+  )
 }
 
 /// Starts one isolated room actor with empty state. Each call produces an
 /// independent process with its own mailbox, so multiple rooms never share
 /// participant state (ADR 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  actor.new(ActorState(room: new_state(), subscribers: dict.new()))
+  actor.new_with_initialiser(1000, fn(subject) {
+    // 接続プロセスの死を signal ではなくメッセージとして受ける（#56）。
+    // trap しないと、監視対象の異常終了が room を道連れにする。
+    process.trap_exits(True)
+    let selector =
+      process.new_selector()
+      |> process.select(subject)
+      |> process.select_trapped_exits(fn(exit) { SessionDown(exit.pid) })
+    actor.initialised(ActorState(
+      room: new_state(),
+      subscribers: dict.new(),
+      sessions: dict.new(),
+    ))
+    |> actor.selecting(selector)
+    |> actor.returning(subject)
+    |> Ok
+  })
   |> actor.on_message(handle_message)
   |> actor.start
 }
@@ -205,12 +240,17 @@ fn handle_message(
       let #(next_room, event) = apply_command(state.room, command)
       let next_subscribers =
         update_subscribers(state.subscribers, event, session)
+      let next_sessions = update_sessions(state.sessions, event, session)
       // The caller always gets the event synchronously through `reply_to`;
       // other connected sessions learn about it asynchronously through
       // their own subject so they observe consistent room state.
       process.send(reply_to, event)
       broadcast(next_subscribers, except: session, event: event)
-      actor.continue(ActorState(room: next_room, subscribers: next_subscribers))
+      actor.continue(ActorState(
+        room: next_room,
+        subscribers: next_subscribers,
+        sessions: next_sessions,
+      ))
     }
     GetSnapshot(reply_to) -> {
       process.send(reply_to, snapshot(state.room))
@@ -220,6 +260,24 @@ fn handle_message(
       process.send(reply_to, buzz_snapshot(state.room))
       actor.continue(state)
     }
+    SessionDown(pid) ->
+      case dict.get(state.sessions, pid) {
+        Error(Nil) -> actor.continue(state)
+        Ok(participant_key) -> {
+          // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
+          // 通常の Leave と同じ経路を通すので、他の参加者にも
+          // ParticipantLeft が配信される。
+          let id = ParticipantId(participant_key)
+          let #(next_room, event) = apply_command(state.room, Leave(id))
+          let next_subscribers = dict.delete(state.subscribers, participant_key)
+          broadcast_all(next_subscribers, event)
+          actor.continue(ActorState(
+            room: next_room,
+            subscribers: next_subscribers,
+            sessions: dict.delete(state.sessions, pid),
+          ))
+        }
+      }
     ShutdownIfEmpty(reply_to) ->
       case state.room.participants {
         [] -> {
@@ -233,6 +291,48 @@ fn handle_message(
         }
       }
   }
+}
+
+/// 参加時に接続プロセスを監視対象へ入れ、離脱時に外す（#56）。
+///
+/// `process.link` を張るのは room 側。接続プロセスは room の生死を気にしないが、
+/// room は接続の生死を知る必要がある（片方向の関心）。
+fn update_sessions(
+  sessions: Dict(process.Pid, String),
+  event: RoomEvent,
+  session: Subject(RoomEvent),
+) -> Dict(process.Pid, String) {
+  case event {
+    ParticipantJoined(participant) ->
+      case process.subject_owner(session) {
+        Ok(pid) -> {
+          process.link(pid)
+          dict.insert(sessions, pid, participant_id_to_string(participant.id))
+        }
+        // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
+        Error(Nil) -> sessions
+      }
+    ParticipantLeft(id) -> {
+      let key = participant_id_to_string(id)
+      // 値（ParticipantId）で引いて外す。pid は Down 側でしか分からない。
+      dict.filter(sessions, fn(_pid, participant_key) { participant_key != key })
+    }
+    JoinRejected(_, _)
+    | LeaveRejected(_, _)
+    | BuzzAccepted(_, _)
+    | BuzzRejected(_, _)
+    | RoundReset -> sessions
+  }
+}
+
+/// 全購読者へ配信する（除外なし）。接続が死んだ参加者の離脱を知らせるのに使う。
+fn broadcast_all(
+  subscribers: Dict(String, Subject(RoomEvent)),
+  event: RoomEvent,
+) -> Nil {
+  dict.each(subscribers, fn(_key, subscriber) {
+    process.send(subscriber, event)
+  })
 }
 
 fn update_subscribers(
