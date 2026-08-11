@@ -87,3 +87,24 @@ pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
 
   assert registry.lookup(started.data, id) == current
 }
+
+/// Release された room の **actor プロセス自体**が終了すること（#26）。
+///
+/// registry の Dict から外すだけでは足りない。エントリは消えても BEAM
+/// プロセスは生き続けるため、リークの半分しか塞げない。
+pub fn release_stops_the_room_actor_process_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-release-stops")
+
+  let subject = registry.lookup(started.data, id)
+  let assert Ok(pid) = process.subject_owner(subject)
+  assert process.is_alive(pid)
+
+  process.send(started.data, registry.Release(id, subject))
+  // Release は非同期。registry への同期呼び出しで処理済みを保証してから、
+  // room 側の停止が伝播するのを待つ。
+  let _ = registry.lookup(started.data, id)
+  process.sleep(50)
+
+  assert !process.is_alive(pid)
+}

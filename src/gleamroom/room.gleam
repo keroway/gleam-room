@@ -166,6 +166,12 @@ pub type Message {
   )
   GetSnapshot(reply_to: Subject(List(Participant)))
   GetBuzzSnapshot(reply_to: Subject(List(BuzzResult)))
+  /// registry が無人と判断した room を終了させる（#26）。
+  ///
+  /// registry の Dict から外すだけでは **actor プロセスが残る**。
+  /// エントリは消えても BEAM プロセスは生き続けるため、リークの半分しか
+  /// 塞げない。
+  Shutdown
 }
 
 /// The actor's own state: the domain `RoomState` plus the set of connected
@@ -209,6 +215,7 @@ fn handle_message(
       process.send(reply_to, buzz_snapshot(state.room))
       actor.continue(state)
     }
+    Shutdown -> actor.stop()
   }
 }
 

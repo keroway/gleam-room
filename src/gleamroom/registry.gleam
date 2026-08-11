@@ -71,8 +71,12 @@ fn handle_message(
       case dict.get(state, key) {
         // 登録中のものと同一の actor のときだけ外す。ABA 問題への対処で、
         // 理由は `Release` のドキュメントコメントを参照。
-        Ok(current) if current == subject ->
+        Ok(current) if current == subject -> {
+          // Dict から外すだけでは actor プロセスが残る。エントリは消えても
+          // BEAM プロセスは生き続けるため、両方やって初めてリークが塞がる。
+          process.send(current, room.Shutdown)
           actor.continue(dict.delete(state, key))
+        }
         _ -> actor.continue(state)
       }
     }
