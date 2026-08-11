@@ -1,0 +1,104 @@
+import gleamroom/protocol.{
+  BuzzAccepted, BuzzResult, Participant, ParticipantId, ParticipantJoined,
+  ParticipantLeft, ProtocolError, ProtocolErrorMessage, RoomId, RoundReset,
+  State,
+}
+
+pub fn decode_join_test() {
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
+}
+
+pub fn decode_buzz_test() {
+  assert protocol.decode_client_message("{\"type\":\"buzz\"}")
+    == Ok(protocol.Buzz)
+}
+
+pub fn decode_reset_test() {
+  assert protocol.decode_client_message("{\"type\":\"reset\"}")
+    == Ok(protocol.Reset)
+}
+
+pub fn decode_join_missing_display_name_test() {
+  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_empty_display_name_test() {
+  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_unknown_type_test() {
+  let json = "{\"type\":\"shout\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_malformed_json_test() {
+  assert protocol.decode_client_message("{not json")
+    == Error(ProtocolError(
+      code: "malformed_json",
+      message: "Message body was not valid JSON.",
+    ))
+}
+
+pub fn encode_state_test() {
+  let message =
+    State(participants: [Participant(ParticipantId("p1"), "Alice")], buzzes: [
+      BuzzResult(ParticipantId("p1"), 1),
+    ])
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"state\",\"participants\":[{\"id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"position\":1}]}"
+}
+
+pub fn encode_participant_joined_test() {
+  let message = ParticipantJoined(Participant(ParticipantId("p1"), "Alice"))
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"participant_joined\",\"participant\":{\"id\":\"p1\",\"display_name\":\"Alice\"}}"
+}
+
+pub fn encode_participant_left_test() {
+  let message = ParticipantLeft(ParticipantId("p1"))
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"participant_left\",\"participant_id\":\"p1\"}"
+}
+
+pub fn encode_buzz_accepted_test() {
+  let message = BuzzAccepted(ParticipantId("p1"), 1)
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"buzz_accepted\",\"participant_id\":\"p1\",\"position\":1}"
+}
+
+pub fn encode_round_reset_test() {
+  assert protocol.encode_server_message(RoundReset)
+    == "{\"type\":\"round_reset\"}"
+}
+
+pub fn encode_error_test() {
+  let message = ProtocolErrorMessage("invalid_message", "bad input")
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"error\",\"code\":\"invalid_message\",\"message\":\"bad input\"}"
+}
