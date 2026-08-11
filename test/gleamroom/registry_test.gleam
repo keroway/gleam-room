@@ -48,3 +48,63 @@ pub fn concurrent_lookups_for_the_same_room_id_agree_on_one_actor_test() {
   let unique = list.unique(subjects)
   assert unique == [registry.lookup(started.data, id)]
 }
+
+/// 空になった room を registry から外せること（#26）。
+///
+/// 外さないと、一度でも join された RoomId の Room actor と Dict エントリが
+/// プロセス終了まで残り続ける。稼働時間とユニークな RoomId の種類に比例して
+/// 単調増加するため、**エラーにはならず静かにメモリを食う**。
+pub fn release_removes_the_room_so_the_next_lookup_starts_a_fresh_actor_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-release")
+
+  let first = registry.lookup(started.data, id)
+  // 同じ ID の lookup は同じ actor を返す（解放前）。
+  assert registry.lookup(started.data, id) == first
+
+  process.send(started.data, registry.Release(id, first))
+  // Release は非同期なので、次の同期呼び出しで処理済みを保証する。
+  let second = registry.lookup(started.data, id)
+
+  assert second != first
+}
+
+/// 登録中のものと違う subject を渡した Release は無視すること（#26）。
+///
+/// 「空になった → Release を送る」の途中で別の参加者が同じ ID を lookup すると、
+/// 遅れて届いた Release が**新しい actor** を消しうる。消えたことは誰にも
+/// 通知されないため、その参加者は自分だけの room に閉じ込められる。
+pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-release-stale")
+
+  let old = registry.lookup(started.data, id)
+  process.send(started.data, registry.Release(id, old))
+  let current = registry.lookup(started.data, id)
+
+  // 遅れて届いた古い Release。current を消してはいけない。
+  process.send(started.data, registry.Release(id, old))
+
+  assert registry.lookup(started.data, id) == current
+}
+
+/// Release された room の **actor プロセス自体**が終了すること（#26）。
+///
+/// registry の Dict から外すだけでは足りない。エントリは消えても BEAM
+/// プロセスは生き続けるため、リークの半分しか塞げない。
+pub fn release_stops_the_room_actor_process_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-release-stops")
+
+  let subject = registry.lookup(started.data, id)
+  let assert Ok(pid) = process.subject_owner(subject)
+  assert process.is_alive(pid)
+
+  process.send(started.data, registry.Release(id, subject))
+  // Release は非同期。registry への同期呼び出しで処理済みを保証してから、
+  // room 側の停止が伝播するのを待つ。
+  let _ = registry.lookup(started.data, id)
+  process.sleep(50)
+
+  assert !process.is_alive(pid)
+}

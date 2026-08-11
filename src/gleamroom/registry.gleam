@@ -20,6 +20,17 @@ fn room_id_to_string(id: RoomId) -> String {
 
 pub type Message {
   Lookup(id: RoomId, reply_to: Subject(Subject(room.Message)))
+  /// 最後の参加者が抜けた room を登録から外す（#26）。
+  ///
+  /// `subject` を一緒に受け取り、**登録中のものと一致するときだけ削除する**。
+  /// 一致を見ないと、次のような取り違えが起きる:
+  ///
+  ///   1. room "ABCD" が空になり Release を送る
+  ///   2. 届く前に別の参加者が同じ ID で `lookup` し、新しい actor が登録される
+  ///   3. 遅れて届いた Release が、**その新しい actor** を消してしまう
+  ///
+  /// 消えたことは誰にも通知されないため、参加者は自分だけの room に閉じ込められる。
+  Release(id: RoomId, subject: Subject(room.Message))
 }
 
 type State =
@@ -53,6 +64,20 @@ fn handle_message(
           process.send(reply_to, subject)
           actor.continue(dict.insert(state, key, subject))
         }
+      }
+    }
+    Release(id, subject) -> {
+      let key = room_id_to_string(id)
+      case dict.get(state, key) {
+        // 登録中のものと同一の actor のときだけ外す。ABA 問題への対処で、
+        // 理由は `Release` のドキュメントコメントを参照。
+        Ok(current) if current == subject -> {
+          // Dict から外すだけでは actor プロセスが残る。エントリは消えても
+          // BEAM プロセスは生き続けるため、両方やって初めてリークが塞がる。
+          process.send(current, room.Shutdown)
+          actor.continue(dict.delete(state, key))
+        }
+        _ -> actor.continue(state)
       }
     }
   }
