@@ -1,10 +1,11 @@
 import envoy
 import gleam/bytes_tree
-import gleam/erlang/process
+import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/result
+import gleamroom/registry
 import gleamroom/websocket
 import logging
 import mist.{type Connection, type ResponseData}
@@ -15,9 +16,11 @@ pub fn main() -> Nil {
   logging.configure()
 
   let port = read_port()
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
 
   let assert Ok(_) =
-    handle_request
+    handle_request(_, registry_subject)
     |> mist.new
     |> mist.port(port)
     |> mist.start
@@ -25,13 +28,16 @@ pub fn main() -> Nil {
   process.sleep_forever()
 }
 
-fn handle_request(req: Request(Connection)) -> Response(ResponseData) {
+fn handle_request(
+  req: Request(Connection),
+  registry_subject: Subject(registry.Message),
+) -> Response(ResponseData) {
   case request.path_segments(req) {
     ["health"] ->
       response.new(200)
       |> response.set_body(mist.Bytes(bytes_tree.from_string("ok")))
 
-    ["ws"] -> websocket.upgrade(req)
+    ["ws"] -> websocket.upgrade(req, registry_subject)
 
     _ ->
       response.new(404)
