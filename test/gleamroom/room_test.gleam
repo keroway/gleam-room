@@ -259,6 +259,35 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   assert room.get_buzz_snapshot(subject) == [room.BuzzResult(alice_old, 1)]
 }
 
+pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let alice_old = room.participant_id("connection-1")
+  let alice_old_session = process.new_subject()
+  let _ =
+    room.dispatch(subject, room.Join(alice_old, "Alice"), alice_old_session)
+
+  // The relative order of the new connection's `Join` and the old
+  // connection's `Leave` is not guaranteed (independent processes). Here the
+  // new connection's `Join` is processed first.
+  let alice_new = room.participant_id("connection-2")
+  let alice_new_session = process.new_subject()
+  let _ =
+    room.dispatch(subject, room.Join(alice_new, "Alice"), alice_new_session)
+
+  assert room.get_snapshot(subject)
+    == [
+      room.Participant(alice_new, "Alice"),
+      room.Participant(alice_old, "Alice"),
+    ]
+
+  let _ = room.dispatch(subject, room.Leave(alice_old), alice_old_session)
+
+  // Once the stale connection's `Leave` is processed, only the reconnected
+  // identity remains present.
+  assert room.get_snapshot(subject) == [room.Participant(alice_new, "Alice")]
+}
+
 pub fn independent_room_actors_do_not_share_buzz_state_test() {
   let assert Ok(room_a) = room.start()
   let assert Ok(room_b) = room.start()
