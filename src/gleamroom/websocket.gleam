@@ -143,7 +143,10 @@ fn handle_join(
     }
     None -> {
       let room_id = registry.room_id(protocol.room_id_to_string(wire_room_id))
-      let room_subject = registry.lookup(state.registry, room_id)
+      // room の起動に失敗したら、その旨を返して接続は生かす（#32）。
+      // 以前は registry が `let assert` でクラッシュしており、1 ルームの
+      // 起動失敗が無関係な全ルームの lookup を巻き添えにしていた。
+      use room_subject <- with_room(state, connection, room_id)
       let participant_id = room.participant_id(new_participant_id())
       let session = process.new_subject()
 
@@ -263,6 +266,29 @@ fn handle_reset(
         | room.BuzzAccepted(_, _)
         | room.BuzzRejected(_, _) -> Nil
       }
+      mist.continue(state)
+    }
+  }
+}
+
+/// room を引けたときだけ `next` を実行する。引けなければクライアントへ
+/// `room_unavailable` を返し、接続はそのまま維持する（#32）。
+fn with_room(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  room_id: registry.RoomId,
+  next: fn(Subject(room.Message)) -> Next(ConnectionState, room.RoomEvent),
+) -> Next(ConnectionState, room.RoomEvent) {
+  case registry.lookup(state.registry, room_id) {
+    Ok(room_subject) -> next(room_subject)
+    Error(Nil) -> {
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(
+          "room_unavailable",
+          "The room could not be started. Please try again.",
+        ),
+      )
       mist.continue(state)
     }
   }

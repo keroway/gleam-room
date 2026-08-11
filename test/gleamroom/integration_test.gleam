@@ -23,7 +23,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
 
   // 1. Three independent clients join room ABCD with different display
   // names, resolving the room the same way a WebSocket connection would.
-  let room_subject = registry.lookup(registry_subject, room_id)
+  let assert Ok(room_subject) = registry.lookup(registry_subject, room_id)
   let alice = room.participant_id("alice")
   let alice_session = process.new_subject()
   let bob = room.participant_id("bob")
@@ -51,7 +51,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   // A second lookup of the same room id (as a fresh connection joining
   // later would perform) resolves to the same room actor, and every
   // connected client observes the same presence snapshot.
-  let looked_up_again = registry.lookup(registry_subject, room_id)
+  let assert Ok(looked_up_again) = registry.lookup(registry_subject, room_id)
   let expected_presence = [
     room.Participant(carol, "Carol"),
     room.Participant(bob, "Bob"),

@@ -23,7 +23,7 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
     |> supervisor.start
 
   // 起動直後は名前経由で使える。
-  let before = registry.lookup(subject, registry.room_id("room-sup"))
+  let assert Ok(before) = registry.lookup(subject, registry.room_id("room-sup"))
   assert room.get_snapshot(before) == []
 
   let assert Ok(pid) = process.subject_owner(subject)
@@ -33,7 +33,7 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
   wait_for_new_registry(name, pid, 50)
 
   // **同じ名前**で引き続き使える（呼び出し側は subject を取り直していない）。
-  let after = registry.lookup(subject, registry.room_id("room-sup"))
+  let assert Ok(after) = registry.lookup(subject, registry.room_id("room-sup"))
   assert room.get_snapshot(after) == []
 
   // 再起動後は新しいプロセスなので、状態は引き継がれない（作り直された証拠）。
