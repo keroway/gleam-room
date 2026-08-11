@@ -184,3 +184,31 @@ pub fn a_room_start_failure_does_not_crash_the_registry_test() {
     == Error(Nil)
   assert process.is_alive(registry_pid)
 }
+
+/// room actor がクラッシュしたら registry から自動で外れること（#39）。
+///
+/// room は supervisor の子ではなく registry が直接起動するため、クラッシュ
+/// しても誰も片付けない。監視していないと **死んだ subject が Dict に残り続け**、
+/// 以後その RoomId の lookup は死んだ subject を返す。`room.dispatch` は
+/// `actor.call(waiting: 1000)` なので毎回タイムアウトし、その部屋は
+/// サーバー再起動まで恒久的に使用不能になる。
+pub fn a_crashed_room_is_removed_from_the_registry_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-crash")
+
+  let before = registry_subject_of(started.data, id)
+  let assert Ok(pid) = process.subject_owner(before)
+
+  process.kill(pid)
+  // Down メッセージが registry に届くのを待つ。
+  process.sleep(100)
+
+  // 次の lookup は**新しい** actor を返す（死んだ subject が残っていない）。
+  let after = registry_subject_of(started.data, id)
+  assert after != before
+
+  let assert Ok(after_pid) = process.subject_owner(after)
+  assert process.is_alive(after_pid)
+  // 新しい room は使える。
+  assert room.get_snapshot(after) == []
+}

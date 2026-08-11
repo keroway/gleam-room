@@ -31,6 +31,18 @@ pub type Message {
   ///
   /// 消えたことは誰にも通知されないため、参加者は自分だけの room に閉じ込められる。
   Release(id: RoomId, subject: Subject(room.Message))
+  /// 起動した room actor が落ちたときに届く（#39）。
+  ///
+  /// room は supervisor の子ではなく registry が直接起動する。
+  /// `actor.start` は **link** するため、room がクラッシュすると exit signal が
+  /// registry へ伝播し、**registry ごと道連れになる**（監視だけでは防げない。
+  /// テストで実際に registry が死に、テストプロセスまで巻き込まれた）。
+  ///
+  /// registry で `trap_exits` を有効にし、exit を signal ではなく
+  /// **メッセージとして**受ける。これで registry は生き延び、死んだ room を
+  /// Dict から外せる。放置すると死んだ subject が残り続け、以後その RoomId の
+  /// lookup は毎回タイムアウトして再起動まで使用不能になる。
+  RoomDown(pid: process.Pid)
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -42,6 +54,9 @@ pub type Message {
 type State {
   State(
     rooms: Dict(String, Subject(room.Message)),
+    /// 監視中の room actor の pid → RoomId のキー（#39）。
+    /// Down メッセージは pid しか運ばないため、逆引きが要る。
+    monitored: Dict(process.Pid, String),
     start_room: fn() -> actor.StartResult(Subject(room.Message)),
   )
 }
@@ -51,8 +66,7 @@ type State {
 /// `RoomId` cannot race into starting two authoritative room actors (ADR
 /// 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  actor.new(State(rooms: dict.new(), start_room: room.start))
-  |> actor.on_message(handle_message)
+  build(State(rooms: dict.new(), monitored: dict.new(), start_room: room.start))
   |> actor.start
 }
 
@@ -62,9 +76,30 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
 pub fn start_with_room_starter(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
 ) -> actor.StartResult(Subject(Message)) {
-  actor.new(State(rooms: dict.new(), start_room:))
-  |> actor.on_message(handle_message)
+  build(State(rooms: dict.new(), monitored: dict.new(), start_room:))
   |> actor.start
+}
+
+/// monitor の Down メッセージを受け取れる形で actor を組み立てる（#39）。
+///
+/// `select_monitors` を使うのは、監視対象が動的に増減するため。
+/// 個別の monitor を都度 selector へ足す形だと、room が増えるたびに
+/// selector を組み直す必要がある。
+fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
+  actor.new_with_initialiser(1000, fn(subject) {
+    let selector =
+      process.new_selector()
+      |> process.select(subject)
+      |> process.select_trapped_exits(fn(exit) { RoomDown(exit.pid) })
+    // link された room の死を signal ではなくメッセージとして受け取る。
+    // これを外すと room のクラッシュが registry を道連れにする。
+    process.trap_exits(True)
+    actor.initialised(initial)
+    |> actor.selecting(selector)
+    |> actor.returning(subject)
+    |> Ok
+  })
+  |> actor.on_message(handle_message)
 }
 
 /// 名前付きで起動する（#23）。
@@ -79,8 +114,7 @@ pub fn start_with_room_starter(
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  actor.new(State(rooms: dict.new(), start_room: room.start))
-  |> actor.on_message(handle_message)
+  build(State(rooms: dict.new(), monitored: dict.new(), start_room: room.start))
   |> actor.named(name)
   |> actor.start
 }
@@ -110,8 +144,22 @@ fn handle_message(
             Ok(started) -> {
               let subject = started.data
               process.send(reply_to, Ok(subject))
+              // 監視しておかないと、クラッシュした room の subject が
+              // Dict に残り続ける（#39）。
+              // link は actor.start が張るので、ここでは pid → key の
+              // 逆引きだけ持つ。exit メッセージは pid しか運ばないため。
+              let monitored = case process.subject_owner(subject) {
+                Ok(pid) -> dict.insert(state.monitored, pid, key)
+                // 持ち主が引けないのは想定外だが、追跡できないだけで
+                // room 自体は使えるので登録は続ける。
+                Error(Nil) -> state.monitored
+              }
               actor.continue(
-                State(..state, rooms: dict.insert(state.rooms, key, subject)),
+                State(
+                  ..state,
+                  rooms: dict.insert(state.rooms, key, subject),
+                  monitored:,
+                ),
               )
             }
             Error(_) -> {
@@ -121,6 +169,21 @@ fn handle_message(
           }
       }
     }
+    RoomDown(pid) ->
+      case dict.get(state.monitored, pid) {
+        // 死んだ room を Dict から外す。残すと以後の lookup が死んだ
+        // subject を返し続け、その RoomId は再起動まで使用不能になる。
+        Ok(key) ->
+          actor.continue(
+            State(
+              ..state,
+              rooms: dict.delete(state.rooms, key),
+              monitored: dict.delete(state.monitored, pid),
+            ),
+          )
+        // 既に Release 済みなど、監視表に無い pid は無視する。
+        Error(Nil) -> actor.continue(state)
+      }
     Release(id, subject) -> {
       let key = room_id_to_string(id)
       case dict.get(state.rooms, key) {
@@ -135,10 +198,15 @@ fn handle_message(
           // Dict から外すのは**実際に停止したときだけ**。停止しなかった room を
           // 外すと、以降の lookup が別の actor を作って参加者が分断される。
           case room.shutdown_if_empty(current) {
-            True ->
+            True -> {
+              let monitored = case process.subject_owner(current) {
+                Ok(pid) -> dict.delete(state.monitored, pid)
+                Error(Nil) -> state.monitored
+              }
               actor.continue(
-                State(..state, rooms: dict.delete(state.rooms, key)),
+                State(..state, rooms: dict.delete(state.rooms, key), monitored:),
               )
+            }
             False -> actor.continue(state)
           }
         }
