@@ -1,6 +1,5 @@
-import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/list
+import gleam/json
 import gleam/string
 
 /// The wire-format client/server protocol boundary for the buzzer MVP.
@@ -9,12 +8,6 @@ import gleam/string
 /// does not know about room registries, actors, or game rules — see
 /// `docs/architecture.md` for the transport/domain boundary this module sits
 /// on.
-///
-/// JSON is handled via a direct binding to `thoas` (the Erlang JSON library
-/// that `gleam_json` itself wraps) rather than `gleam_json`, because the
-/// published `gleam_json` releases available to this project's locked
-/// `gleam_stdlib` version target an incompatible `gleam/dynamic` API on
-/// either side of the version range.
 pub type RoomId {
   RoomId(String)
 }
@@ -75,26 +68,20 @@ pub type ProtocolError {
 pub fn decode_client_message(
   from json_string: String,
 ) -> Result(ClientMessage, ProtocolError) {
-  case thoas_decode(json_string) {
+  case json.parse(from: json_string, using: client_message_decoder()) {
+    Ok(message) -> Ok(message)
+    Error(json.UnableToDecode(_)) ->
+      Error(ProtocolError(
+        code: "invalid_message",
+        message: "Message did not match a known client message shape.",
+      ))
     Error(_) ->
       Error(ProtocolError(
         code: "malformed_json",
         message: "Message body was not valid JSON.",
       ))
-    Ok(dynamic_value) ->
-      case decode.run(dynamic_value, client_message_decoder()) {
-        Ok(message) -> Ok(message)
-        Error(_) ->
-          Error(ProtocolError(
-            code: "invalid_message",
-            message: "Message did not match a known client message shape.",
-          ))
-      }
   }
 }
-
-@external(erlang, "thoas", "decode")
-fn thoas_decode(json_string: String) -> Result(Dynamic, Dynamic)
 
 fn client_message_decoder() -> decode.Decoder(ClientMessage) {
   use message_type <- decode.field("type", decode.string)
@@ -117,81 +104,63 @@ fn join_decoder() -> decode.Decoder(ClientMessage) {
 
 pub fn encode_server_message(message: ServerMessage) -> String {
   message
-  |> server_message_to_dynamic
-  |> thoas_encode
+  |> server_message_to_json
+  |> json.to_string
 }
 
-@external(erlang, "thoas", "encode")
-fn thoas_encode(term: Dynamic) -> String
-
-fn server_message_to_dynamic(message: ServerMessage) -> Dynamic {
+fn server_message_to_json(message: ServerMessage) -> json.Json {
   case message {
     State(participants, buzzes) ->
-      json_object([
-        #("type", dynamic.string("state")),
-        #(
-          "participants",
-          dynamic.list(list.map(participants, participant_to_dynamic)),
-        ),
-        #("buzzes", dynamic.list(list.map(buzzes, buzz_result_to_dynamic))),
+      json.object([
+        #("type", json.string("state")),
+        #("participants", json.array(participants, participant_to_json)),
+        #("buzzes", json.array(buzzes, buzz_result_to_json)),
       ])
     ParticipantJoined(participant) ->
-      json_object([
-        #("type", dynamic.string("participant_joined")),
-        #("participant", participant_to_dynamic(participant)),
+      json.object([
+        #("type", json.string("participant_joined")),
+        #("participant", participant_to_json(participant)),
       ])
     ParticipantLeft(left_participant_id) ->
-      json_object([
-        #("type", dynamic.string("participant_left")),
+      json.object([
+        #("type", json.string("participant_left")),
         #(
           "participant_id",
-          dynamic.string(participant_id_to_string(left_participant_id)),
+          json.string(participant_id_to_string(left_participant_id)),
         ),
       ])
     BuzzAccepted(accepted_participant_id, position) ->
-      json_object([
-        #("type", dynamic.string("buzz_accepted")),
+      json.object([
+        #("type", json.string("buzz_accepted")),
         #(
           "participant_id",
-          dynamic.string(participant_id_to_string(accepted_participant_id)),
+          json.string(participant_id_to_string(accepted_participant_id)),
         ),
-        #("position", dynamic.int(position)),
+        #("position", json.int(position)),
       ])
-    RoundReset -> json_object([#("type", dynamic.string("round_reset"))])
+    RoundReset -> json.object([#("type", json.string("round_reset"))])
     ProtocolErrorMessage(code, message) ->
-      json_object([
-        #("type", dynamic.string("error")),
-        #("code", dynamic.string(code)),
-        #("message", dynamic.string(message)),
+      json.object([
+        #("type", json.string("error")),
+        #("code", json.string(code)),
+        #("message", json.string(message)),
       ])
   }
 }
 
-fn participant_to_dynamic(participant: Participant) -> Dynamic {
-  json_object([
-    #("id", dynamic.string(participant_id_to_string(participant.id))),
-    #("display_name", dynamic.string(participant.display_name)),
+fn participant_to_json(participant: Participant) -> json.Json {
+  json.object([
+    #("id", json.string(participant_id_to_string(participant.id))),
+    #("display_name", json.string(participant.display_name)),
   ])
 }
 
-fn buzz_result_to_dynamic(buzz_result: BuzzResult) -> Dynamic {
-  json_object([
+fn buzz_result_to_json(buzz_result: BuzzResult) -> json.Json {
+  json.object([
     #(
       "participant_id",
-      dynamic.string(participant_id_to_string(buzz_result.participant_id)),
+      json.string(participant_id_to_string(buzz_result.participant_id)),
     ),
-    #("position", dynamic.int(buzz_result.position)),
+    #("position", json.int(buzz_result.position)),
   ])
-}
-
-/// Builds a JSON object as an order-preserving proplist (`thoas` encodes
-/// `[{key, value}, ...]` as an object, unlike an Erlang map, whose key order
-/// is not guaranteed).
-fn json_object(fields: List(#(String, Dynamic))) -> Dynamic {
-  fields
-  |> list.map(fn(field) {
-    let #(key, value) = field
-    dynamic.array([dynamic.string(key), value])
-  })
-  |> dynamic.list
 }
