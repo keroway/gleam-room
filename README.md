@@ -70,6 +70,26 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
 
 Once running, `GET http://localhost:4000/health` returns `200 ok`.
 
+### Manual WebSocket verification
+
+`ws://localhost:4000/ws` accepts WebSocket connections and echoes any text
+message back, replying `pong` to `ping`. This is a transport-level check
+only; it does not yet know about rooms or participants. With the server
+running, verify it from a browser devtools console:
+
+```js
+const socket = new WebSocket("ws://localhost:4000/ws");
+socket.onmessage = (event) => console.log("received:", event.data);
+socket.onopen = () => {
+  socket.send("ping"); // logs "received: pong"
+  socket.send("hello"); // logs "received: hello"
+};
+```
+
+Opening two browser tabs and repeating this shows that connections are
+independent, and closing one tab does not affect the server or the other
+connection.
+
 ## Roadmap
 
 1. Multiplayer buzzer prototype.

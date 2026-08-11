@@ -5,6 +5,7 @@ import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/result
+import gleamroom/websocket
 import logging
 import mist.{type Connection, type ResponseData}
 
@@ -29,6 +30,8 @@ fn handle_request(req: Request(Connection)) -> Response(ResponseData) {
     ["health"] ->
       response.new(200)
       |> response.set_body(mist.Bytes(bytes_tree.from_string("ok")))
+
+    ["ws"] -> websocket.upgrade(req)
 
     _ ->
       response.new(404)

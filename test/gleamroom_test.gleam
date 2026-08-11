@@ -1,13 +1,18 @@
+import gleamroom/websocket
 import gleeunit
 
 pub fn main() -> Nil {
   gleeunit.main()
 }
 
-// gleeunit test functions end in `_test`
-pub fn hello_world_test() {
-  let name = "Joe"
-  let greeting = "Hello, " <> name <> "!"
+pub fn websocket_reply_for_ping_is_pong_test() {
+  assert websocket.reply_for("ping") == "pong"
+}
 
-  assert greeting == "Hello, Joe!"
+pub fn websocket_reply_for_other_text_is_echoed_test() {
+  assert websocket.reply_for("hello") == "hello"
+}
+
+pub fn websocket_reply_for_empty_text_is_echoed_test() {
+  assert websocket.reply_for("") == ""
 }
