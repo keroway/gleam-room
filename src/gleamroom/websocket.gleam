@@ -67,17 +67,16 @@ fn on_close(state: ConnectionState) -> Nil {
       // 一度でも join された RoomId の Room actor と Dict エントリが
       // プロセス終了まで残り続ける。
       //
-      // 判定を registry ではなく**この層で**行うのは、room.gleam から
-      // registry.gleam を import すると循環参照になるため。切断を知っている
-      // のはこの層で、room は自分がどの registry に属するかを知らない。
-      case room.get_snapshot(handle.subject) {
-        [] ->
-          process.send(
-            state.registry,
-            registry.Release(handle.room_id, handle.subject),
-          )
-        _ -> Nil
-      }
+      // **ここで空かどうかを判定しない**（#36）。以前は get_snapshot で
+      // 確かめてから Release を送っていたが、判定と停止が別プロセスに
+      // またがるため、その隙に join した参加者ごと room が停止しうる。
+      // 判定は room actor が自分のメールボックスの中で行う。
+      //
+      // 切断を知っているのはこの層なので、きっかけを送るのはここでよい。
+      process.send(
+        state.registry,
+        registry.Release(handle.room_id, handle.subject),
+      )
       Nil
     }
   }

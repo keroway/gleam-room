@@ -166,12 +166,16 @@ pub type Message {
   )
   GetSnapshot(reply_to: Subject(List(Participant)))
   GetBuzzSnapshot(reply_to: Subject(List(BuzzResult)))
-  /// registry が無人と判断した room を終了させる（#26）。
+  /// 自分が無人なら終了する（#26 / #36）。
   ///
-  /// registry の Dict から外すだけでは **actor プロセスが残る**。
-  /// エントリは消えても BEAM プロセスは生き続けるため、リークの半分しか
-  /// 塞げない。
-  Shutdown
+  /// **判定と停止を 1 メッセージに閉じてある。** 呼び出し側が
+  /// 「空か確認 → 停止を依頼」と 2 段階で行うと、その隙に join した参加者ごと
+  /// 停止させてしまう（#36）。room actor のメールボックスは直列に処理されるため、
+  /// 自分で見て自分で止めれば隙間が生まれない。
+  ///
+  /// 空でなければ何もせず動き続け、`reply_to` に `False` を返す。
+  /// registry はこの結果を見て Dict から外すかを決める。
+  ShutdownIfEmpty(reply_to: Subject(Bool))
 }
 
 /// The actor's own state: the domain `RoomState` plus the set of connected
@@ -215,7 +219,18 @@ fn handle_message(
       process.send(reply_to, buzz_snapshot(state.room))
       actor.continue(state)
     }
-    Shutdown -> actor.stop()
+    ShutdownIfEmpty(reply_to) ->
+      case state.room.participants {
+        [] -> {
+          // 先に返してから止める。停止後は誰も返信できない。
+          process.send(reply_to, True)
+          actor.stop()
+        }
+        _ -> {
+          process.send(reply_to, False)
+          actor.continue(state)
+        }
+      }
   }
 }
 
@@ -288,4 +303,12 @@ pub fn get_snapshot(subject: Subject(Message)) -> List(Participant) {
 /// Reads the current round's accepted buzzes from a running room actor.
 pub fn get_buzz_snapshot(subject: Subject(Message)) -> List(BuzzResult) {
   actor.call(subject, waiting: 1000, sending: GetBuzzSnapshot)
+}
+
+/// 無人なら room を停止させ、停止したかどうかを返す（#36）。
+///
+/// 判定と停止が room actor の 1 メッセージに閉じているため、呼び出し側が
+/// 「空か確認 → 停止を依頼」と 2 段階で行ったときのレースが起きない。
+pub fn shutdown_if_empty(subject: Subject(Message)) -> Bool {
+  actor.call(subject, waiting: 1000, sending: ShutdownIfEmpty)
 }

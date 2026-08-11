@@ -108,3 +108,35 @@ pub fn release_stops_the_room_actor_process_test() {
 
   assert !process.is_alive(pid)
 }
+
+/// 参加者が残っている room は Release を受けても停止しないこと（#36）。
+///
+/// #26 の実装では websocket 層が「空か確認 → Release 送信」と 2 段階で
+/// 行っていたため、その隙に join した参加者ごと room actor が停止しえた。
+/// 判定と停止を room actor の 1 メッセージに閉じたことで、この経路は塞がる。
+///
+/// ここでは「Release が届く前に join が完了していた」状態を作って検証する。
+pub fn release_does_not_stop_a_room_that_gained_a_participant_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-race")
+
+  let subject = registry.lookup(started.data, id)
+  let assert Ok(pid) = process.subject_owner(subject)
+
+  // Release より先に新しい参加者が入る（レースの後半だけを再現する）。
+  let session = process.new_subject()
+  let joiner = room.participant_id("late-joiner")
+  let _ = room.dispatch(subject, room.Join(joiner, "late"), session)
+
+  process.send(started.data, registry.Release(id, subject))
+  // Release は非同期。registry への同期呼び出しで処理済みを保証する。
+  let after = registry.lookup(started.data, id)
+  process.sleep(50)
+
+  // 停止していない。
+  assert process.is_alive(pid)
+  // 登録も外れていない（外れると次の lookup が別 actor を作り参加者が分断される）。
+  assert after == subject
+  // 参加者も残っている。
+  assert room.get_snapshot(subject) != []
+}
