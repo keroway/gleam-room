@@ -4,8 +4,8 @@ enabled: true
 # The shared contract processes at most one Issue per cycle.
 max_issues_per_cycle: 1
 
-# A merge still requires an explicit caller request, but this repository does
-# not grant automated merge permission at bootstrap time.
-allow_merge: false
+# A merge still requires an explicit caller request. Enabled after issue #1
+# (PR #12) was reviewed and merged manually.
+allow_merge: true
 
 interval: 30m
