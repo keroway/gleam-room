@@ -33,16 +33,19 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
 
   let alice_join =
     room.dispatch(room_subject, room.Join(alice, "Alice"), alice_session)
-  assert alice_join == room.ParticipantJoined(room.Participant(alice, "Alice"))
+  assert alice_join
+    == Ok(room.ParticipantJoined(room.Participant(alice, "Alice")))
 
-  let bob_join = room.dispatch(room_subject, room.Join(bob, "Bob"), bob_session)
+  let assert Ok(bob_join) =
+    room.dispatch(room_subject, room.Join(bob, "Bob"), bob_session)
   assert bob_join == room.ParticipantJoined(room.Participant(bob, "Bob"))
   assert process.receive(alice_session, 100)
     == Ok(room.ParticipantJoined(room.Participant(bob, "Bob")))
 
   let carol_join =
     room.dispatch(room_subject, room.Join(carol, "Carol"), carol_session)
-  assert carol_join == room.ParticipantJoined(room.Participant(carol, "Carol"))
+  assert carol_join
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol")))
   assert process.receive(alice_session, 100)
     == Ok(room.ParticipantJoined(room.Participant(carol, "Carol")))
   assert process.receive(bob_session, 100)
@@ -57,30 +60,30 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     room.Participant(bob, "Bob"),
     room.Participant(alice, "Alice"),
   ]
-  assert room.get_snapshot(looked_up_again) == expected_presence
-  assert room.get_snapshot(room_subject) == expected_presence
+  assert room.get_snapshot(looked_up_again) == Ok(expected_presence)
+  assert room.get_snapshot(room_subject) == Ok(expected_presence)
 
   // 3. Reset the round before buzzing (idempotent on an already-empty
   // round).
   assert room.dispatch(room_subject, room.ResetRound, alice_session)
-    == room.RoundReset
+    == Ok(room.RoundReset)
   assert process.receive(bob_session, 100) == Ok(room.RoundReset)
   assert process.receive(carol_session, 100) == Ok(room.RoundReset)
 
   // 4 & 5. Clients buzz in the accepted order B, A, C; all clients observe
   // the identical ordering.
   assert room.dispatch(room_subject, room.Buzz(bob), bob_session)
-    == room.BuzzAccepted(bob, 1)
+    == Ok(room.BuzzAccepted(bob, 1))
   assert process.receive(alice_session, 100) == Ok(room.BuzzAccepted(bob, 1))
   assert process.receive(carol_session, 100) == Ok(room.BuzzAccepted(bob, 1))
 
   assert room.dispatch(room_subject, room.Buzz(alice), alice_session)
-    == room.BuzzAccepted(alice, 2)
+    == Ok(room.BuzzAccepted(alice, 2))
   assert process.receive(bob_session, 100) == Ok(room.BuzzAccepted(alice, 2))
   assert process.receive(carol_session, 100) == Ok(room.BuzzAccepted(alice, 2))
 
   assert room.dispatch(room_subject, room.Buzz(carol), carol_session)
-    == room.BuzzAccepted(carol, 3)
+    == Ok(room.BuzzAccepted(carol, 3))
   assert process.receive(alice_session, 100) == Ok(room.BuzzAccepted(carol, 3))
   assert process.receive(bob_session, 100) == Ok(room.BuzzAccepted(carol, 3))
 
@@ -89,26 +92,26 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     room.BuzzResult(alice, 2),
     room.BuzzResult(carol, 3),
   ]
-  assert room.get_buzz_snapshot(room_subject) == expected_order
+  assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
 
   // 6. A second buzz from B does not alter or duplicate the ordering.
   assert room.dispatch(room_subject, room.Buzz(bob), bob_session)
-    == room.BuzzRejected(bob, room.AlreadyBuzzed)
+    == Ok(room.BuzzRejected(bob, room.AlreadyBuzzed))
   assert process.receive(alice_session, 100) == Error(Nil)
   assert process.receive(carol_session, 100) == Error(Nil)
-  assert room.get_buzz_snapshot(room_subject) == expected_order
+  assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
 
   // 7. Reset clears the results for all clients.
   assert room.dispatch(room_subject, room.ResetRound, alice_session)
-    == room.RoundReset
+    == Ok(room.RoundReset)
   assert process.receive(bob_session, 100) == Ok(room.RoundReset)
   assert process.receive(carol_session, 100) == Ok(room.RoundReset)
-  assert room.get_buzz_snapshot(room_subject) == []
+  assert room.get_buzz_snapshot(room_subject) == Ok([])
 
   // 8. One client (Carol) disconnects and remaining clients observe the
   // leave.
   assert room.dispatch(room_subject, room.Leave(carol), carol_session)
-    == room.ParticipantLeft(carol)
+    == Ok(room.ParticipantLeft(carol))
   assert process.receive(alice_session, 100) == Ok(room.ParticipantLeft(carol))
   assert process.receive(bob_session, 100) == Ok(room.ParticipantLeft(carol))
 
@@ -124,11 +127,11 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
       carol_rejoin_session,
     )
   assert rejoin_event
-    == room.ParticipantJoined(room.Participant(carol_rejoined, "Carol"))
+    == Ok(room.ParticipantJoined(room.Participant(carol_rejoined, "Carol")))
   assert room.get_snapshot(room_subject)
-    == [
+    == Ok([
       room.Participant(carol_rejoined, "Carol"),
       room.Participant(bob, "Bob"),
       room.Participant(alice, "Alice"),
-    ]
+    ])
 }

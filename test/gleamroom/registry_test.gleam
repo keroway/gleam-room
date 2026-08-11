@@ -23,10 +23,10 @@ pub fn different_room_ids_resolve_to_isolated_rooms_test() {
   let alice = room.participant_id("p1")
   let session = process.new_subject()
 
-  let _ = room.dispatch(room_a, room.Join(alice, "Alice"), session)
+  let assert Ok(_) = room.dispatch(room_a, room.Join(alice, "Alice"), session)
 
-  assert room.get_snapshot(room_a) == [room.Participant(alice, "Alice")]
-  assert room.get_snapshot(room_b) == []
+  assert room.get_snapshot(room_a) == Ok([room.Participant(alice, "Alice")])
+  assert room.get_snapshot(room_b) == Ok([])
 }
 
 pub fn concurrent_lookups_for_the_same_room_id_agree_on_one_actor_test() {
@@ -129,7 +129,7 @@ pub fn release_does_not_stop_a_room_that_gained_a_participant_test() {
   // Release より先に新しい参加者が入る（レースの後半だけを再現する）。
   let session = process.new_subject()
   let joiner = room.participant_id("late-joiner")
-  let _ = room.dispatch(subject, room.Join(joiner, "late"), session)
+  let assert Ok(_) = room.dispatch(subject, room.Join(joiner, "late"), session)
 
   process.send(started.data, registry.Release(id, subject))
   // Release は非同期。registry への同期呼び出しで処理済みを保証する。
@@ -141,7 +141,7 @@ pub fn release_does_not_stop_a_room_that_gained_a_participant_test() {
   // 登録も外れていない（外れると次の lookup が別 actor を作り参加者が分断される）。
   assert after == subject
   // 参加者も残っている。
-  assert room.get_snapshot(subject) != []
+  assert room.get_snapshot(subject) != Ok([])
 }
 
 /// テスト内で room の起動成功を前提に subject を取り出すヘルパ。
@@ -210,5 +210,5 @@ pub fn a_crashed_room_is_removed_from_the_registry_test() {
   let assert Ok(after_pid) = process.subject_owner(after)
   assert process.is_alive(after_pid)
   // 新しい room は使える。
-  assert room.get_snapshot(after) == []
+  assert room.get_snapshot(after) == Ok([])
 }

@@ -2,6 +2,7 @@ import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/otp/actor
+import gleamroom/call
 
 /// Opaque so callers cannot construct a `ParticipantId` except through
 /// `participant_id`, keeping room state free of ad-hoc string comparisons.
@@ -287,28 +288,58 @@ fn broadcast(
 /// event. A 1000ms timeout is used so a stuck actor surfaces as a crash
 /// rather than an indefinite hang. `session` identifies the caller's own
 /// subject so future events for this room can be delivered asynchronously.
+/// コマンドを送り、結果のイベントを待つ。
+///
+/// アクターが応答しない場合は `Error(Nil)`（#33）。以前は `actor.call` を
+/// 直接呼んでおり、タイムアウトで**呼び出し元プロセスごとクラッシュ**していた。
 pub fn dispatch(
   subject: Subject(Message),
   command: RoomCommand,
   session: Subject(RoomEvent),
-) -> RoomEvent {
-  actor.call(subject, waiting: 1000, sending: Dispatch(command, session, _))
+) -> Result(RoomEvent, Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    Dispatch(command, session, _),
+    "room.dispatch",
+  )
 }
 
 /// Reads the current participant list from a running room actor.
-pub fn get_snapshot(subject: Subject(Message)) -> List(Participant) {
-  actor.call(subject, waiting: 1000, sending: GetSnapshot)
+pub fn get_snapshot(
+  subject: Subject(Message),
+) -> Result(List(Participant), Nil) {
+  call.try_call(subject, call.default_timeout, GetSnapshot, "room.get_snapshot")
 }
 
 /// Reads the current round's accepted buzzes from a running room actor.
-pub fn get_buzz_snapshot(subject: Subject(Message)) -> List(BuzzResult) {
-  actor.call(subject, waiting: 1000, sending: GetBuzzSnapshot)
+pub fn get_buzz_snapshot(
+  subject: Subject(Message),
+) -> Result(List(BuzzResult), Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    GetBuzzSnapshot,
+    "room.get_buzz_snapshot",
+  )
 }
 
 /// 無人なら room を停止させ、停止したかどうかを返す（#36）。
 ///
 /// 判定と停止が room actor の 1 メッセージに閉じているため、呼び出し側が
 /// 「空か確認 → 停止を依頼」と 2 段階で行ったときのレースが起きない。
+/// 応答しない room は「停止しなかった」扱いにする（#33）。
+/// registry の登録を外さないので、死んだ room は #39 の経路で片付く。
 pub fn shutdown_if_empty(subject: Subject(Message)) -> Bool {
-  actor.call(subject, waiting: 1000, sending: ShutdownIfEmpty)
+  case
+    call.try_call(
+      subject,
+      call.default_timeout,
+      ShutdownIfEmpty,
+      "room.shutdown_if_empty",
+    )
+  {
+    Ok(stopped) -> stopped
+    Error(Nil) -> False
+  }
 }
