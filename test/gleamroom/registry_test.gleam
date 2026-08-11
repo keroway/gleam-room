@@ -18,8 +18,9 @@ pub fn different_room_ids_resolve_to_isolated_rooms_test() {
   let room_a = registry.lookup(started.data, registry.room_id("room-a"))
   let room_b = registry.lookup(started.data, registry.room_id("room-b"))
   let alice = room.participant_id("p1")
+  let session = process.new_subject()
 
-  let _ = room.dispatch(room_a, room.Join(alice, "Alice"))
+  let _ = room.dispatch(room_a, room.Join(alice, "Alice"), session)
 
   assert room.get_snapshot(room_a) == [room.Participant(alice, "Alice")]
   assert room.get_snapshot(room_b) == []
