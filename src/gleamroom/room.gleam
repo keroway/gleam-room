@@ -22,17 +22,26 @@ pub type Participant {
   Participant(id: ParticipantId, display_name: String)
 }
 
+/// One accepted buzz, in the order the Room actor's mailbox processed it.
+/// `position` is 1-based and assigned when the buzz is accepted, so it never
+/// changes even as later buzzes are appended.
+pub type BuzzResult {
+  BuzzResult(participant_id: ParticipantId, position: Int)
+}
+
 pub type RoomState {
-  RoomState(participants: List(Participant))
+  RoomState(participants: List(Participant), buzzes: List(BuzzResult))
 }
 
 pub fn new_state() -> RoomState {
-  RoomState(participants: [])
+  RoomState(participants: [], buzzes: [])
 }
 
 pub type RoomCommand {
   Join(id: ParticipantId, display_name: String)
   Leave(id: ParticipantId)
+  Buzz(id: ParticipantId)
+  ResetRound
 }
 
 pub type JoinRejectReason {
@@ -43,11 +52,19 @@ pub type LeaveRejectReason {
   NotJoined
 }
 
+pub type BuzzRejectReason {
+  BuzzerNotJoined
+  AlreadyBuzzed
+}
+
 pub type RoomEvent {
   ParticipantJoined(Participant)
   JoinRejected(id: ParticipantId, reason: JoinRejectReason)
   ParticipantLeft(ParticipantId)
   LeaveRejected(id: ParticipantId, reason: LeaveRejectReason)
+  BuzzAccepted(id: ParticipantId, position: Int)
+  BuzzRejected(id: ParticipantId, reason: BuzzRejectReason)
+  RoundReset
 }
 
 /// Pure state transition: given the current state and a command, returns the
@@ -61,6 +78,8 @@ pub fn apply_command(
   case command {
     Join(id, display_name) -> apply_join(state, id, display_name)
     Leave(id) -> apply_leave(state, id)
+    Buzz(id) -> apply_buzz(state, id)
+    ResetRound -> apply_reset_round(state)
   }
 }
 
@@ -73,7 +92,8 @@ fn apply_join(
     Ok(_) -> #(state, JoinRejected(id, AlreadyJoined))
     Error(Nil) -> {
       let participant = Participant(id, display_name)
-      let next = RoomState(participants: [participant, ..state.participants])
+      let next =
+        RoomState(..state, participants: [participant, ..state.participants])
       #(next, ParticipantJoined(participant))
     }
   }
@@ -84,9 +104,40 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
     Error(Nil) -> #(state, LeaveRejected(id, NotJoined))
     Ok(_) -> {
       let remaining = list.filter(state.participants, fn(p) { p.id != id })
-      #(RoomState(participants: remaining), ParticipantLeft(id))
+      #(RoomState(..state, participants: remaining), ParticipantLeft(id))
     }
   }
+}
+
+/// Accepts at most one buzz per participant per round. Ordering comes from
+/// the Room actor's mailbox processing order (one command at a time), so no
+/// client-supplied or wall-clock timestamp is ever consulted to decide who
+/// was first.
+fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
+  case find_participant(state, id) {
+    Error(Nil) -> #(state, BuzzRejected(id, BuzzerNotJoined))
+    Ok(_) ->
+      case has_buzzed(state, id) {
+        True -> #(state, BuzzRejected(id, AlreadyBuzzed))
+        False -> {
+          let position = list.length(state.buzzes) + 1
+          let next =
+            RoomState(..state, buzzes: [
+              BuzzResult(id, position),
+              ..state.buzzes
+            ])
+          #(next, BuzzAccepted(id, position))
+        }
+      }
+  }
+}
+
+fn apply_reset_round(state: RoomState) -> #(RoomState, RoomEvent) {
+  #(RoomState(..state, buzzes: []), RoundReset)
+}
+
+fn has_buzzed(state: RoomState, id: ParticipantId) -> Bool {
+  list.any(state.buzzes, fn(result) { result.participant_id == id })
 }
 
 fn find_participant(
@@ -102,6 +153,11 @@ pub fn snapshot(state: RoomState) -> List(Participant) {
   state.participants
 }
 
+/// The current round's accepted buzzes, oldest (position 1) first.
+pub fn buzz_snapshot(state: RoomState) -> List(BuzzResult) {
+  list.reverse(state.buzzes)
+}
+
 pub type Message {
   Dispatch(
     command: RoomCommand,
@@ -109,6 +165,7 @@ pub type Message {
     reply_to: Subject(RoomEvent),
   )
   GetSnapshot(reply_to: Subject(List(Participant)))
+  GetBuzzSnapshot(reply_to: Subject(List(BuzzResult)))
 }
 
 /// The actor's own state: the domain `RoomState` plus the set of connected
@@ -141,15 +198,15 @@ fn handle_message(
       // other connected sessions learn about it asynchronously through
       // their own subject so they observe consistent room state.
       process.send(reply_to, event)
-      broadcast(
-        next_subscribers,
-        except: event_participant_id(event),
-        event: event,
-      )
+      broadcast(next_subscribers, except: session, event: event)
       actor.continue(ActorState(room: next_room, subscribers: next_subscribers))
     }
     GetSnapshot(reply_to) -> {
       process.send(reply_to, snapshot(state.room))
+      actor.continue(state)
+    }
+    GetBuzzSnapshot(reply_to) -> {
+      process.send(reply_to, buzz_snapshot(state.room))
       actor.continue(state)
     }
   }
@@ -169,39 +226,38 @@ fn update_subscribers(
       )
     ParticipantLeft(id) ->
       dict.delete(subscribers, participant_id_to_string(id))
-    JoinRejected(_, _) | LeaveRejected(_, _) -> subscribers
+    JoinRejected(_, _)
+    | LeaveRejected(_, _)
+    | BuzzAccepted(_, _)
+    | BuzzRejected(_, _)
+    | RoundReset -> subscribers
   }
 }
 
-fn event_participant_id(event: RoomEvent) -> ParticipantId {
-  case event {
-    ParticipantJoined(participant) -> participant.id
-    ParticipantLeft(id) -> id
-    JoinRejected(id, _) -> id
-    LeaveRejected(id, _) -> id
-  }
-}
-
-/// Notifies every subscriber other than `except` about a membership change.
-/// Rejections are not broadcast: they carry no state change and are only
-/// meaningful to the session that issued the command.
+/// Notifies every subscriber other than `except` (the session that issued
+/// the command, which already received the event synchronously through
+/// `dispatch`) about a state change. Rejections are not broadcast: they
+/// carry no state change and are only meaningful to the issuing session.
 fn broadcast(
   subscribers: Dict(String, Subject(RoomEvent)),
-  except except_id: ParticipantId,
+  except except_session: Subject(RoomEvent),
   event event: RoomEvent,
 ) -> Nil {
   case event {
-    ParticipantJoined(_) | ParticipantLeft(_) ->
+    ParticipantJoined(_)
+    | ParticipantLeft(_)
+    | BuzzAccepted(_, _)
+    | RoundReset ->
       subscribers
       |> dict.to_list
       |> list.each(fn(entry) {
-        let #(id, subject) = entry
-        case id == participant_id_to_string(except_id) {
+        let #(_, subject) = entry
+        case subject == except_session {
           True -> Nil
           False -> process.send(subject, event)
         }
       })
-    JoinRejected(_, _) | LeaveRejected(_, _) -> Nil
+    JoinRejected(_, _) | LeaveRejected(_, _) | BuzzRejected(_, _) -> Nil
   }
 }
 
@@ -220,4 +276,9 @@ pub fn dispatch(
 /// Reads the current participant list from a running room actor.
 pub fn get_snapshot(subject: Subject(Message)) -> List(Participant) {
   actor.call(subject, waiting: 1000, sending: GetSnapshot)
+}
+
+/// Reads the current round's accepted buzzes from a running room actor.
+pub fn get_buzz_snapshot(subject: Subject(Message)) -> List(BuzzResult) {
+  actor.call(subject, waiting: 1000, sending: GetBuzzSnapshot)
 }

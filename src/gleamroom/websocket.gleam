@@ -101,8 +101,8 @@ fn handle_text(
     }
     Ok(protocol.Join(wire_room_id, display_name)) ->
       handle_join(state, connection, wire_room_id, display_name)
-    Ok(protocol.Buzz) -> handle_unsupported(state, connection)
-    Ok(protocol.Reset) -> handle_unsupported(state, connection)
+    Ok(protocol.Buzz) -> handle_buzz(state, connection)
+    Ok(protocol.Reset) -> handle_reset(state, connection)
   }
 }
 
@@ -141,11 +141,12 @@ fn handle_join(
       {
         room.ParticipantJoined(_participant) -> {
           let snapshot = room.get_snapshot(room_subject)
+          let buzz_snapshot = room.get_buzz_snapshot(room_subject)
           send_server_message(
             connection,
             protocol.State(
               participants: list.map(snapshot, to_wire_participant),
-              buzzes: [],
+              buzzes: list.map(buzz_snapshot, to_wire_buzz_result),
             ),
           )
           let next_state =
@@ -166,27 +167,95 @@ fn handle_join(
           )
           mist.continue(state)
         }
-        // `Join` never yields a leave-shaped event; kept for exhaustiveness
-        // since `room.RoomEvent` is shared between join and leave commands.
-        room.ParticipantLeft(_) | room.LeaveRejected(_, _) ->
-          mist.continue(state)
+        // `Join` never yields any other event; kept for exhaustiveness since
+        // `room.RoomEvent` is shared across every room command.
+        room.ParticipantLeft(_)
+        | room.LeaveRejected(_, _)
+        | room.BuzzAccepted(_, _)
+        | room.BuzzRejected(_, _)
+        | room.RoundReset -> mist.continue(state)
       }
     }
   }
 }
 
-fn handle_unsupported(
+fn handle_buzz(
   state: ConnectionState,
   connection: WebsocketConnection,
 ) -> Next(ConnectionState, room.RoomEvent) {
+  case state.room {
+    None -> {
+      send_not_joined_error(connection)
+      mist.continue(state)
+    }
+    Some(handle) -> {
+      case
+        room.dispatch(
+          handle.subject,
+          room.Buzz(handle.participant_id),
+          handle.session,
+        )
+      {
+        room.BuzzAccepted(id, position) ->
+          send_server_message(
+            connection,
+            protocol.BuzzAccepted(to_wire_participant_id(id), position),
+          )
+        room.BuzzRejected(_, _) ->
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(
+              "buzz_rejected",
+              "Buzz was not accepted for the current round.",
+            ),
+          )
+        // `Buzz` never yields any other event; kept for exhaustiveness since
+        // `room.RoomEvent` is shared across every room command.
+        room.ParticipantJoined(_)
+        | room.JoinRejected(_, _)
+        | room.ParticipantLeft(_)
+        | room.LeaveRejected(_, _)
+        | room.RoundReset -> Nil
+      }
+      mist.continue(state)
+    }
+  }
+}
+
+fn handle_reset(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, room.RoomEvent) {
+  case state.room {
+    None -> {
+      send_not_joined_error(connection)
+      mist.continue(state)
+    }
+    Some(handle) -> {
+      case room.dispatch(handle.subject, room.ResetRound, handle.session) {
+        room.RoundReset -> send_server_message(connection, protocol.RoundReset)
+        // `ResetRound` never yields any other event; kept for exhaustiveness
+        // since `room.RoomEvent` is shared across every room command.
+        room.ParticipantJoined(_)
+        | room.JoinRejected(_, _)
+        | room.ParticipantLeft(_)
+        | room.LeaveRejected(_, _)
+        | room.BuzzAccepted(_, _)
+        | room.BuzzRejected(_, _) -> Nil
+      }
+      mist.continue(state)
+    }
+  }
+}
+
+fn send_not_joined_error(connection: WebsocketConnection) -> Nil {
   send_server_message(
     connection,
     protocol.ProtocolErrorMessage(
-      "unsupported_command",
-      "This command is not implemented yet.",
+      "not_joined",
+      "Join a room before sending this command.",
     ),
   )
-  mist.continue(state)
 }
 
 fn send_server_message(
@@ -206,8 +275,12 @@ fn room_event_to_server_message(
       Some(protocol.ParticipantJoined(to_wire_participant(participant)))
     room.ParticipantLeft(id) ->
       Some(protocol.ParticipantLeft(to_wire_participant_id(id)))
+    room.BuzzAccepted(id, position) ->
+      Some(protocol.BuzzAccepted(to_wire_participant_id(id), position))
+    room.RoundReset -> Some(protocol.RoundReset)
     room.JoinRejected(_, _) -> None
     room.LeaveRejected(_, _) -> None
+    room.BuzzRejected(_, _) -> None
   }
 }
 
@@ -220,6 +293,13 @@ fn to_wire_participant(participant: room.Participant) -> protocol.Participant {
 
 fn to_wire_participant_id(id: room.ParticipantId) -> protocol.ParticipantId {
   protocol.participant_id(room.participant_id_to_string(id))
+}
+
+fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
+  protocol.BuzzResult(
+    participant_id: to_wire_participant_id(result.participant_id),
+    position: result.position,
+  )
 }
 
 /// Derives a participant id from this connection's own process identity.
