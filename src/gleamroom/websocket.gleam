@@ -28,6 +28,9 @@ type RoomHandle {
     subject: Subject(room.Message),
     participant_id: room.ParticipantId,
     session: Subject(room.RoomEvent),
+    // 切断時に registry へ Release を送るために保持する（#26）。
+    // room_id が無いと「どの room を外すか」を registry へ伝えられない。
+    room_id: registry.RoomId,
   )
 }
 
@@ -59,6 +62,21 @@ fn on_close(state: ConnectionState) -> Nil {
           room.Leave(handle.participant_id),
           handle.session,
         )
+      // 最後の参加者が抜けたら registry から外す（#26）。外さないと、
+      // 一度でも join された RoomId の Room actor と Dict エントリが
+      // プロセス終了まで残り続ける。
+      //
+      // 判定を registry ではなく**この層で**行うのは、room.gleam から
+      // registry.gleam を import すると循環参照になるため。切断を知っている
+      // のはこの層で、room は自分がどの registry に属するかを知らない。
+      case room.get_snapshot(handle.subject) {
+        [] ->
+          process.send(
+            state.registry,
+            registry.Release(handle.room_id, handle.subject),
+          )
+        _ -> Nil
+      }
       Nil
     }
   }
@@ -124,11 +142,8 @@ fn handle_join(
       mist.continue(state)
     }
     None -> {
-      let room_subject =
-        registry.lookup(
-          state.registry,
-          registry.room_id(protocol.room_id_to_string(wire_room_id)),
-        )
+      let room_id = registry.room_id(protocol.room_id_to_string(wire_room_id))
+      let room_subject = registry.lookup(state.registry, room_id)
       let participant_id = room.participant_id(new_participant_id())
       let session = process.new_subject()
 
@@ -152,7 +167,12 @@ fn handle_join(
           let next_state =
             ConnectionState(
               ..state,
-              room: Some(RoomHandle(room_subject, participant_id, session)),
+              room: Some(RoomHandle(
+                room_subject,
+                participant_id,
+                session,
+                room_id,
+              )),
             )
           let selector = process.new_selector() |> process.select(session)
           mist.continue(next_state) |> mist.with_selector(selector)
