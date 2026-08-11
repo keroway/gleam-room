@@ -156,8 +156,7 @@ fn handle_join(
       // room が応答しなければ join を諦め、理由をクライアントへ返す（#33）。
       // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
       // クライアントには何も届かなかった。
-      use event <- with_room_reply(
-        state,
+      use event <- with_join_reply(
         connection,
         room.dispatch(
           room_subject,
@@ -314,7 +313,42 @@ fn with_room(
   }
 }
 
+/// join の応答が得られたときだけ `next` を実行する（#33）。
+///
+/// **タイムアウトは「実行されなかった」ではなく「結果不明」**。`exception.rescue`
+/// は要求を取り消さないので、`Join` は room のメールボックスに残り、後から
+/// 実行されうる。そこで再試行を促すと、遅れて成立した参加者と再試行ぶんの
+/// **二重参加**になり、切断時には最後の `RoomHandle` しか Leave しないため
+/// 前者が room に残り続ける。
+///
+/// そのため join のタイムアウトでは再試行を促さず、**接続を閉じる**。
+/// クライアントは新しい接続からやり直す。遅れて成立した参加者が残る問題は
+/// 別途対応する（要求 ID と結果照会が要る）。
+fn with_join_reply(
+  connection: WebsocketConnection,
+  reply: Result(room.RoomEvent, Nil),
+  next: fn(room.RoomEvent) -> Next(ConnectionState, room.RoomEvent),
+) -> Next(ConnectionState, room.RoomEvent) {
+  case reply {
+    Ok(event) -> next(event)
+    Error(Nil) -> {
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(
+          "room_unavailable",
+          "The room did not respond in time. Reconnect to try again.",
+        ),
+      )
+      mist.stop()
+    }
+  }
+}
+
 /// room からの応答が得られたときだけ `next` を実行する（#33）。
+///
+/// join 以外（buzz / reset）に使う。これらは結果不明のまま再試行しても
+/// 破綻しない — buzz は同一参加者の重複を room が `AlreadyBuzzed` で弾き、
+/// reset は冪等。
 ///
 /// 応答が無いのは room actor が詰まっている（あるいは死んだ）とき。
 /// 以前は `actor.call` のタイムアウトで**この接続プロセスごとクラッシュ**し、
