@@ -70,6 +70,9 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
 
 Once running, `GET http://localhost:4000/health` returns `200 ok`.
 
+`.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`, and
+`gleam test` on every pull request and push to `main`.
+
 ### Browser client
 
 Opening `http://localhost:4000/` in a browser serves a minimal HTML/CSS/JS
@@ -79,25 +82,33 @@ same room in multiple tabs shows presence and buzz updates propagate to all
 of them. It is a thin wire-protocol client with no build tool or framework;
 see `src/gleamroom/web.gleam`.
 
-### Manual WebSocket verification
+### Manual MVP acceptance procedure
 
-`ws://localhost:4000/ws` accepts WebSocket connections and echoes any text
-message back, replying `pong` to `ping`. This is a transport-level check
-only; it does not yet know about rooms or participants. With the server
-running, verify it from a browser devtools console:
+`ws://localhost:4000/ws` accepts WebSocket connections speaking the typed
+join/buzz/reset protocol described in
+[`docs/mvp.md`](docs/mvp.md#suggested-wire-protocol); see
+`src/gleamroom/protocol.gleam` and `src/gleamroom/websocket.gleam`. The
+browser client above is the easiest way to exercise it manually. To validate
+the full MVP acceptance scenario from
+[`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running:
 
-```js
-const socket = new WebSocket("ws://localhost:4000/ws");
-socket.onmessage = (event) => console.log("received:", event.data);
-socket.onopen = () => {
-  socket.send("ping"); // logs "received: pong"
-  socket.send("hello"); // logs "received: hello"
-};
-```
+1. Open `http://localhost:4000/` in three browser tabs/windows.
+2. Join room `ABCD` in each with a different display name (e.g. Alice, Bob,
+   Carol). All three should show the same participant presence.
+3. Reset the round, then press buzz in the order Bob, Alice, Carol. All
+   three clients should display the identical ordering B → A → C.
+4. Press buzz again from Bob. The ordering should not change or duplicate.
+5. Reset again; the results should clear on all three clients.
+6. Close one tab. The remaining two should reflect that participant leaving.
+7. Reopen a tab and rejoin the same room with the same display name. The
+   rejoining client receives the current room snapshot; per
+   [`docs/mvp.md`](docs/mvp.md#reconnect) this is a new participant
+   identity, not a restored one, so the other clients briefly see a
+   leave/join rather than a seamless reconnect.
 
-Opening two browser tabs and repeating this shows that connections are
-independent, and closing one tab does not affect the server or the other
-connection.
+`test/gleamroom/integration_test.gleam` automates this same scenario against
+the Registry + Room actor boundary (without opening real sockets); run it
+with `gleam test`.
 
 ## Roadmap
 
