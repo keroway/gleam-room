@@ -87,13 +87,20 @@ fn handle_message(
     Release(id, subject) -> {
       let key = room_id_to_string(id)
       case dict.get(state, key) {
-        // 登録中のものと同一の actor のときだけ外す。ABA 問題への対処で、
+        // 登録中のものと同一の actor のときだけ対象にする。ABA 問題への対処で、
         // 理由は `Release` のドキュメントコメントを参照。
         Ok(current) if current == subject -> {
-          // Dict から外すだけでは actor プロセスが残る。エントリは消えても
-          // BEAM プロセスは生き続けるため、両方やって初めてリークが塞がる。
-          process.send(current, room.Shutdown)
-          actor.continue(dict.delete(state, key))
+          // **空かどうかの判定は room 自身に任せる**（#36）。
+          // ここで get_snapshot して空を確かめてから止めると、その隙に
+          // join した参加者ごと停止させてしまう。room のメールボックスは
+          // 直列なので、自分で見て自分で止めれば隙間が生まれない。
+          //
+          // Dict から外すのは**実際に停止したときだけ**。停止しなかった room を
+          // 外すと、以降の lookup が別の actor を作って参加者が分断される。
+          case room.shutdown_if_empty(current) {
+            True -> actor.continue(dict.delete(state, key))
+            False -> actor.continue(state)
+          }
         }
         _ -> actor.continue(state)
       }
