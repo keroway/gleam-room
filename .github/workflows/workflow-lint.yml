@@ -1,0 +1,21 @@
+name: workflow-lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "**/*.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    uses: keroway/.github/.github/workflows/reusable-workflow-lint.yml@main # zizmor: ignore[unpinned-uses] -- same-account reusable workflow

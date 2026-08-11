@@ -1,0 +1,11 @@
+# Shared issue-refinement / issue-sprint opt-in for this repository.
+enabled: true
+
+# The shared contract processes at most one Issue per cycle.
+max_issues_per_cycle: 1
+
+# A merge still requires an explicit caller request, but this repository does
+# not grant automated merge permission at bootstrap time.
+allow_merge: false
+
+interval: 30m
