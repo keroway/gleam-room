@@ -313,7 +313,15 @@ fn send_server_message(
   Nil
 }
 
-fn room_event_to_server_message(
+/// Translates a `RoomEvent` broadcast from the Room actor into the wire
+/// message to send to other clients, or `None` when the event is a
+/// rejection meant only for the connection that issued the command (already
+/// answered directly by `handle_join`/`handle_buzz`, so re-broadcasting it
+/// would leak another participant's failed attempt).
+///
+/// Pure and `WebsocketConnection`-free so it is unit-testable without a live
+/// connection (#24).
+pub fn room_event_to_server_message(
   event: room.RoomEvent,
 ) -> Option(protocol.ServerMessage) {
   case event {
@@ -330,18 +338,28 @@ fn room_event_to_server_message(
   }
 }
 
-fn to_wire_participant(participant: room.Participant) -> protocol.Participant {
+/// Converts a domain `Participant` to its wire representation. Pure and
+/// unit-testable without a live connection (#24).
+pub fn to_wire_participant(
+  participant: room.Participant,
+) -> protocol.Participant {
   protocol.Participant(
     id: to_wire_participant_id(participant.id),
     display_name: participant.display_name,
   )
 }
 
-fn to_wire_participant_id(id: room.ParticipantId) -> protocol.ParticipantId {
+/// Converts a domain `ParticipantId` to its wire representation. Pure and
+/// unit-testable without a live connection (#24).
+pub fn to_wire_participant_id(
+  id: room.ParticipantId,
+) -> protocol.ParticipantId {
   protocol.participant_id(room.participant_id_to_string(id))
 }
 
-fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
+/// Converts a domain `BuzzResult` to its wire representation. Pure and
+/// unit-testable without a live connection (#24).
+pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
   protocol.BuzzResult(
     participant_id: to_wire_participant_id(result.participant_id),
     position: result.position,
