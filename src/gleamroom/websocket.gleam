@@ -5,6 +5,7 @@ import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
@@ -57,6 +58,8 @@ fn on_close(state: ConnectionState) -> Nil {
   case state.room {
     None -> Nil
     Some(handle) -> {
+      // 応答が無くても切断処理は続ける。room が死んでいれば #39 の経路で
+      // registry から外れる。
       let _ =
         room.dispatch(
           handle.subject,
@@ -150,16 +153,25 @@ fn handle_join(
       let participant_id = room.participant_id(new_participant_id())
       let session = process.new_subject()
 
-      case
+      // room が応答しなければ join を諦め、理由をクライアントへ返す（#33）。
+      // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
+      // クライアントには何も届かなかった。
+      use event <- with_room_reply(
+        state,
+        connection,
         room.dispatch(
           room_subject,
           room.Join(participant_id, display_name),
           session,
-        )
-      {
+        ),
+      )
+      case event {
         room.ParticipantJoined(_participant) -> {
-          let snapshot = room.get_snapshot(room_subject)
-          let buzz_snapshot = room.get_buzz_snapshot(room_subject)
+          // snapshot が取れないときは空として扱う。join 自体は成立して
+          // いるので、接続を落とすより「まだ誰も見えない」状態で続けるほうがよい。
+          let snapshot = result.unwrap(room.get_snapshot(room_subject), [])
+          let buzz_snapshot =
+            result.unwrap(room.get_buzz_snapshot(room_subject), [])
           send_server_message(
             connection,
             protocol.State(
@@ -212,13 +224,16 @@ fn handle_buzz(
       mist.continue(state)
     }
     Some(handle) -> {
-      case
+      use event <- with_room_reply(
+        state,
+        connection,
         room.dispatch(
           handle.subject,
           room.Buzz(handle.participant_id),
           handle.session,
-        )
-      {
+        ),
+      )
+      case event {
         room.BuzzAccepted(id, position) ->
           send_server_message(
             connection,
@@ -255,7 +270,12 @@ fn handle_reset(
       mist.continue(state)
     }
     Some(handle) -> {
-      case room.dispatch(handle.subject, room.ResetRound, handle.session) {
+      use event <- with_room_reply(
+        state,
+        connection,
+        room.dispatch(handle.subject, room.ResetRound, handle.session),
+      )
+      case event {
         room.RoundReset -> send_server_message(connection, protocol.RoundReset)
         // `ResetRound` never yields any other event; kept for exhaustiveness
         // since `room.RoomEvent` is shared across every room command.
@@ -292,6 +312,36 @@ fn with_room(
       mist.continue(state)
     }
   }
+}
+
+/// room からの応答が得られたときだけ `next` を実行する（#33）。
+///
+/// 応答が無いのは room actor が詰まっている（あるいは死んだ）とき。
+/// 以前は `actor.call` のタイムアウトで**この接続プロセスごとクラッシュ**し、
+/// クライアントには理由が届かなかった。
+fn with_room_reply(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  reply: Result(room.RoomEvent, Nil),
+  next: fn(room.RoomEvent) -> Next(ConnectionState, room.RoomEvent),
+) -> Next(ConnectionState, room.RoomEvent) {
+  case reply {
+    Ok(event) -> next(event)
+    Error(Nil) -> {
+      send_room_unavailable(connection)
+      mist.continue(state)
+    }
+  }
+}
+
+fn send_room_unavailable(connection: WebsocketConnection) -> Nil {
+  send_server_message(
+    connection,
+    protocol.ProtocolErrorMessage(
+      "room_unavailable",
+      "The room did not respond in time. Please try again.",
+    ),
+  )
 }
 
 fn send_not_joined_error(connection: WebsocketConnection) -> Nil {
