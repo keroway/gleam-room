@@ -70,6 +70,15 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
 
 Once running, `GET http://localhost:4000/health` returns `200 ok`.
 
+### Browser client
+
+Opening `http://localhost:4000/` in a browser serves a minimal HTML/CSS/JS
+client for manually exercising room join/presence and buzzer behavior. Enter
+a room ID and display name to join, then use the buzzer button; opening the
+same room in multiple tabs shows presence and buzz updates propagate to all
+of them. It is a thin wire-protocol client with no build tool or framework;
+see `src/gleamroom/web.gleam`.
+
 ### Manual WebSocket verification
 
 `ws://localhost:4000/ws` accepts WebSocket connections and echoes any text
