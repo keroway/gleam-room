@@ -17,9 +17,11 @@ jobs:
   build-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
-      - uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@94c6a6d6987f868f076d3eea8d1173abb631712f # v1.9
         with:
           otp-version: "27"
           gleam-version: "latest"
