@@ -1,0 +1,18 @@
+# Gleam build output
+build/
+
+# Erlang crash dumps
+erl_crash.dump
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
