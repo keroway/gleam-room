@@ -78,6 +78,40 @@ pub fn index_html() -> String {
   let participants = new Map();
   let buzzes = [];
 
+  // A reconnect always re-joins as a brand new, server-assigned participant
+  // identity (see docs/mvp.md, \"Reconnect\"); this client does not attempt
+  // to preserve the previous one. A fixed, small retry count keeps this
+  // \"simple\" rather than a full exponential-backoff strategy.
+  const RECONNECT_DELAY_MS = 1500;
+  const MAX_RECONNECT_ATTEMPTS = 5;
+  let lastJoin = null;
+  let reconnectAttempts = 0;
+  let reconnectTimer = null;
+
+  function cancelReconnect() {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    reconnectAttempts = 0;
+  }
+
+  function scheduleReconnect() {
+    if (!lastJoin) return;
+    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      log(\"giving up automatic reconnect\");
+      return;
+    }
+    reconnectAttempts += 1;
+    log(
+      `reconnecting in ${RECONNECT_DELAY_MS}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
+    );
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect(lastJoin.roomId, lastJoin.displayName);
+    }, RECONNECT_DELAY_MS);
+  }
+
   function log(line) {
     const entry = document.createElement(\"div\");
     entry.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
@@ -156,19 +190,15 @@ pub fn index_html() -> String {
     }
   }
 
-  joinForm.addEventListener(\"submit\", (event) => {
-    event.preventDefault();
+  function connect(roomId, displayName) {
     if (socket) return;
-
-    const roomId = roomInput.value.trim();
-    const displayName = nameInput.value.trim();
-    if (!roomId || !displayName) return;
 
     const protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";
     socket = new WebSocket(`${protocol}//${location.host}/ws`);
 
     socket.addEventListener(\"open\", () => {
       setConnected(true);
+      reconnectAttempts = 0;
       log(`connected, joining room ${roomId} as ${displayName}`);
       socket.send(JSON.stringify({
         type: \"join\",
@@ -193,11 +223,25 @@ pub fn index_html() -> String {
       renderBuzzes();
       socket = null;
       log(\"disconnected\");
+      scheduleReconnect();
     });
 
     socket.addEventListener(\"error\", () => {
       log(\"connection error\");
     });
+  }
+
+  joinForm.addEventListener(\"submit\", (event) => {
+    event.preventDefault();
+    if (socket) return;
+
+    const roomId = roomInput.value.trim();
+    const displayName = nameInput.value.trim();
+    if (!roomId || !displayName) return;
+
+    cancelReconnect();
+    lastJoin = { roomId, displayName };
+    connect(roomId, displayName);
   });
 
   buzzButton.addEventListener(\"click\", () => {

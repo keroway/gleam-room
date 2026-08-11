@@ -202,6 +202,92 @@ pub fn actor_reset_round_clears_buzz_snapshot_test() {
   assert room.get_buzz_snapshot(subject) == []
 }
 
+pub fn departed_subscriber_receives_no_further_broadcasts_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let alice = room.participant_id("p1")
+  let alice_session = process.new_subject()
+  let bob = room.participant_id("p2")
+  let bob_session = process.new_subject()
+  let _ = room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
+  let _ = room.dispatch(subject, room.Join(bob, "Bob"), bob_session)
+  let _ = process.receive(alice_session, 100)
+
+  // Bob disconnects: the transport layer dispatches `Leave` on his behalf,
+  // which drops his subject from the subscriber set (mirrors `on_close`).
+  let _ = room.dispatch(subject, room.Leave(bob), bob_session)
+  let _ = process.receive(alice_session, 100)
+
+  // A later room event must not reach Bob's now-stale subject.
+  let carol = room.participant_id("p3")
+  let carol_session = process.new_subject()
+  let _ = room.dispatch(subject, room.Join(carol, "Carol"), carol_session)
+
+  assert process.receive(bob_session, 100) == Error(Nil)
+  assert process.receive(alice_session, 100)
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol")))
+}
+
+pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let alice_old = room.participant_id("connection-1")
+  let alice_old_session = process.new_subject()
+  let _ =
+    room.dispatch(subject, room.Join(alice_old, "Alice"), alice_old_session)
+  let _ = room.dispatch(subject, room.Buzz(alice_old), alice_old_session)
+
+  // The dropped connection's `Leave` and the new connection's `Join` are
+  // dispatched independently, as `on_close`/`handle_join` would from two
+  // separate WebSocket processes.
+  let _ = room.dispatch(subject, room.Leave(alice_old), alice_old_session)
+  let alice_new = room.participant_id("connection-2")
+  let alice_new_session = process.new_subject()
+  let event =
+    room.dispatch(subject, room.Join(alice_new, "Alice"), alice_new_session)
+
+  // Reconnect gets a distinct `ParticipantId`; the server does not correlate
+  // it with the connection that dropped.
+  assert event == room.ParticipantJoined(room.Participant(alice_new, "Alice"))
+  assert alice_new != alice_old
+
+  // The snapshot delivered on rejoin reflects current room state: the old
+  // identity's buzz is preserved (per ADR 0003, buzz history lives in the
+  // active Room process, not tied to any one connection), and presence
+  // reflects only the reconnected participant.
+  assert room.get_snapshot(subject) == [room.Participant(alice_new, "Alice")]
+  assert room.get_buzz_snapshot(subject) == [room.BuzzResult(alice_old, 1)]
+}
+
+pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let alice_old = room.participant_id("connection-1")
+  let alice_old_session = process.new_subject()
+  let _ =
+    room.dispatch(subject, room.Join(alice_old, "Alice"), alice_old_session)
+
+  // The relative order of the new connection's `Join` and the old
+  // connection's `Leave` is not guaranteed (independent processes). Here the
+  // new connection's `Join` is processed first.
+  let alice_new = room.participant_id("connection-2")
+  let alice_new_session = process.new_subject()
+  let _ =
+    room.dispatch(subject, room.Join(alice_new, "Alice"), alice_new_session)
+
+  assert room.get_snapshot(subject)
+    == [
+      room.Participant(alice_new, "Alice"),
+      room.Participant(alice_old, "Alice"),
+    ]
+
+  let _ = room.dispatch(subject, room.Leave(alice_old), alice_old_session)
+
+  // Once the stale connection's `Leave` is processed, only the reconnected
+  // identity remains present.
+  assert room.get_snapshot(subject) == [room.Participant(alice_new, "Alice")]
+}
+
 pub fn independent_room_actors_do_not_share_buzz_state_test() {
   let assert Ok(room_a) = room.start()
   let assert Ok(room_b) = room.start()

@@ -59,6 +59,31 @@ At minimum:
 - The server can send the current room snapshot after join/rejoin.
 - Durable identity across browser restarts is not required.
 
+Per ADR 0003, active in-memory Room state is authoritative for the MVP:
+reconnect recovers a current snapshot, not a durable event history.
+
+**Participant identity on reconnect (transient, by design):**
+
+- A `ParticipantId` is derived from the WebSocket connection's own process
+  identity (see `websocket.new_participant_id`), not from any
+  client-supplied or persisted token.
+- A dropped connection is therefore indistinguishable, on the server, from a
+  participant leaving: when the socket closes, the transport layer dispatches
+  `Leave` for that connection's `ParticipantId` and the Room actor removes it
+  from presence and from its subscriber set.
+- A reconnect is a brand new WebSocket connection sending a new `Join`. It is
+  assigned a new `ParticipantId` and appears to already-connected clients as
+  a new participant, even if the browser/display name is unchanged. There is
+  no server-side correlation between the old and new identity.
+- Because the old connection's `Leave` and the new connection's `Join` happen
+  on independent processes, their relative order is not guaranteed. Other
+  clients may briefly observe both the pre-reconnect and post-reconnect
+  identity, or a leave immediately followed by a join, depending on timing.
+- The browser client's minimal reconnect strategy (see `web.gleam`) retries
+  a fixed, small number of times after an unexpected close, reusing the last
+  entered room ID and display name; it does not attempt to preserve or
+  restore the previous `ParticipantId`.
+
 ## Suggested wire protocol
 
 The exact JSON shape can evolve during implementation. The important requirement is that wire messages are decoded into typed domain commands/events immediately.
