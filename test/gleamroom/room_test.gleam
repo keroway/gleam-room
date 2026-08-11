@@ -359,3 +359,43 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
   assert room.get_snapshot(subject)
     == Ok([room.Participant(survivor, "Survivor")])
 }
+
+/// 接続プロセスがクラッシュしても room actor が生き残ること（#69）。
+///
+/// #56 で「接続が死んだら参加者も消える」を実装した際、`process.link` を
+/// 使っていた。link は **双方向** で「クラッシュしたプロセスにリンクされた
+/// プロセスも クラッシュする」ため、接続プロセスが 1 つ落ちただけで room actor
+/// ごと死に、**同室の全参加者が道連れ**になる。
+///
+/// 正しくは `process.monitor`（片方向）。対象の終了をメッセージで受け取るだけで、
+/// 監視元は影響を受けない。
+pub fn a_crashing_session_does_not_take_down_the_room_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let assert Ok(room_pid) = process.subject_owner(subject)
+
+  let survivor = room.participant_id("survivor")
+  let survivor_session = process.new_subject()
+  let assert Ok(_) =
+    room.dispatch(subject, room.Join(survivor, "Survivor"), survivor_session)
+
+  // 別プロセスから join し、**異常終了**させる。
+  let doomed = room.participant_id("doomed")
+  let doomed_pid =
+    process.spawn_unlinked(fn() {
+      let doomed_session = process.new_subject()
+      let _ =
+        room.dispatch(subject, room.Join(doomed, "Doomed"), doomed_session)
+      process.sleep(500)
+    })
+
+  process.sleep(150)
+  process.kill(doomed_pid)
+  process.sleep(150)
+
+  // room actor は生きている（link だとここで死んでいた）。
+  assert process.is_alive(room_pid)
+  // 残った参加者も引き続き使える。
+  assert room.get_snapshot(subject)
+    == Ok([room.Participant(survivor, "Survivor")])
+}
