@@ -6,7 +6,6 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
-import gleam/result
 import gleamroom/registry
 import gleamroom/web
 import gleamroom/websocket
@@ -76,10 +75,35 @@ fn handle_request(
   }
 }
 
-/// Reads the HTTP port from the `PORT` environment variable, falling back to
-/// `default_port` when it is unset or not a valid integer.
-fn read_port() -> Int {
-  envoy.get("PORT")
-  |> result.try(int.parse)
-  |> result.unwrap(default_port)
+/// `PORT` 環境変数から待ち受けポートを読む。
+///
+/// **未設定と「設定されているが不正」を区別する**（#29）。以前はどちらも
+/// `result.unwrap(default_port)` で吸収しており、`PORT=abc` のようなタイポが
+/// 警告もログも出さずに既定ポートで起動していた。設定したつもりの人からは
+/// 「なぜか反映されない」としか見えず、原因に辿り着けない。
+///
+/// - 未設定: 意図された既定動作。静かに `default_port` を使う
+/// - 不正値: 設定ミス。**警告を出してから** `default_port` を使う
+///
+/// 起動自体は続ける。ポートが違っても他は正常に動くため、ここで落とすと
+/// 「動くはずのものが上がらない」ほうの害が大きい。
+pub fn read_port() -> Int {
+  case envoy.get("PORT") {
+    Error(Nil) -> default_port
+    Ok(raw) ->
+      case int.parse(raw) {
+        Ok(port) -> port
+        Error(Nil) -> {
+          logging.log(
+            logging.Warning,
+            "PORT="
+              <> raw
+              <> " は整数として解釈できません。既定の "
+              <> int.to_string(default_port)
+              <> " 番で起動します。",
+          )
+          default_port
+        }
+      }
+  }
 }
