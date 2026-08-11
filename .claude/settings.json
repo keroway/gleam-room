@@ -16,7 +16,17 @@
       "Bash(git branch -a)",
       "Bash(git branch -v)",
       "Bash(git branch --show-current)",
-      "Bash(ls)"
+      "Bash(ls)",
+      "Bash(gleam build)",
+      "Bash(gleam build *)",
+      "Bash(gleam test)",
+      "Bash(gleam test *)",
+      "Bash(gleam format)",
+      "Bash(gleam format *)",
+      "Bash(gleam check)",
+      "Bash(gleam check *)",
+      "Bash(gleam deps download)",
+      "Bash(gleam clean)"
     ]
   }
 }
