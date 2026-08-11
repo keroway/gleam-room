@@ -21,7 +21,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: erlef/setup-beam@94c6a6d6987f868f076d3eea8d1173abb631712f # v1.9
+      - uses: erlef/setup-beam@dff508cca8ce57162e7aa6c4769a4f97c2fed638 # v1.20.4
         with:
           otp-version: "27"
           gleam-version: "latest"
