@@ -20,5 +20,9 @@ gleam_erlang = ">= 1.3.0 and < 2.0.0"
 envoy = ">= 1.2.0 and < 2.0.0"
 logging = ">= 1.5.0 and < 2.0.0"
 
+# Direct Erlang JSON engine (see src/gleamroom/protocol.gleam for why this is
+# used directly instead of the gleam_json wrapper).
+thoas = ">= 1.0.0 and < 2.0.0"
+
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
