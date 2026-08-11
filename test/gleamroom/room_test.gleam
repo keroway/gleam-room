@@ -313,3 +313,49 @@ pub fn independent_room_actors_do_not_share_buzz_state_test() {
   assert room.get_buzz_snapshot(room_a.data) == Ok([room.BuzzResult(id, 1)])
   assert room.get_buzz_snapshot(room_b.data) == Ok([])
 }
+
+/// 接続プロセスが死んだ参加者が room から自動で消えること（#56 / #35）。
+///
+/// 参加者は WebSocket の接続プロセスと 1 対 1 で対応する。接続が死んだのに
+/// Leave が届かない経路が複数ある:
+///
+///   - Join がタイムアウトし遅れて成立した（接続側は自分が参加者だと知らない、#33）
+///   - 接続プロセスがクラッシュした
+///   - 突然の切断で on_close が走らなかった（#35）
+///
+/// 原因ごとに塞ぐより「接続が死んだら参加者も消える」という不変条件を
+/// 1 つ置くほうが確実。
+pub fn a_participant_whose_session_dies_is_removed_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+
+  let survivor = room.participant_id("survivor")
+  let survivor_session = process.new_subject()
+  let assert Ok(_) =
+    room.dispatch(subject, room.Join(survivor, "Survivor"), survivor_session)
+
+  // 別プロセスから join させ、そのプロセスを殺す。
+  let doomed = room.participant_id("doomed")
+  let doomed_pid =
+    process.spawn_unlinked(fn() {
+      let doomed_session = process.new_subject()
+      let _ =
+        room.dispatch(subject, room.Join(doomed, "Doomed"), doomed_session)
+      // room 側が監視を張るまで生きている必要がある。
+      process.sleep(500)
+    })
+
+  process.sleep(150)
+  assert room.get_snapshot(subject)
+    == Ok([
+      room.Participant(doomed, "Doomed"),
+      room.Participant(survivor, "Survivor"),
+    ])
+
+  process.kill(doomed_pid)
+  process.sleep(150)
+
+  // 死んだ接続の参加者だけが消え、room 自体は生きている。
+  assert room.get_snapshot(subject)
+    == Ok([room.Participant(survivor, "Survivor")])
+}
