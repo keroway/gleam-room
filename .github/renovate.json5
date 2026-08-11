@@ -1,0 +1,8 @@
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+  extends: ["github>keroway/.github"],
+  packageRules: [
+    // Add repository-specific Gleam/Hex rules only after the dependency graph
+    // exists and the package manager behavior has been verified.
+  ],
+}
