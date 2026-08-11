@@ -4,6 +4,8 @@ import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
+import gleam/otp/static_supervisor as supervisor
+import gleam/otp/supervision
 import gleam/result
 import gleamroom/registry
 import gleamroom/web
@@ -13,18 +15,41 @@ import mist.{type Connection, type ResponseData}
 
 const default_port = 4000
 
+/// docs/architecture.md の「Supervision and lifecycle」が示す構成を実際に組む（#23）。
+///
+///     Application supervisor
+///       +-- Room registry
+///       +-- Web server
+///
+/// 以前は registry と mist を `let assert Ok(...)` で個別に起動しているだけで、
+/// 親子関係も再起動戦略も無かった。どちらかが落ちても他方は生き続け、
+/// **HTTP は 200 を返すのに join だけが無反応**という状態になりえた。
+///
+/// `rest_for_one` を選ぶ理由: web server は registry に依存するが逆は依存しない。
+/// registry が落ちたら web server も作り直す必要がある（古い名前解決を握った
+/// 接続を残さないため）。逆に web server だけが落ちた場合は registry を巻き込まない。
+///
+/// 子の順序は依存の順序。registry を先に立ててから web server を立てる。
 pub fn main() -> Nil {
   logging.configure()
 
   let port = read_port()
-  let assert Ok(registry_started) = registry.start()
-  let registry_subject = registry_started.data
+  // 名前を経由することで、registry が再起動しても HTTP ハンドラは
+  // 現行のプロセスへ届く（起動時の subject を握らない）。
+  let registry_name = process.new_name("gleamroom_registry")
+  let registry_subject = process.named_subject(registry_name)
 
   let assert Ok(_) =
-    handle_request(_, registry_subject)
-    |> mist.new
-    |> mist.port(port)
-    |> mist.start
+    supervisor.new(supervisor.RestForOne)
+    |> supervisor.add(
+      supervision.worker(fn() { registry.start_named(registry_name) }),
+    )
+    |> supervisor.add(mist.supervised(
+      handle_request(_, registry_subject)
+      |> mist.new
+      |> mist.port(port),
+    ))
+    |> supervisor.start
 
   process.sleep_forever()
 }

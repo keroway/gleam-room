@@ -46,6 +46,24 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
   |> actor.start
 }
 
+/// 名前付きで起動する（#23）。
+///
+/// supervisor 配下では registry が再起動すると **subject が変わる**。
+/// HTTP ハンドラが起動時の subject を握っていると、再起動後は死んだ
+/// プロセスへ送り続けることになる（送信自体はエラーにならないため、
+/// 「join しても何も起きない」という形でしか現れない）。
+///
+/// 名前を経由すれば、呼び出し側は `process.named_subject(name)` で
+/// 常に現行のプロセスへ届く。
+pub fn start_named(
+  name: process.Name(Message),
+) -> actor.StartResult(Subject(Message)) {
+  actor.new(dict.new())
+  |> actor.on_message(handle_message)
+  |> actor.named(name)
+  |> actor.start
+}
+
 fn handle_message(
   state: State,
   message: Message,
