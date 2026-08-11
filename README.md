@@ -59,6 +59,17 @@ A room should conceptually map to one supervised BEAM process. Transport concern
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/mvp.md`](docs/mvp.md), and [`docs/adr/`](docs/adr/) for the current design decisions.
 
+## Development commands
+
+```sh
+gleam build   # compile
+gleam test    # run unit tests
+gleam format  # format source
+gleam run     # start the HTTP server (default port 4000, override with PORT)
+```
+
+Once running, `GET http://localhost:4000/health` returns `200 ok`.
+
 ## Roadmap
 
 1. Multiplayer buzzer prototype.
