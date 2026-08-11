@@ -6,6 +6,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/result
 import gleamroom/registry
+import gleamroom/web
 import gleamroom/websocket
 import logging
 import mist.{type Connection, type ResponseData}
@@ -33,6 +34,11 @@ fn handle_request(
   registry_subject: Subject(registry.Message),
 ) -> Response(ResponseData) {
   case request.path_segments(req) {
+    [] ->
+      response.new(200)
+      |> response.set_header("content-type", "text/html; charset=utf-8")
+      |> response.set_body(mist.Bytes(bytes_tree.from_string(web.index_html())))
+
     ["health"] ->
       response.new(200)
       |> response.set_body(mist.Bytes(bytes_tree.from_string("ok")))
