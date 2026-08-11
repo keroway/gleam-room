@@ -1,9 +1,10 @@
+import gleam/bit_array
+import gleam/crypto
 import gleam/erlang/process.{type Selector, type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/string
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
@@ -326,6 +327,23 @@ fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
 /// Each WebSocket connection runs as its own process, so this is unique for
 /// the lifetime of the connection without requiring client-supplied
 /// identity or a shared counter.
-fn new_participant_id() -> String {
-  process.self() |> string.inspect
+/// 参加者 ID を生成する。
+///
+/// 以前は `process.self() |> string.inspect` で **BEAM の PID 文字列表現**
+/// (`<0.612.0>` 形式) をそのまま使っており、それが `state` /
+/// `participant_joined` / `buzz_accepted` を通じて**全クライアントへ**配信されていた
+/// (#28)。実サーバーで `{"id":"//erl(<0.132.0>)"}` を観測している。
+///
+/// PID を外に出すと次の問題がある:
+///
+///   - サーバー内部のプロセス構造(採番の連番性・ノード番号)がそのまま漏れる
+///   - PID は**プロセス終了後に再利用される**。再接続で別人に同じ ID が
+///     割り当たると、前の参加者のブザー結果と混ざる
+///   - 公開プロトコルの識別子が実装詳細に固定され、内部を変えられなくなる
+///
+/// 暗号論的乱数から作った不透明な値にする。16 バイトあれば衝突は実用上
+/// 起きない。base64 は URL/JSON でそのまま扱えるよう padding なし。
+pub fn new_participant_id() -> String {
+  crypto.strong_random_bytes(16)
+  |> bit_array.base64_encode(False)
 }
