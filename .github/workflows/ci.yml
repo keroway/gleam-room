@@ -35,3 +35,11 @@ jobs:
 
       - name: Test
         run: gleam test
+
+      # web.gleam に埋め込まれたクライアント JS の回帰テスト（#61）。
+      # docs/mvp.md の MVP 必須機能 "Basic reconnect handling" は Gleam 側からは
+      # 検証できないため、Node 標準のテストランナーで駆動する。
+      # **新しい依存は入れていない**（package.json も node_modules も無い）。
+      # ubuntu-latest には node が入っているので setup-node も要らない。
+      - name: Test (client JS)
+        run: node --test 'test/client/*.test.mjs'
