@@ -31,6 +31,23 @@ fn start_probe() -> Subject(Probe) {
   started.data
 }
 
+/// アクターが実際に停止するまで待つ。
+///
+/// `process.kill` は終了シグナルを送るだけで、戻った時点では**まだ生きている
+/// ことがある**。固定 sleep で待つと、遅いマシンでは早すぎて「死亡」ではなく
+/// 「タイムアウト」を観測してしまい、この PR が区別しようとしている 2 つを
+/// テスト自身が取り違える。上限付きで死亡を確認する。
+fn await_death(pid: process.Pid, remaining: Int) -> Nil {
+  case process.is_alive(pid), remaining {
+    False, _ -> Nil
+    True, 0 -> panic as "アクターが期限内に停止しなかった"
+    True, _ -> {
+      process.sleep(10)
+      await_death(pid, remaining - 1)
+    }
+  }
+}
+
 pub fn try_call_returns_the_reply_when_the_actor_answers_test() {
   let subject = start_probe()
 
@@ -65,7 +82,7 @@ pub fn try_call_returns_error_for_a_dead_actor_test() {
   let assert Ok(pid) = process.subject_owner(subject)
 
   process.kill(pid)
-  process.sleep(50)
+  await_death(pid, 100)
 
   assert call.try_call(subject, 100, Answer, "probe") == Error(Nil)
 }
@@ -105,7 +122,7 @@ pub fn classify_reports_a_dead_actor_test() {
   let assert Ok(pid) = process.subject_owner(subject)
 
   process.kill(pid)
-  process.sleep(50)
+  await_death(pid, 100)
 
   let assert Error(reason) =
     exception.rescue(fn() { actor.call(subject, 100, Answer) })
