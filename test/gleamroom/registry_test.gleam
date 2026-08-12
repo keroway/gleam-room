@@ -291,3 +291,62 @@ fn await_room_death(pid: process.Pid, remaining: Int) -> Nil {
     }
   }
 }
+
+/// `health` が **registry の応答**を確かめること（#93）。
+///
+/// `/health` はこれを見て 200 / 503 を切り替える。以前は無条件に 200 "ok" を
+/// 返していたため、registry が死んでいても詰まっていても緑になり、
+/// `gleamroom.main` のコメントが問題として挙げている
+/// 「HTTP は 200 を返すのに join だけが無反応」をまさに検出できなかった。
+pub fn health_reports_the_number_of_registered_rooms_test() {
+  let assert Ok(started) = registry.start()
+  let reg = started.data
+
+  assert registry.health(reg) == Ok(0)
+
+  let assert Ok(_) = registry.lookup(reg, registry.room_id("a"))
+  let assert Ok(_) = registry.lookup(reg, registry.room_id("b"))
+
+  assert registry.health(reg) == Ok(2)
+}
+
+/// **応答しない registry では失敗する**こと。ここが本体で、件数は付随情報。
+///
+/// 「詰まっている」を再現するため、誰も処理しない subject を渡す
+/// （所有者はテストプロセス自身なので Health は処理されない）。
+/// 素の `actor.call` ならここで呼び出し元が死ぬ（#33 / #58）。
+pub fn health_fails_when_the_registry_does_not_answer_test() {
+  let unresponsive: process.Subject(registry.Message) = process.new_subject()
+
+  assert registry.health(unresponsive) == Error(Nil)
+}
+
+/// 死んだ registry でも失敗する（クラッシュではなく Error になる）。
+pub fn health_fails_when_the_registry_is_dead_test() {
+  let ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(started) = registry.start()
+    process.send(ready, started.data)
+    process.sleep(3000)
+  })
+  let assert Ok(reg) = process.receive(ready, 1000)
+  let assert Ok(pid) = process.subject_owner(reg)
+
+  assert registry.health(reg) == Ok(0)
+
+  process.kill(pid)
+  await_registry_death(pid, 100)
+
+  assert registry.health(reg) == Error(Nil)
+}
+
+fn await_registry_death(pid: process.Pid, remaining: Int) -> Nil {
+  case process.is_alive(pid), remaining {
+    False, _ -> Nil
+    True, 0 -> panic as "registry が期限内に停止しなかった"
+    True, _ -> {
+      process.sleep(10)
+      await_registry_death(pid, remaining - 1)
+    }
+  }
+}

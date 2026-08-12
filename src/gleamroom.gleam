@@ -63,9 +63,30 @@ fn handle_request(
       |> response.set_header("content-type", "text/html; charset=utf-8")
       |> response.set_body(mist.Bytes(bytes_tree.from_string(web.index_html())))
 
+    // **registry に実際に問い合わせてから答える（#93）。**
+    //
+    // 以前は無条件に 200 "ok" を返していた。それでは `main` のコメントが
+    // 問題として挙げている「HTTP は 200 を返すのに join だけが無反応」を
+    // まさに検出できない。registry が死んでいても詰まっていても緑になる。
+    //
+    // supervisor が registry を再起動している最中もここは失敗する。
+    // それは正しい: その瞬間 join は通らないので、503 を返して
+    // ロードバランサやヘルスチェックに「まだ受けられない」と伝えるべき。
     ["health"] ->
-      response.new(200)
-      |> response.set_body(mist.Bytes(bytes_tree.from_string("ok")))
+      case registry.health(registry_subject) {
+        Ok(rooms) ->
+          response.new(200)
+          |> response.set_body(
+            mist.Bytes(bytes_tree.from_string(
+              "ok rooms=" <> int.to_string(rooms),
+            )),
+          )
+        Error(Nil) ->
+          response.new(503)
+          |> response.set_body(
+            mist.Bytes(bytes_tree.from_string("registry unavailable")),
+          )
+      }
 
     ["ws"] -> websocket.upgrade(req, registry_subject)
 
