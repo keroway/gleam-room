@@ -26,7 +26,8 @@
       "Bash(gleam check)",
       "Bash(gleam check *)",
       "Bash(gleam deps download)",
-      "Bash(gleam clean)"
+      "Bash(gleam clean)",
+      "Bash(node --test 'test/client/*.test.mjs')"
     ]
   }
 }
