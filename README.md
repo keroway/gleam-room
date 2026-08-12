@@ -59,6 +59,11 @@ A room should conceptually map to one supervised BEAM process. Transport concern
 
 See [`docs/architecture.md`](docs/architecture.md), [`docs/mvp.md`](docs/mvp.md), and [`docs/adr/`](docs/adr/) for the current design decisions.
 
+ADRs 0004-0007 were **written after the fact** for decisions taken during early
+development (supervision, synchronous calls, room lifetime, monitor vs link).
+They record what was decided and why, including the mistakes that led to each
+decision; see #89 for how the gap was found.
+
 ## Development commands
 
 ```sh
