@@ -65,11 +65,17 @@ pub type Message {
 type State {
   State(
     rooms: Dict(String, Subject(room.Message)),
-    /// 監視中の room actor の pid → RoomId のキー（#39）。
-    /// Down メッセージは pid しか運ばないため、逆引きが要る。
-    monitored: Dict(process.Pid, String),
+    /// 監視中の room actor の pid → 登録時の room 情報（#39）。
+    /// Down メッセージは pid しか運ばないため、逆引きが要る。key だけでなく
+    /// subject も保持し、遅れて届いた古い Down が同じ key の新しい room を
+    /// 削除しないようにする（#160）。
+    monitored: Dict(process.Pid, MonitoredRoom),
     start_room: fn() -> actor.StartResult(Subject(room.Message)),
   )
+}
+
+type MonitoredRoom {
+  MonitoredRoom(key: String, subject: Subject(room.Message))
 }
 
 /// Starts one registry actor with no known rooms. Lookups are handled
@@ -159,10 +165,15 @@ fn handle_message(
               process.send(reply_to, Ok(subject))
               // 監視しておかないと、クラッシュした room の subject が
               // Dict に残り続ける（#39）。
-              // link は actor.start が張るので、ここでは pid → key の
-              // 逆引きだけ持つ。exit メッセージは pid しか運ばないため。
+              // link は actor.start が張るので、ここでは pid → 登録時の
+              // subject の逆引きを持つ。exit メッセージは pid しか運ばないため。
               let monitored = case process.subject_owner(subject) {
-                Ok(pid) -> dict.insert(state.monitored, pid, key)
+                Ok(pid) ->
+                  dict.insert(
+                    state.monitored,
+                    pid,
+                    MonitoredRoom(key:, subject:),
+                  )
                 // 持ち主が引けないのは想定外だが、追跡できないだけで
                 // room 自体は使えるので登録は続ける。
                 Error(Nil) -> state.monitored
@@ -193,14 +204,16 @@ fn handle_message(
       case dict.get(state.monitored, pid) {
         // 死んだ room を Dict から外す。残すと以後の lookup が死んだ
         // subject を返し続け、その RoomId は再起動まで使用不能になる。
-        Ok(key) -> {
+        Ok(MonitoredRoom(key, subject)) -> {
           logging.log(logging.Warning, "room crashed: id=" <> key)
+          let rooms = case dict.get(state.rooms, key) {
+            // Release 後の subject_owner 失敗により古い監視記録だけが残り、
+            // 同じ key に新しい room が登録済みでも、古い Down では消さない。
+            Ok(current) if current == subject -> dict.delete(state.rooms, key)
+            _ -> state.rooms
+          }
           actor.continue(
-            State(
-              ..state,
-              rooms: dict.delete(state.rooms, key),
-              monitored: dict.delete(state.monitored, pid),
-            ),
+            State(..state, rooms:, monitored: dict.delete(state.monitored, pid)),
           )
         }
         // 既に Release 済みなど、監視表に無い pid は無視する。
@@ -227,10 +240,13 @@ fn handle_message(
           case room.shutdown_if_empty(current) {
             True -> {
               logging.log(logging.Info, "room closed (empty): id=" <> key)
-              let monitored = case process.subject_owner(current) {
-                Ok(pid) -> dict.delete(state.monitored, pid)
-                Error(Nil) -> state.monitored
-              }
+              // subject_owner が既に失敗しても、登録時の subject を持つ監視記録
+              // を直接除去できる。これを残すと、後から届く古い RoomDown が同じ
+              // key に作り直された room を消しうる（#160）。
+              let monitored =
+                dict.filter(state.monitored, fn(_pid, monitored_room) {
+                  monitored_room.subject != current
+                })
               actor.continue(
                 State(..state, rooms: dict.delete(state.rooms, key), monitored:),
               )
