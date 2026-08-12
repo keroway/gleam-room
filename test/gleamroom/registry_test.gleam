@@ -4,6 +4,7 @@ import gleam/otp/actor
 import gleamroom/call
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/wait
 
 pub fn repeated_lookup_resolves_to_same_room_test() {
   let assert Ok(started) = registry.start()
@@ -108,7 +109,7 @@ pub fn release_stops_the_room_actor_process_test() {
   // Release は非同期。registry への同期呼び出しで処理済みを保証してから、
   // room 側の停止が伝播するのを待つ。
   let assert Ok(_) = registry.lookup(started.data, id)
-  process.sleep(50)
+  wait.until_dead(pid, "空の room が停止する")
 
   assert !process.is_alive(pid)
 }
@@ -135,6 +136,8 @@ pub fn release_does_not_stop_a_room_that_gained_a_participant_test() {
   process.send(started.data, registry.Release(id, subject))
   // Release は非同期。registry への同期呼び出しで処理済みを保証する。
   let assert Ok(after) = registry.lookup(started.data, id)
+  // 「起きないこと」の確認なので、ここだけは待つ以外にない。停止するなら
+  // この間に停止する（条件で待てる事象が無い）。
   process.sleep(50)
 
   // 停止していない。
@@ -201,8 +204,7 @@ pub fn a_crashed_room_is_removed_from_the_registry_test() {
   let assert Ok(pid) = process.subject_owner(before)
 
   process.kill(pid)
-  // Down メッセージが registry に届くのを待つ。
-  process.sleep(100)
+  wait.until_dead(pid, "room actor が終了する")
 
   // 次の lookup は**新しい** actor を返す（死んだ subject が残っていない）。
   let after = registry_subject_of(started.data, id)
@@ -271,26 +273,12 @@ pub fn a_room_emptied_by_a_dead_session_is_removed_from_the_registry_test() {
 
   // on_close を通らない突然の終了。
   process.kill(session_pid)
-  await_room_death(room_pid, 100)
+  wait.until_dead(room_pid, "空になった room が停止する")
 
   // 空になった room は停止し、登録も外れている。
   // 外れていれば次の lookup は**新しい actor** を作る。
   let assert Ok(after) = registry.lookup(reg, id)
   assert after != subject
-}
-
-/// room が停止するまで待つ。`process.kill` は終了シグナルを送るだけで、
-/// SessionDown の処理が終わるまでには数ステップある。固定 sleep だと
-/// 遅いマシンで早すぎ、速いマシンでは無駄に待つ。
-fn await_room_death(pid: process.Pid, remaining: Int) -> Nil {
-  case process.is_alive(pid), remaining {
-    False, _ -> Nil
-    True, 0 -> panic as "room が期限内に停止しなかった"
-    True, _ -> {
-      process.sleep(10)
-      await_room_death(pid, remaining - 1)
-    }
-  }
 }
 
 /// `health` が **registry の応答**を確かめること（#93）。
@@ -338,19 +326,8 @@ pub fn health_fails_when_the_registry_is_dead_test() {
   assert registry.health(reg) == Ok(0)
 
   process.kill(pid)
-  await_registry_death(pid, 100)
+  wait.until_dead(pid, "registry が終了する")
 
   // **ActorDown と分類される**こと。詰まっているのではなく落ちている。
   assert registry.health(reg) == Error(call.ActorDown)
-}
-
-fn await_registry_death(pid: process.Pid, remaining: Int) -> Nil {
-  case process.is_alive(pid), remaining {
-    False, _ -> Nil
-    True, 0 -> panic as "registry が期限内に停止しなかった"
-    True, _ -> {
-      process.sleep(10)
-      await_registry_death(pid, remaining - 1)
-    }
-  }
 }

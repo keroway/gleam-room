@@ -2,6 +2,7 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleamroom/room
+import gleamroom/wait
 
 pub fn join_adds_participant_and_emits_joined_test() {
   let state = room.new_state()
@@ -347,19 +348,21 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
       process.sleep(500)
     })
 
-  process.sleep(150)
-  assert room.get_snapshot(subject)
-    == Ok([
-      room.Participant(doomed, "Doomed"),
-      room.Participant(survivor, "Survivor"),
-    ])
+  let both = [
+    room.Participant(doomed, "Doomed"),
+    room.Participant(survivor, "Survivor"),
+  ]
+  wait.until(fn() { room.get_snapshot(subject) == Ok(both) }, "2 人とも join し終わる")
 
   process.kill(doomed_pid)
-  process.sleep(150)
 
   // 死んだ接続の参加者だけが消え、room 自体は生きている。
-  assert room.get_snapshot(subject)
-    == Ok([room.Participant(survivor, "Survivor")])
+  wait.until(
+    fn() {
+      room.get_snapshot(subject) == Ok([room.Participant(survivor, "Survivor")])
+    },
+    "死んだ接続の参加者が片付く",
+  )
 }
 
 /// 接続プロセスがクラッシュしても room actor が生き残ること（#69）。
@@ -397,7 +400,7 @@ pub fn a_crashing_session_does_not_take_down_the_room_test() {
 
   let assert Ok(Nil) = process.receive(ready, 1000)
   process.kill(doomed_pid)
-  process.sleep(150)
+  wait.until_dead(doomed_pid, "接続プロセスが終了する")
 
   // room actor は生きている（link だとここで死んでいた）。
   assert process.is_alive(room_pid)
@@ -442,7 +445,7 @@ pub fn a_crashing_room_does_not_take_down_the_sessions_test() {
   assert process.is_alive(session_pid)
 
   process.kill(room_pid)
-  process.sleep(150)
+  wait.until_dead(room_pid, "room actor が終了する")
 
   // room は死んだが、接続プロセスは生きている。
   assert !process.is_alive(room_pid)

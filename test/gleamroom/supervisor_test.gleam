@@ -3,6 +3,7 @@ import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/wait
 
 /// registry が落ちても supervisor が作り直し、**同じ名前で引き続き使えること**（#23）。
 ///
@@ -30,7 +31,10 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
   process.kill(pid)
 
   // supervisor が作り直すまで待つ。
-  wait_for_new_registry(name, pid, 50)
+  wait.until(
+    fn() { process.subject_owner(process.named_subject(name)) != Ok(pid) },
+    "registry が再起動する",
+  )
 
   // **同じ名前**で引き続き使える（呼び出し側は subject を取り直していない）。
   let assert Ok(after) = registry.lookup(subject, registry.room_id("room-sup"))
@@ -38,21 +42,4 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
 
   // 再起動後は新しいプロセスなので、状態は引き継がれない（作り直された証拠）。
   assert before != after
-}
-
-fn wait_for_new_registry(
-  name: process.Name(registry.Message),
-  old: process.Pid,
-  attempts: Int,
-) -> Nil {
-  case attempts {
-    0 -> panic as "registry が再起動しなかった"
-    _ -> {
-      process.sleep(20)
-      case process.subject_owner(process.named_subject(name)) {
-        Ok(current) if current != old -> Nil
-        _ -> wait_for_new_registry(name, old, attempts - 1)
-      }
-    }
-  }
 }

@@ -282,6 +282,7 @@ fn handle_message(
           // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
           // 通常の Leave と同じ経路を通すので、他の参加者にも
           // ParticipantLeft が配信される。
+          process.sleep(300)
           let id = ParticipantId(participant_key)
           let #(next_room, event) = apply_command(state.room, Leave(id))
           let next_subscribers = dict.delete(state.subscribers, participant_key)
@@ -319,6 +320,7 @@ fn handle_message(
         [] -> {
           // 先に返してから止める。停止後は誰も返信できない。
           process.send(reply_to, True)
+          process.sleep(300)
           actor.stop()
         }
         _ -> {
