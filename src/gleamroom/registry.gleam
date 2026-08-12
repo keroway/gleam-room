@@ -45,6 +45,12 @@ pub type Message {
   /// Dict から外せる。放置すると死んだ subject が残り続け、以後その RoomId の
   /// lookup は毎回タイムアウトして再起動まで使用不能になる。
   RoomDown(pid: process.Pid)
+  /// registry が生きていて応答することを確かめる（#93）。
+  ///
+  /// 登録中の room 数を返すが、**値より「返事が来ること」が本体**。
+  /// `Lookup` を健全性確認に流用すると room を作ってしまうので、
+  /// 副作用の無い読み取り専用の口を分けている。
+  Health(reply_to: Subject(Int))
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -186,6 +192,11 @@ fn handle_message(
         // 既に Release 済みなど、監視表に無い pid は無視する。
         Error(Nil) -> actor.continue(state)
       }
+    Health(reply_to) -> {
+      // 副作用なし。返事が来ること自体が「registry が詰まっていない」証拠。
+      process.send(reply_to, dict.size(state.rooms))
+      actor.continue(state)
+    }
     Release(id, subject) -> {
       let key = room_id_to_string(id)
       case dict.get(state.rooms, key) {
@@ -216,6 +227,15 @@ fn handle_message(
       }
     }
   }
+}
+
+/// registry が応答することを確かめ、登録中の room 数を返す（#93）。
+///
+/// 応答しない場合は `Error(Nil)`。`/health` はこれを見て 503 を返す。
+/// **プロセスが死んでいる場合と詰まっている場合の両方**を拾う
+/// （`call.try_call` が理由を分類して警告に残す。#70）。
+pub fn health(subject: Subject(Message)) -> Result(Int, Nil) {
+  call.try_call(subject, call.default_timeout, Health, "registry.health")
 }
 
 /// Resolves `id` to its active room actor, lazily starting one if this is
