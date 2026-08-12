@@ -133,6 +133,10 @@ fn handle_text(
 ) -> Next(ConnectionState, room.RoomEvent) {
   case protocol.decode_client_message(text) {
     Error(error) -> {
+      logging.log(
+        logging.Info,
+        "protocol message rejected: code=" <> error.code,
+      )
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(error.code, error.message),
