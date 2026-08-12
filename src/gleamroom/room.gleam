@@ -286,11 +286,32 @@ fn handle_message(
           let #(next_room, event) = apply_command(state.room, Leave(id))
           let next_subscribers = dict.delete(state.subscribers, participant_key)
           broadcast_all(next_subscribers, event)
-          actor.continue(ActorState(
-            room: next_room,
-            subscribers: next_subscribers,
-            sessions: dict.delete(state.sessions, pid),
-          ))
+          case next_room.participants {
+            // **無人になったら自分で止まる（#91）。**
+            //
+            // 参加者が抜ける経路は 2 つある。通常の切断は websocket の
+            // `on_close` が `registry.Release` を送って掃除するが、
+            // **突然の切断で `on_close` が走らなかった場合はここしか通らない**
+            // （#35 がこの経路を導入した理由そのもの）。room actor は自分を
+            // 登録している registry を知らないので Release は送れず、
+            // 放置すると空の room actor と registry の Dict エントリが
+            // 再起動まで残る。
+            //
+            // 止まれば registry の `RoomDown`（#39 の trap_exits 経路）が
+            // 拾って登録を外す。**正常停止でも RoomDown が発火することは
+            // 実際に確かめた**（クラッシュ時だけの経路ではない）。
+            //
+            // 判定と停止を **1 メッセージに閉じている**ので、`ShutdownIfEmpty`
+            // （#36）と同じ理由でレースが無い。room のメールボックスは直列なので、
+            // 空だと判定した瞬間に join が割り込むことはない。
+            [] -> actor.stop()
+            _ ->
+              actor.continue(ActorState(
+                room: next_room,
+                subscribers: next_subscribers,
+                sessions: dict.delete(state.sessions, pid),
+              ))
+          }
         }
       }
     ShutdownIfEmpty(reply_to) ->
