@@ -472,5 +472,5 @@ pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
 /// 起きない。base64 は URL/JSON でそのまま扱えるよう padding なし。
 pub fn new_participant_id() -> String {
   crypto.strong_random_bytes(16)
-  |> bit_array.base64_encode(False)
+  |> bit_array.base64_url_encode(False)
 }

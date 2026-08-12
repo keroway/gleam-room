@@ -30,3 +30,17 @@ pub fn participant_ids_are_unique_across_calls_test() {
 
   assert list.length(list.unique(ids)) == 100
 }
+
+/// URL/クエリ文字列にそのまま埋め込んでも壊れないこと（#77）。
+///
+/// 標準アルファベットの base64 は `+`（クエリ文字列で空白に解釈される）と
+/// `/`（パスセグメントの区切りになる）を含みうる。100 回生成して一度も
+/// 出現しなければ、URL安全アルファベットを使えている強い根拠になる。
+pub fn participant_ids_are_url_safe_test() {
+  let ids =
+    list.repeat(Nil, 100) |> list.map(fn(_) { websocket.new_participant_id() })
+
+  assert list.all(ids, fn(id) {
+    !string.contains(id, "+") && !string.contains(id, "/")
+  })
+}
