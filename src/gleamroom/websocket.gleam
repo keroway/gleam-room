@@ -322,8 +322,12 @@ fn with_room(
 /// 前者が room に残り続ける。
 ///
 /// そのため join のタイムアウトでは再試行を促さず、**接続を閉じる**。
-/// クライアントは新しい接続からやり直す。遅れて成立した参加者が残る問題は
-/// 別途対応する（要求 ID と結果照会が要る）。
+/// クライアントは新しい接続からやり直す。
+///
+/// 遅れて成立した参加者が room に残り続ける問題自体は #56 で解消済み。room
+/// 側が `process.monitor` で接続プロセスを監視しており（#69）、この
+/// `mist.stop()` で接続プロセスが終了すれば `SessionDown` 経由で自動的に
+/// 後始末される（room.gleam の `update_sessions` を参照）。
 fn with_join_reply(
   connection: WebsocketConnection,
   reply: Result(room.RoomEvent, Nil),
