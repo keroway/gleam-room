@@ -235,3 +235,59 @@ pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
   let assert Ok(started) = registry.start()
   let assert Ok(_) = registry.lookup(started.data, registry.room_id("ok"))
 }
+
+/// 接続プロセスが `on_close` を経ずに死んだとき、**空になった room が
+/// registry から外れる**こと（#91）。
+///
+/// 参加者が抜ける経路は 2 つある。通常の切断は websocket の `on_close` が
+/// `registry.Release` を送って掃除するが、**突然の切断ではそこを通らない**
+/// （#35 がこの経路を導入した理由）。room actor は自分を登録している registry を
+/// 知らないので Release を送れず、放置すると空の room actor と Dict エントリが
+/// 再起動まで残る（プロセス・メモリリーク）。
+///
+/// 修正後は room が自分で止まり、registry の `RoomDown`（#39）が拾って外す。
+pub fn a_room_emptied_by_a_dead_session_is_removed_from_the_registry_test() {
+  let assert Ok(started) = registry.start()
+  let reg = started.data
+  let id = registry.room_id("room-session-down")
+
+  let assert Ok(subject) = registry.lookup(reg, id)
+  let assert Ok(room_pid) = process.subject_owner(subject)
+
+  // **別プロセスから join する。** room が監視するのは「join を送った
+  // プロセス」なので、テストプロセスから join すると殺す相手がテスト自身になる。
+  let ready = process.new_subject()
+  let session_pid =
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let joiner = room.participant_id("doomed")
+      let assert Ok(_) =
+        room.dispatch(subject, room.Join(joiner, "doomed"), session)
+      process.send(ready, Nil)
+      process.sleep(5000)
+    })
+  let assert Ok(Nil) = process.receive(ready, 1000)
+
+  // on_close を通らない突然の終了。
+  process.kill(session_pid)
+  await_room_death(room_pid, 100)
+
+  // 空になった room は停止し、登録も外れている。
+  // 外れていれば次の lookup は**新しい actor** を作る。
+  let assert Ok(after) = registry.lookup(reg, id)
+  assert after != subject
+}
+
+/// room が停止するまで待つ。`process.kill` は終了シグナルを送るだけで、
+/// SessionDown の処理が終わるまでには数ステップある。固定 sleep だと
+/// 遅いマシンで早すぎ、速いマシンでは無駄に待つ。
+fn await_room_death(pid: process.Pid, remaining: Int) -> Nil {
+  case process.is_alive(pid), remaining {
+    False, _ -> Nil
+    True, 0 -> panic as "room が期限内に停止しなかった"
+    True, _ -> {
+      process.sleep(10)
+      await_room_death(pid, remaining - 1)
+    }
+  }
+}
