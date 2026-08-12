@@ -128,6 +128,12 @@ the full MVP acceptance scenario from
 the Registry + Room actor boundary (without opening real sockets); run it
 with `gleam test`.
 
+`test/gleamroom/routing_test.gleam` goes one layer further out: it starts the
+real supervision tree with `gleamroom.start/1` and sends real HTTP requests to
+`/`, `/health`, `/ws`, and an unknown path. mist's `Connection` is opaque, so a
+fabricated request cannot exercise the router — only a real server can. This is
+what `gleam_httpc` is a dev-dependency for.
+
 ## Roadmap
 
 1. Multiplayer buzzer prototype.

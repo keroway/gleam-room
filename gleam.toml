@@ -30,3 +30,5 @@ gleam_json = ">= 3.0.0 and < 4.0.0"
 
 [dev_dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
+# HTTP ルーティングを実際に叩いて確かめるため（#34）。テスト専用。
+gleam_httpc = ">= 5.0.0 and < 6.0.0"
