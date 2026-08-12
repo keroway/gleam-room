@@ -1,4 +1,6 @@
 import gleam/erlang/process
+import gleam/int
+import gleam/list
 import gleamroom/room
 
 pub fn join_adds_participant_and_emits_joined_test() {
@@ -445,4 +447,91 @@ pub fn a_crashing_room_does_not_take_down_the_sessions_test() {
   // room は死んだが、接続プロセスは生きている。
   assert !process.is_alive(room_pid)
   assert process.is_alive(session_pid)
+}
+
+/// **複数プロセスから同時に Buzz しても順序が一意に定まる**こと（#94）。
+///
+/// CLAUDE.md の MVP スコープは "Server-side ordering of buzzer events" を
+/// 挙げているが、既存の `buzz_order_matches_acceptance_order_test` は純関数
+/// `apply_command` を 1 プロセスで順番に呼ぶだけで、**actor の mailbox による
+/// 直列化を一切通っていない**。`room.dispatch` の実装が変わって FIFO 保証が
+/// 壊れても、あのテストは緑のままになる。
+///
+/// 実際の受付順は非決定なので、**順序そのものではなく順序が満たすべき性質**を
+/// 検証する。どう interleave しても次が成り立つ:
+///
+///   - 位置は 1..N の重複なし・欠番なし（同じ位置を 2 人が取らない）
+///   - 各参加者が受け取った `BuzzAccepted` の位置が snapshot と一致する
+///   - snapshot は位置の昇順
+pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let count = 8
+
+  // 各参加者を**別プロセス**にする。同一プロセスから順番に送ると、
+  // それは既存テストと同じ「直列に呼んだだけ」になり並行性を再現しない。
+  let results = process.new_subject()
+  one_to(count)
+  |> list.each(fn(n) {
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let id = room.participant_id("p" <> int.to_string(n))
+      let assert Ok(_) =
+        room.dispatch(subject, room.Join(id, "P" <> int.to_string(n)), session)
+      let assert Ok(event) = room.dispatch(subject, room.Buzz(id), session)
+      process.send(results, event)
+      process.sleep(3000)
+    })
+  })
+
+  let accepted = collect_buzz_events(results, count, [])
+  let positions =
+    accepted
+    |> list.map(fn(event) {
+      let assert room.BuzzAccepted(_, position) = event
+      position
+    })
+    |> list.sort(int.compare)
+
+  // 1..N が重複なく揃う。同じ位置を 2 人が取っていれば長さが足りなくなる。
+  assert positions == one_to(count)
+
+  // room 側の記録と、各参加者が受け取った通知が食い違わない。
+  let assert Ok(snapshot) = room.get_buzz_snapshot(subject)
+  assert list.length(snapshot) == count
+  assert list.map(snapshot, fn(result) { result.position }) == one_to(count)
+
+  let reported =
+    accepted
+    |> list.map(fn(event) {
+      let assert room.BuzzAccepted(id, position) = event
+      room.BuzzResult(id, position)
+    })
+    |> list.sort(fn(a, b) { int.compare(a.position, b.position) })
+  assert reported == snapshot
+}
+
+/// 期待件数だけ結果を集める。件数が揃わなければ待ち続けず落とす
+/// （黙って少ない件数で assert すると、取りこぼしを「成功」と読み違える）。
+fn collect_buzz_events(
+  results: process.Subject(room.RoomEvent),
+  remaining: Int,
+  acc: List(room.RoomEvent),
+) -> List(room.RoomEvent) {
+  case remaining {
+    0 -> acc
+    _ ->
+      case process.receive(results, 2000) {
+        Ok(event) -> collect_buzz_events(results, remaining - 1, [event, ..acc])
+        Error(Nil) -> panic as "Buzz の結果が期限内に揃わなかった"
+      }
+  }
+}
+
+/// `1..n` の昇順リスト。gleam_stdlib のこの版に `list.range` が無いため自前で持つ。
+fn one_to(n: Int) -> List(Int) {
+  case n {
+    n if n <= 0 -> []
+    _ -> list.append(one_to(n - 1), [n])
+  }
 }
