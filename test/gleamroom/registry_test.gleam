@@ -114,6 +114,27 @@ pub fn release_stops_the_room_actor_process_test() {
   assert !process.is_alive(pid)
 }
 
+/// Release で作り直された room を、古い actor の遅延した終了通知が消さないこと（#160）。
+///
+/// Release は空の room を止めるため、その exit は非同期に `RoomDown` として届く。
+/// 同じ RoomId がその前に lookup されて新しい actor を持っていても、古い pid の
+/// 通知は新しい subject を登録から外してはならない。
+pub fn a_delayed_room_down_does_not_remove_a_recreated_room_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-delayed-down")
+
+  let assert Ok(old) = registry.lookup(started.data, id)
+  let assert Ok(old_pid) = process.subject_owner(old)
+
+  process.send(started.data, registry.Release(id, old))
+  let assert Ok(current) = registry.lookup(started.data, id)
+
+  // trap_exits から届くものと同じ、旧 actor の遅延した終了通知を再現する。
+  process.send(started.data, registry.RoomDown(old_pid))
+
+  assert registry_subject_of(started.data, id) == current
+}
+
 /// 参加者が残っている room は Release を受けても停止しないこと（#36）。
 ///
 /// #26 の実装では websocket 層が「空か確認 → Release 送信」と 2 段階で
