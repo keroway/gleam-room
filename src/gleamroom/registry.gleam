@@ -91,11 +91,12 @@ pub fn start_with_room_starter(
   |> actor.start
 }
 
-/// monitor の Down メッセージを受け取れる形で actor を組み立てる（#39）。
+/// room の死を Down メッセージとして受け取れる形で actor を組み立てる（#39）。
 ///
-/// `select_monitors` を使うのは、監視対象が動的に増減するため。
-/// 個別の monitor を都度 selector へ足す形だと、room が増えるたびに
-/// selector を組み直す必要がある。
+/// `trap_exits(True)` + `select_trapped_exits` を使うのは、room の起動時に
+/// 既存の link（`actor.start`）をそのまま使って死を検知できるため。room が
+/// 増減するたびに個別の monitor を selector へ足し引きする必要がない
+/// （ADR 0007）。
 fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     let selector =
