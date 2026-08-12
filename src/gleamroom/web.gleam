@@ -156,6 +156,8 @@ pub fn index_html() -> String {
   function handleServerMessage(message) {
     switch (message.type) {
       case \"state\":
+        // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
+        reconnectAttempts = 0;
         participants = new Map(message.participants.map((p) => [p.id, p]));
         buzzes = message.buzzes;
         renderParticipants();
@@ -198,7 +200,11 @@ pub fn index_html() -> String {
 
     socket.addEventListener(\"open\", () => {
       setConnected(true);
-      reconnectAttempts = 0;
+      // **ここでは試行回数を戻さない（#87）。** WebSocket が開いただけでは
+      // 参加できたことにならない。join が通らずサーバ側から即切断される状況では
+      // open → close が繰り返され、open ごとに 0 に戻すと上限に永久に到達せず、
+      // 「5 回で諦める」という約束が効かなくなる。
+      // 戻すのは join が成立したとき（サーバから state が届いたとき）。
       log(`connected, joining room ${roomId} as ${displayName}`);
       socket.send(JSON.stringify({
         type: \"join\",
