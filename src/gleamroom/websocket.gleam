@@ -157,7 +157,14 @@ fn handle_join(
   display_name: String,
 ) -> Next(ConnectionState, room.RoomEvent) {
   case state.room {
-    Some(_) -> {
+    Some(handle) -> {
+      logging.log(
+        logging.Info,
+        "already joined: room="
+          <> registry.room_id_to_string(handle.room_id)
+          <> ", participant="
+          <> room.participant_id_to_string(handle.participant_id),
+      )
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
@@ -256,7 +263,7 @@ fn handle_buzz(
 ) -> Next(ConnectionState, room.RoomEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection)
+      send_not_joined_error(connection, "buzz")
       mist.continue(state)
     }
     Some(handle) -> {
@@ -322,7 +329,7 @@ fn handle_reset(
 ) -> Next(ConnectionState, room.RoomEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection)
+      send_not_joined_error(connection, "reset")
       mist.continue(state)
     }
     Some(handle) -> {
@@ -452,7 +459,14 @@ fn send_room_unavailable(connection: WebsocketConnection) -> Nil {
   )
 }
 
-fn send_not_joined_error(connection: WebsocketConnection) -> Nil {
+fn send_not_joined_error(
+  connection: WebsocketConnection,
+  command: String,
+) -> Nil {
+  logging.log(
+    logging.Info,
+    "not joined: command=" <> command <> ", " <> connection_tag(),
+  )
   send_server_message(
     connection,
     protocol.ProtocolErrorMessage(
