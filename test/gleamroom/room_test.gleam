@@ -381,15 +381,19 @@ pub fn a_crashing_session_does_not_take_down_the_room_test() {
 
   // 別プロセスから join し、**異常終了**させる。
   let doomed = room.participant_id("doomed")
+  // 固定 sleep で join 完了を待たない（#69 の指摘）。child が Join 前に死ぬと
+  // 「room が生きている」だけが確認され、道連れの検証になっていない。
+  let ready = process.new_subject()
   let doomed_pid =
     process.spawn_unlinked(fn() {
       let doomed_session = process.new_subject()
-      let _ =
+      let assert Ok(_) =
         room.dispatch(subject, room.Join(doomed, "Doomed"), doomed_session)
+      process.send(ready, Nil)
       process.sleep(500)
     })
 
-  process.sleep(150)
+  let assert Ok(Nil) = process.receive(ready, 1000)
   process.kill(doomed_pid)
   process.sleep(150)
 
@@ -398,4 +402,47 @@ pub fn a_crashing_session_does_not_take_down_the_room_test() {
   // 残った参加者も引き続き使える。
   assert room.get_snapshot(subject)
     == Ok([room.Participant(survivor, "Survivor")])
+}
+
+/// room actor が落ちても接続プロセスは生き残ること（#69）。
+///
+/// monitor は片方向なので、逆方向（room → session）へは何も伝播しない。
+/// link だった頃はこちらも道連れになり、room の異常終了で全参加者の
+/// 接続プロセスが落ちていた。
+pub fn a_crashing_room_does_not_take_down_the_sessions_test() {
+  // room は別プロセスから起動する。`actor.start` は呼び出し元と link するため、
+  // テストプロセスから起動して kill するとテスト自体が巻き添えで死ぬ
+  // （実際に Exit(Killed) で 3 件落ちた）。
+  let room_ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(started) = room.start()
+    process.send(room_ready, started.data)
+    process.sleep(3000)
+  })
+  let assert Ok(subject) = process.receive(room_ready, 1000)
+  let assert Ok(room_pid) = process.subject_owner(subject)
+
+  let ready = process.new_subject()
+  let participant = room.participant_id("holder")
+  let session_pid =
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let assert Ok(_) =
+        room.dispatch(subject, room.Join(participant, "Holder"), session)
+      process.send(ready, Nil)
+      // room が落ちたあとも生きていることを確認したいので、検証が終わるまで
+      // 待つ。**親が作った subject では receive できない**（所有プロセス以外の
+      // receive はパニックする）ので sleep で待つ。
+      process.sleep(3000)
+    })
+
+  let assert Ok(Nil) = process.receive(ready, 1000)
+  assert process.is_alive(session_pid)
+
+  process.kill(room_pid)
+  process.sleep(150)
+
+  // room は死んだが、接続プロセスは生きている。
+  assert !process.is_alive(room_pid)
+  assert process.is_alive(session_pid)
 }
