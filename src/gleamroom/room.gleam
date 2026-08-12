@@ -200,9 +200,13 @@ type ActorState {
   ActorState(
     room: RoomState,
     subscribers: Dict(String, Subject(RoomEvent)),
-    /// 監視中の接続プロセス pid → ParticipantId の文字列表現（#56）。
-    /// exit メッセージは pid しか運ばないため逆引きが要る。
-    sessions: Dict(process.Pid, String),
+    /// 監視中の接続プロセス pid → (ParticipantId の文字列表現, Monitor)（#56 / #69）。
+    ///
+    /// Down メッセージは pid しか運ばないため逆引きが要る。Monitor を併せて
+    /// 持つのは、離脱時に `demonitor_process` で解除するため。解除しないと
+    /// Leave 後も監視が残り、その接続プロセスが後から終了したときに
+    /// 無関係な Down 通知が届く。
+    sessions: Dict(process.Pid, #(String, process.Monitor)),
   )
 }
 
@@ -213,11 +217,22 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     // 接続プロセスの死を signal ではなくメッセージとして受ける（#56）。
     // trap しないと、監視対象の異常終了が room を道連れにする。
-    process.trap_exits(True)
+    // **monitor を使う。link ではない**（#69）。
+    // link は双方向で、「クラッシュしたプロセスにリンクされたプロセスも
+    // クラッシュする」。接続プロセスが 1 つ落ちただけで room actor ごと死に、
+    // 同室の全参加者が道連れになる。monitor は片方向で、対象の終了を
+    // メッセージとして受け取るだけ。
     let selector =
       process.new_selector()
       |> process.select(subject)
-      |> process.select_trapped_exits(fn(exit) { SessionDown(exit.pid) })
+      |> process.select_monitors(fn(down) {
+        case down {
+          process.ProcessDown(pid:, ..) -> SessionDown(pid)
+          // Port は監視していない。自分の pid を返せば sessions に一致する
+          // エントリが無いので実質 no-op になる。
+          process.PortDown(..) -> SessionDown(process.self())
+        }
+      })
     actor.initialised(ActorState(
       room: new_state(),
       subscribers: dict.new(),
@@ -263,7 +278,7 @@ fn handle_message(
     SessionDown(pid) ->
       case dict.get(state.sessions, pid) {
         Error(Nil) -> actor.continue(state)
-        Ok(participant_key) -> {
+        Ok(#(participant_key, _monitor)) -> {
           // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
           // 通常の Leave と同じ経路を通すので、他の参加者にも
           // ParticipantLeft が配信される。
@@ -295,19 +310,27 @@ fn handle_message(
 
 /// 参加時に接続プロセスを監視対象へ入れ、離脱時に外す（#56）。
 ///
-/// `process.link` を張るのは room 側。接続プロセスは room の生死を気にしないが、
+/// 監視するのは room 側だけ。接続プロセスは room の生死を気にしないが、
 /// room は接続の生死を知る必要がある（片方向の関心）。
+///
+/// **`process.monitor` を使う。`process.link` ではない**（#69）。link は双方向で、
+/// 接続プロセスが 1 つクラッシュすると room actor ごと道連れになり、同室の
+/// 全参加者が落ちる。monitor は対象の終了をメッセージで受け取るだけで、
+/// 監視元は影響を受けない。
 fn update_sessions(
-  sessions: Dict(process.Pid, String),
+  sessions: Dict(process.Pid, #(String, process.Monitor)),
   event: RoomEvent,
   session: Subject(RoomEvent),
-) -> Dict(process.Pid, String) {
+) -> Dict(process.Pid, #(String, process.Monitor)) {
   case event {
     ParticipantJoined(participant) ->
       case process.subject_owner(session) {
         Ok(pid) -> {
-          process.link(pid)
-          dict.insert(sessions, pid, participant_id_to_string(participant.id))
+          let monitor = process.monitor(pid)
+          dict.insert(sessions, pid, #(
+            participant_id_to_string(participant.id),
+            monitor,
+          ))
         }
         // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
         Error(Nil) -> sessions
@@ -315,7 +338,16 @@ fn update_sessions(
     ParticipantLeft(id) -> {
       let key = participant_id_to_string(id)
       // 値（ParticipantId）で引いて外す。pid は Down 側でしか分からない。
-      dict.filter(sessions, fn(_pid, participant_key) { participant_key != key })
+      // **監視も解除する**（#69）。残すと、Leave 後も生きている接続プロセスが
+      // 後から終了したときに無関係な Down 通知が届く。
+      dict.each(sessions, fn(_pid, entry) {
+        case entry {
+          #(participant_key, monitor) if participant_key == key ->
+            process.demonitor_process(monitor)
+          _ -> Nil
+        }
+      })
+      dict.filter(sessions, fn(_pid, entry) { entry.0 != key })
     }
     JoinRejected(_, _)
     | LeaveRejected(_, _)
