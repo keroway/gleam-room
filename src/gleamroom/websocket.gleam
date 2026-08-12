@@ -3,12 +3,15 @@ import gleam/crypto
 import gleam/erlang/process.{type Selector, type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
+import gleam/string
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
+import logging
 import mist.{
   type Connection, type Next, type ResponseData, type WebsocketConnection,
   type WebsocketMessage,
@@ -51,13 +54,29 @@ pub fn upgrade(
 fn on_init(
   registry_subject: Subject(registry.Message),
 ) -> #(ConnectionState, Option(Selector(room.RoomEvent))) {
+  logging.log(logging.Info, "websocket connection opened: " <> connection_tag())
   #(ConnectionState(registry: registry_subject, room: None), None)
 }
 
 fn on_close(state: ConnectionState) -> Nil {
   case state.room {
-    None -> Nil
+    None -> {
+      logging.log(
+        logging.Info,
+        "websocket connection closed (not joined): " <> connection_tag(),
+      )
+      Nil
+    }
     Some(handle) -> {
+      logging.log(
+        logging.Info,
+        "websocket connection closed: "
+          <> connection_tag()
+          <> ", room="
+          <> registry.room_id_to_string(handle.room_id)
+          <> ", participant="
+          <> room.participant_id_to_string(handle.participant_id),
+      )
       // 応答が無くても切断処理は続ける。room が死んでいれば #39 の経路で
       // registry から外れる。
       let _ =
@@ -165,7 +184,14 @@ fn handle_join(
         ),
       )
       case event {
-        room.ParticipantJoined(_participant) -> {
+        room.ParticipantJoined(participant) -> {
+          logging.log(
+            logging.Info,
+            "join accepted: room="
+              <> registry.room_id_to_string(room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(participant.id),
+          )
           // snapshot が取れないときは空として扱う。join 自体は成立して
           // いるので、接続を落とすより「まだ誰も見えない」状態で続けるほうがよい。
           let snapshot = result.unwrap(room.get_snapshot(room_subject), [])
@@ -191,7 +217,14 @@ fn handle_join(
           let selector = process.new_selector() |> process.select(session)
           mist.continue(next_state) |> mist.with_selector(selector)
         }
-        room.JoinRejected(_, _) -> {
+        room.JoinRejected(_, reason) -> {
+          logging.log(
+            logging.Info,
+            "join rejected: room="
+              <> registry.room_id_to_string(room_id)
+              <> ", reason="
+              <> string.inspect(reason),
+          )
           send_server_message(
             connection,
             protocol.ProtocolErrorMessage(
@@ -233,12 +266,31 @@ fn handle_buzz(
         ),
       )
       case event {
-        room.BuzzAccepted(id, position) ->
+        room.BuzzAccepted(id, position) -> {
+          logging.log(
+            logging.Info,
+            "buzz accepted: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(id)
+              <> ", position="
+              <> int.to_string(position),
+          )
           send_server_message(
             connection,
             protocol.BuzzAccepted(to_wire_participant_id(id), position),
           )
-        room.BuzzRejected(_, _) ->
+        }
+        room.BuzzRejected(id, reason) -> {
+          logging.log(
+            logging.Info,
+            "buzz rejected: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(id)
+              <> ", reason="
+              <> string.inspect(reason),
+          )
           send_server_message(
             connection,
             protocol.ProtocolErrorMessage(
@@ -246,6 +298,7 @@ fn handle_buzz(
               "Buzz was not accepted for the current round.",
             ),
           )
+        }
         // `Buzz` never yields any other event; kept for exhaustiveness since
         // `room.RoomEvent` is shared across every room command.
         room.ParticipantJoined(_)
@@ -275,7 +328,16 @@ fn handle_reset(
         room.dispatch(handle.subject, room.ResetRound, handle.session),
       )
       case event {
-        room.RoundReset -> send_server_message(connection, protocol.RoundReset)
+        room.RoundReset -> {
+          logging.log(
+            logging.Info,
+            "round reset: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", by="
+              <> room.participant_id_to_string(handle.participant_id),
+          )
+          send_server_message(connection, protocol.RoundReset)
+        }
         // `ResetRound` never yields any other event; kept for exhaustiveness
         // since `room.RoomEvent` is shared across every room command.
         room.ParticipantJoined(_)
@@ -301,6 +363,10 @@ fn with_room(
   case registry.lookup(state.registry, room_id) {
     Ok(room_subject) -> next(room_subject)
     Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "room unavailable: room=" <> registry.room_id_to_string(room_id),
+      )
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
@@ -452,6 +518,16 @@ pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
     participant_id: to_wire_participant_id(result.participant_id),
     position: result.position,
   )
+}
+
+/// ログの中で同一 WebSocket 接続の open/close を突き合わせるための識別子。
+///
+/// クライアントへは出さない内部ログ専用の値なので、接続プロセスの PID を
+/// そのまま使ってよい（#28 が禁じているのはワイヤープロトコルへ PID を
+/// 漏らすことで、ログはそれとは別の面）。display_name のような個人情報は
+/// ここにもライフサイクルログ全体にも含めない。
+fn connection_tag() -> String {
+  "pid=" <> string.inspect(process.self())
 }
 
 /// 参加者 ID を生成する。

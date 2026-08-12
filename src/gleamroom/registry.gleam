@@ -2,8 +2,10 @@ import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
 import gleam/result
+import gleam/string
 import gleamroom/call
 import gleamroom/room
+import logging
 
 /// Opaque so callers cannot construct a `RoomId` except through `room_id`,
 /// keeping lookups keyed on a single explicit constructor.
@@ -15,7 +17,8 @@ pub fn room_id(value: String) -> RoomId {
   RoomId(value)
 }
 
-fn room_id_to_string(id: RoomId) -> String {
+/// websocket.gleam のライフサイクルログ（#25）が RoomId の中身を文字列化するのに使う。
+pub fn room_id_to_string(id: RoomId) -> String {
   let RoomId(value) = id
   value
 }
@@ -150,6 +153,7 @@ fn handle_message(
           // 失敗は呼び出し側へ返し、registry は動き続ける。
           case state.start_room() {
             Ok(started) -> {
+              logging.log(logging.Info, "room created: id=" <> key)
               let subject = started.data
               process.send(reply_to, Ok(subject))
               // 監視しておかないと、クラッシュした room の subject が
@@ -170,7 +174,14 @@ fn handle_message(
                 ),
               )
             }
-            Error(_) -> {
+            Error(reason) -> {
+              logging.log(
+                logging.Warning,
+                "room failed to start: id="
+                  <> key
+                  <> ", reason="
+                  <> string.inspect(reason),
+              )
               process.send(reply_to, Error(Nil))
               actor.continue(state)
             }
@@ -181,7 +192,8 @@ fn handle_message(
       case dict.get(state.monitored, pid) {
         // 死んだ room を Dict から外す。残すと以後の lookup が死んだ
         // subject を返し続け、その RoomId は再起動まで使用不能になる。
-        Ok(key) ->
+        Ok(key) -> {
+          logging.log(logging.Warning, "room crashed: id=" <> key)
           actor.continue(
             State(
               ..state,
@@ -189,6 +201,7 @@ fn handle_message(
               monitored: dict.delete(state.monitored, pid),
             ),
           )
+        }
         // 既に Release 済みなど、監視表に無い pid は無視する。
         Error(Nil) -> actor.continue(state)
       }
@@ -212,6 +225,7 @@ fn handle_message(
           // 外すと、以降の lookup が別の actor を作って参加者が分断される。
           case room.shutdown_if_empty(current) {
             True -> {
+              logging.log(logging.Info, "room closed (empty): id=" <> key)
               let monitored = case process.subject_owner(current) {
                 Ok(pid) -> dict.delete(state.monitored, pid)
                 Error(Nil) -> state.monitored
