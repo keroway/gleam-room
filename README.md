@@ -66,12 +66,21 @@ gleam build   # compile
 gleam test    # run unit tests
 gleam format  # format source
 gleam run     # start the HTTP server (default port 4000, override with PORT)
+
+node --test 'test/client/*.test.mjs'  # browser client reconnect tests
 ```
 
-Once running, `GET http://localhost:4000/health` returns `200 ok`.
+Once running, `GET http://localhost:4000/health` asks the room registry
+whether it is responsive: `200 ok rooms=<n>` when it answers, `503
+registry unavailable` when it is dead or wedged.
 
-`.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`, and
-`gleam test` on every pull request and push to `main`.
+`.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
+`gleam test`, and the client tests on every pull request and push to `main`.
+
+The client tests use Node's built-in test runner and a small DOM/WebSocket
+stub. **No new dependency is introduced** — there is no `package.json` and no
+`node_modules`. The browser JS lives inside `web.gleam` as a string, so the
+tests extract it from there rather than keeping a second copy.
 
 ### Browser client
 
