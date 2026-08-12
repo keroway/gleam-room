@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/list
 import gleam/otp/actor
+import gleamroom/call
 import gleamroom/registry
 import gleamroom/room
 
@@ -318,7 +319,9 @@ pub fn health_reports_the_number_of_registered_rooms_test() {
 pub fn health_fails_when_the_registry_does_not_answer_test() {
   let unresponsive: process.Subject(registry.Message) = process.new_subject()
 
-  assert registry.health(unresponsive) == Error(Nil)
+  // **Timeout と分類される**こと。/health はこれを「詰まっている」として
+  // 運用者に伝える（#92）。死んでいる場合と対処が違う。
+  assert registry.health(unresponsive) == Error(call.Timeout)
 }
 
 /// 死んだ registry でも失敗する（クラッシュではなく Error になる）。
@@ -337,7 +340,8 @@ pub fn health_fails_when_the_registry_is_dead_test() {
   process.kill(pid)
   await_registry_death(pid, 100)
 
-  assert registry.health(reg) == Error(Nil)
+  // **ActorDown と分類される**こと。詰まっているのではなく落ちている。
+  assert registry.health(reg) == Error(call.ActorDown)
 }
 
 fn await_registry_death(pid: process.Pid, remaining: Int) -> Nil {

@@ -231,11 +231,18 @@ fn handle_message(
 
 /// registry が応答することを確かめ、登録中の room 数を返す（#93）。
 ///
-/// 応答しない場合は `Error(Nil)`。`/health` はこれを見て 503 を返す。
-/// **プロセスが死んでいる場合と詰まっている場合の両方**を拾う
-/// （`call.try_call` が理由を分類して警告に残す。#70）。
-pub fn health(subject: Subject(Message)) -> Result(Int, Nil) {
-  call.try_call(subject, call.default_timeout, Health, "registry.health")
+/// 応答しない場合は失敗理由を返す。`/health` はこれを見て 503 の本文を
+/// 「落ちている」「詰まっている」で書き分ける（#92）。
+///
+/// 運用上の対処が違うため区別する。死んでいるなら supervisor の再起動を
+/// 待つか調べる、詰まっているなら負荷やタイムアウト値を見る。
+pub fn health(subject: Subject(Message)) -> Result(Int, call.Failure) {
+  call.try_call_classified(
+    subject,
+    call.default_timeout,
+    Health,
+    "registry.health",
+  )
 }
 
 /// Resolves `id` to its active room actor, lazily starting one if this is

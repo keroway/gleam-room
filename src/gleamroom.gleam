@@ -6,6 +6,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
+import gleamroom/call
 import gleamroom/registry
 import gleamroom/web
 import gleamroom/websocket
@@ -81,10 +82,19 @@ fn handle_request(
               "ok rooms=" <> int.to_string(rooms),
             )),
           )
-        Error(Nil) ->
+        // **理由を分けて伝える（#92）。** どちらも 503 だが、運用者が次に
+        // 見る場所が違う。落ちているなら supervisor の再起動状況、
+        // 詰まっているなら負荷やタイムアウト値。
+        Error(reason) ->
           response.new(503)
           |> response.set_body(
-            mist.Bytes(bytes_tree.from_string("registry unavailable")),
+            mist.Bytes(
+              bytes_tree.from_string(case reason {
+                call.ActorDown -> "registry down"
+                call.Timeout -> "registry not responding"
+                call.Unknown(detail) -> "registry unavailable: " <> detail
+              }),
+            ),
           )
       }
 
