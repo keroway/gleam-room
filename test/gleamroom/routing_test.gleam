@@ -62,7 +62,13 @@ pub fn routing_serves_the_expected_paths_test() {
   let assert Ok(#(missing_status, _)) = get("/nope")
   assert missing_status == 404
 
-  // `/ws` は WebSocket upgrade を要求する。素の GET は 101 にはならない。
+  // `/ws` は WebSocket upgrade を要求する。素の GET は mist が **400** を返す
+  // （vendored mist: "If the request is not upgradable, a 400 response will be
+  // sent to the client."）。実際に測って 400 であることを確認したうえで固定する。
+  //
+  // **`!= 200` では駄目（#131）。** 404 でも 500 でも通ってしまうので、
+  // `/ws` のルーティングが外れて catch-all に落ちる回帰を無言で見逃す。
+  // このテストの目的は「配線が繋がっていること」の検証で、そこが抜けていた。
   let assert Ok(#(ws_status, _)) = get("/ws")
-  assert ws_status != 200
+  assert ws_status == 400
 }
