@@ -212,3 +212,26 @@ pub fn a_crashed_room_is_removed_from_the_registry_test() {
   // 新しい room は使える。
   assert room.get_snapshot(after) == Ok([])
 }
+
+/// registry が応答しなくても**呼び出し元プロセスが生き残る**こと（#58）。
+///
+/// #33 で room 側の同期呼び出しは `call.try_call` に移したが、
+/// `registry.lookup` だけ生の `actor.call` が残っていた。registry の Lookup は
+/// room の起動と `shutdown_if_empty` を挟むため詰まりやすく、詰まった瞬間に
+/// WebSocket の接続プロセスが理由不明のまま落ちる。
+///
+/// 実際の詰まり（GC 停止・メッセージ滞留）は再現できないので、
+/// **誰も応答しない subject** を registry の代わりに渡して同じ状況を作る。
+/// この subject の所有者はテストプロセス自身なので、送った Lookup は
+/// 処理されずタイムアウトする。
+pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
+  let unresponsive: process.Subject(registry.Message) = process.new_subject()
+
+  // 素の actor.call ならここで呼び出し元（このテストプロセス）が死ぬ。
+  assert registry.lookup(unresponsive, registry.room_id("stalled"))
+    == Error(Nil)
+
+  // 生き残っているので後続の検証ができる。これが #58 の要点。
+  let assert Ok(started) = registry.start()
+  let assert Ok(_) = registry.lookup(started.data, registry.room_id("ok"))
+}
