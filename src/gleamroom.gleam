@@ -4,6 +4,7 @@ import gleam/erlang/process.{type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
+import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 import gleamroom/call
@@ -33,25 +34,37 @@ const default_port = 4000
 pub fn main() -> Nil {
   logging.configure()
 
-  let port = read_port()
+  let assert Ok(_) = start(read_port())
+
+  process.sleep_forever()
+}
+
+/// スーパービジョンツリーを起動して返す（#34）。
+///
+/// `main` から切り出したのは**テストから起動できるようにするため**。
+/// `main` は `sleep_forever` で戻らないので、HTTP ルーティングを実際に
+/// 叩いて確かめる手段が無かった。
+///
+/// registry の名前は呼び出しごとに新しく作る。同じ VM で複数回起動しても
+/// 名前が衝突しない（テストが本番と同じ経路を通れる）。
+pub fn start(
+  port: Int,
+) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
   // 名前を経由することで、registry が再起動しても HTTP ハンドラは
   // 現行のプロセスへ届く（起動時の subject を握らない）。
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
 
-  let assert Ok(_) =
-    supervisor.new(supervisor.RestForOne)
-    |> supervisor.add(
-      supervision.worker(fn() { registry.start_named(registry_name) }),
-    )
-    |> supervisor.add(mist.supervised(
-      handle_request(_, registry_subject)
-      |> mist.new
-      |> mist.port(port),
-    ))
-    |> supervisor.start
-
-  process.sleep_forever()
+  supervisor.new(supervisor.RestForOne)
+  |> supervisor.add(
+    supervision.worker(fn() { registry.start_named(registry_name) }),
+  )
+  |> supervisor.add(mist.supervised(
+    handle_request(_, registry_subject)
+    |> mist.new
+    |> mist.port(port),
+  ))
+  |> supervisor.start
 }
 
 fn handle_request(
