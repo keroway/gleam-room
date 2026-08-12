@@ -454,10 +454,6 @@ pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
   )
 }
 
-/// Derives a participant id from this connection's own process identity.
-/// Each WebSocket connection runs as its own process, so this is unique for
-/// the lifetime of the connection without requiring client-supplied
-/// identity or a shared counter.
 /// 参加者 ID を生成する。
 ///
 /// 以前は `process.self() |> string.inspect` で **BEAM の PID 文字列表現**
