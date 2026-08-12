@@ -1,6 +1,8 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
+import gleam/result
+import gleamroom/call
 import gleamroom/room
 
 /// Opaque so callers cannot construct a `RoomId` except through `room_id`,
@@ -218,9 +220,21 @@ fn handle_message(
 
 /// Resolves `id` to its active room actor, lazily starting one if this is
 /// the first lookup for that `RoomId`.
+///
+/// registry が応答しない場合は `Error(Nil)`（#58）。ここだけ生の `actor.call`
+/// が残っており、**#33 で room 側を塞いだ穴が registry 側に開いたままだった**。
+/// registry の Lookup は room の起動と `shutdown_if_empty` の同期呼び出しを
+/// 挟むため詰まりやすく、詰まると WebSocket の接続プロセスが理由不明のまま
+/// 落ちる（クライアントには何も届かない）。
+///
+/// 失敗は 2 段ある。**registry が応答しないこと**（ここで拾う）と、
+/// **registry が「room を起動できなかった」と返すこと**（#32 で導入）。
+/// 呼び出し側から見ればどちらも「room が得られなかった」なので平坦化するが、
+/// 前者は警告ログに残る（`call.try_call` が理由を分類して出す。#70）。
 pub fn lookup(
   subject: Subject(Message),
   id: RoomId,
 ) -> Result(Subject(room.Message), Nil) {
-  actor.call(subject, waiting: 1000, sending: Lookup(id, _))
+  call.try_call(subject, call.default_timeout, Lookup(id, _), "registry.lookup")
+  |> result.flatten
 }
