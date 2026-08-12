@@ -18,4 +18,11 @@ concurrency:
 
 jobs:
   gitleaks:
-    uses: keroway/.github/.github/workflows/reusable-gitleaks.yml@main # zizmor: ignore[unpinned-uses] -- same-account reusable workflow
+    # 更新手順: keroway/.github の該当ファイルの差分をレビューしたうえで、
+    # `gh api repos/keroway/.github/commits/main --jq .sha` で最新 SHA を取得し、
+    # 下記 SHA とコメントの日付を同時に更新する（自動更新 bot 非対応のため手動運用）。
+    #
+    # @main のままだと、共有側の変更が**レビューを経ずに全リポジトリへ即座に効く**。
+    # zizmor の unpinned-uses はそれを検出するための検査で、ignore で黙らせると
+    # 「同一アカウントだから安全」という前提が検査から外れたまま残る（#96）。
+    uses: keroway/.github/.github/workflows/reusable-gitleaks.yml@87813febcf248657d64f628f53f6c246969b6e7b # 2026-08-12 時点の main
