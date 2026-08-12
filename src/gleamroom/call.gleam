@@ -2,6 +2,7 @@ import exception
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/otp/actor
+import gleam/result
 import gleam/string
 import logging
 
@@ -25,16 +26,40 @@ pub fn try_call(
   make_request: fn(Subject(reply)) -> message,
   label: String,
 ) -> Result(reply, Nil) {
+  try_call_classified(subject, timeout, make_request, label)
+  |> result.replace_error(Nil)
+}
+
+/// `try_call` と同じだが、**失敗理由を呼び出し元へ渡す**（#92）。
+///
+/// 既定は `try_call` のまま。理由を受け取っても対処が変わらない呼び出し元
+/// （room / registry の大半）にまで `Failure` を配ると、全員が
+/// 「使わない値」を捨てる記述を書くことになる。
+///
+/// 使うのは **区別が実際に外へ出る場所**だけ。今のところ `/health` で、
+/// 「registry が落ちている」と「registry が詰まっている」を運用者に
+/// 分けて伝えるために使っている。
+pub fn try_call_classified(
+  subject: Subject(message),
+  timeout: Int,
+  make_request: fn(Subject(reply)) -> message,
+  label: String,
+) -> Result(reply, Failure) {
   case exception.rescue(fn() { actor.call(subject, timeout, make_request) }) {
     Ok(reply) -> Ok(reply)
     Error(reason) -> {
       logging.log(logging.Warning, describe_failure(label, timeout, reason))
-      Error(Nil)
+      Error(classify(reason))
     }
   }
 }
 
 /// 呼び出しが失敗した理由（#70）。
+///
+/// **どこで消費されるか**: 常に警告ログの文言（`describe_failure`）。加えて
+/// `try_call_classified` を使う呼び出し元は値として受け取れる（#92）。
+/// 現在の利用者は `/health` だけで、運用者に「落ちている」と「詰まっている」を
+/// 分けて伝えるために使っている。
 ///
 /// 呼び出し側から見た結果はどれも「返事が得られなかった」で同じだが、
 /// **運用上の対処はまるで違う**。詰まっているならタイムアウトの見直しや

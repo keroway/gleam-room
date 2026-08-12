@@ -71,8 +71,17 @@ node --test 'test/client/*.test.mjs'  # browser client reconnect tests
 ```
 
 Once running, `GET http://localhost:4000/health` asks the room registry
-whether it is responsive: `200 ok rooms=<n>` when it answers, `503
-registry unavailable` when it is dead or wedged.
+whether it is responsive:
+
+| registry | response |
+|---|---|
+| answers | `200 ok rooms=<n>` |
+| process is gone | `503 registry down` |
+| alive but not answering | `503 registry not responding` |
+
+The two failure bodies differ on purpose: a dead registry means waiting on (or
+investigating) the supervisor restart, while a wedged one means looking at load
+and timeouts.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
 `gleam test`, and the client tests on every pull request and push to `main`.
