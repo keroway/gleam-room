@@ -8,8 +8,10 @@
 
 ```text
 .claude/
-├── settings.json        # 承認なしで実行してよいコマンドの共有許可
-├── settings.local.json  # 個人設定（gitignore、コミット対象外）
+├── settings.json        # 承認なしで実行してよいコマンドの共有許可 + Stop hook
+├── settings.local.json  # 個人設定（gitignore、コミット対象外。beamsg アダプタもここ）
+├── hooks/
+│   └── post-stop-check.sh  # Stop hook 本体
 └── README.md            # この設定の説明
 ```
 
@@ -28,15 +30,24 @@
 - 破壊的な git 操作（`git reset --hard` / `branch -D` 等）は含めない。
   `git diff` / `log` / `branch` も**個別の安全な呼び出し形だけ**を列挙している
 
+## Stop hook
+
+`hooks/post-stop-check.sh` が、変更されたファイルに応じて `.github/workflows/ci.yml`
+と同じコマンドをターン終了ごとに実行する（`agent-assets/templates/post-stop-check.sh`
+を基にした構成）:
+
+- `src/*.gleam` / `test/*.gleam` / `gleam.toml` / `manifest.toml` が変わった場合:
+  `gleam format --check src test` → `gleam build --warnings-as-errors` → `gleam test`
+- `test/client/*.test.mjs` が変わった場合: `node --test 'test/client/*.test.mjs'`
+  （web.gleam に埋め込まれたクライアント JS の回帰テスト。Gleam 側からは検証できない）
+
+Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が両方 CLOSED になり
+検証できない状態を成功扱いする心配が無くなったため導入した。
+
 ## 意図的に未導入の設定
 
-- Stop hook: Gleam アプリケーションと CI の決定的な検証コマンドがまだ存在しないため。
-- format-on-write hook: formatter の対象範囲が Issue #1 の bootstrap で確定していないため。
+- format-on-write hook: formatter の対象範囲が広がるたびに個別リポジトリの都合で
+  分岐させたくないため、現時点では Stop hook の `gleam format --check` のみに留める。
 - `justfile` / lefthook: 実際の Gleam プロジェクト構成と CI を薄く委譲できる段階で追加する。
-
-Issue #1 で Gleam プロジェクトを作成し、Issue #10 で CI を整備した後、
-`agent-assets/templates/` を基に `gleam format --check`、`gleam build
---warnings-as-errors`、`gleam test` と整合する構成を検討します。検証できない状態を
-成功扱いする hook は追加しません。
 
 codex stop review gate は、ワークスペース共通方針どおり無効のまま運用します。
