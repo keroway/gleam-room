@@ -36,9 +36,41 @@ const default_port = 4000
 pub fn main() -> Nil {
   logging.configure()
 
-  let assert Ok(_) = start(read_port())
+  // supervisor が shutdown した場合に無言でプロセスが消えるのを避ける（#79）。
+  //
+  // `supervisor.start` は呼び出し元プロセス（= main）に supervisor を
+  // link する。intensity/period の許容回数（既定・下記どちらも 5 秒間に
+  // 2 回）を超えて子が再起動すると、supervisor は全子を terminate してから
+  // 自身も reason `shutdown` で終了し、その exit signal が main まで伝播する。
+  // trap_exits で受け止めて exit を明示的にログしてから終了させる。
+  process.trap_exits(True)
 
-  process.sleep_forever()
+  let assert Ok(started) = start(read_port())
+
+  await_supervisor_exit(started.pid)
+}
+
+/// supervisor（または他の何らかの理由で main にリンクされたプロセス）の
+/// exit を待ち、supervisor 自身の exit だけをログしてから戻る。
+///
+/// 未知の pid からの exit は無視して待ち続ける。現状 main にリンクされる
+/// プロセスは supervisor だけだが、将来リンクが増えても無関係な exit で
+/// アプリ全体の終了ログを誤って出さないようにするため。
+fn await_supervisor_exit(supervisor_pid: process.Pid) -> Nil {
+  let exit =
+    process.new_selector()
+    |> process.select_trapped_exits(fn(exit) { exit })
+    |> process.selector_receive_forever()
+
+  case exit.pid == supervisor_pid {
+    True ->
+      logging.log(
+        logging.Emergency,
+        "アプリ最上位 supervisor が終了したため、アプリケーションを終了します: "
+          <> string.inspect(exit.reason),
+      )
+    False -> await_supervisor_exit(supervisor_pid)
+  }
 }
 
 /// スーパービジョンツリーを起動して返す（#34）。
@@ -58,6 +90,13 @@ pub fn start(
   let registry_subject = process.named_subject(registry_name)
 
   supervisor.new(supervisor.RestForOne)
+  // `intensity`/`period` を明示する（#79）。値そのものは gleam_otp の既定
+  // （5 秒間に 2 回）のままだが、無指定だと「意図して既定値を選んだ」のか
+  // 「設定を忘れた」のか読み手が区別できない。MVP の規模で子は2つだけ
+  // （registry, web server）で、どちらも `let assert` によるクラッシュ経路を
+  // 持たないため、この既定値で十分という判断をここに残す。将来クラッシュ
+  // 経路が増えて頻繁な再起動が正常系になるなら、そのときに見直す。
+  |> supervisor.restart_tolerance(intensity: 2, period: 5)
   |> supervisor.add(
     supervision.worker(fn() { registry.start_named(registry_name) }),
   )
