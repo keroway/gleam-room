@@ -107,6 +107,20 @@ Illustrative server messages:
 {"type":"error","code":"...","message":"..."}
 ```
 
+Error messages use the following `code` values. Clients should branch on `code`
+when they need programmatic handling; `message` is human-readable detail and
+may vary for the same code.
+
+| Code | Meaning |
+|---|---|
+| `invalid_message` | The payload was JSON but did not match a supported client-message shape. |
+| `malformed_json` | The payload was not valid JSON. |
+| `already_joined` | This connection sent `join` after it had already joined a room. |
+| `join_rejected` | The room did not accept the join request. |
+| `buzz_rejected` | The room did not accept the buzz for the current round. |
+| `room_unavailable` | The requested room could not be started or did not respond in time. |
+| `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
+
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.
 
 ## Non-functional requirements
