@@ -42,6 +42,26 @@ pub fn decode_join_empty_display_name_test() {
     ))
 }
 
+pub fn decode_join_missing_room_id_test() {
+  let json = "{\"type\":\"join\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_empty_room_id_test() {
+  let json = "{\"type\":\"join\",\"room_id\":\"\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
 pub fn decode_unknown_type_test() {
   let json = "{\"type\":\"shout\"}"
 
