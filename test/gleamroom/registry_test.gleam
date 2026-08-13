@@ -54,12 +54,14 @@ pub fn concurrent_lookups_for_the_same_room_id_agree_on_one_actor_test() {
   assert unique == [registry_subject_of(started.data, id)]
 }
 
-/// 空になった room を registry から外せること（#26）。
+/// join の応答待ちがタイムアウトした接続が Release しても、空の room を
+/// registry から外せること（#168）。
 ///
-/// 外さないと、一度でも join された RoomId の Room actor と Dict エントリが
+/// この時点では Join がまだ成立していないため、通常の on_close は RoomHandle を
+/// 持たず Release できない。外さないと、RoomId の Room actor と Dict エントリが
 /// プロセス終了まで残り続ける。稼働時間とユニークな RoomId の種類に比例して
 /// 単調増加するため、**エラーにはならず静かにメモリを食う**。
-pub fn release_removes_the_room_so_the_next_lookup_starts_a_fresh_actor_test() {
+pub fn release_removes_an_unjoined_room_so_the_next_lookup_starts_a_fresh_actor_test() {
   let assert Ok(started) = registry.start()
   let id = registry.room_id("room-release")
 

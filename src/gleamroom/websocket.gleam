@@ -187,6 +187,9 @@ fn handle_join(
       // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
       // クライアントには何も届かなかった。
       use event <- with_join_reply(
+        state.registry,
+        room_id,
+        room_subject,
         connection,
         room.dispatch(
           room_subject,
@@ -406,6 +409,9 @@ fn with_room(
 /// `mist.stop()` で接続プロセスが終了すれば `SessionDown` 経由で自動的に
 /// 後始末される（room.gleam の `update_sessions` を参照）。
 fn with_join_reply(
+  registry_subject: Subject(registry.Message),
+  room_id: registry.RoomId,
+  room_subject: Subject(room.Message),
   connection: WebsocketConnection,
   reply: Result(room.RoomEvent, Nil),
   next: fn(room.RoomEvent) -> Next(ConnectionState, room.RoomEvent),
@@ -413,6 +419,11 @@ fn with_join_reply(
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
+      // `lookup` がこの room を作った直後でも、ConnectionState にはまだ
+      // RoomHandle が無い。そのまま接続を止めると on_close から Release されず、
+      // 空の room actor が registry に残り続ける（#168）。room 自身が空かを
+      // 判定するので、遅延した Join が先に成立していても停止させない。
+      process.send(registry_subject, registry.Release(room_id, room_subject))
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
