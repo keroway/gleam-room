@@ -82,6 +82,7 @@ fn handle_request(
           |> response.set_body(
             mist.Bytes(bytes_tree.from_string(web.index_html())),
           )
+          |> empty_body_for_head(req.method)
         _ -> method_not_allowed(["GET", "HEAD"])
       }
 
@@ -120,6 +121,7 @@ fn handle_request(
                 ),
               )
           }
+          |> empty_body_for_head(req.method)
         _ -> method_not_allowed(["GET", "HEAD"])
       }
 
@@ -128,6 +130,21 @@ fn handle_request(
     _ ->
       response.new(404)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
+  }
+}
+
+/// HEAD は GET と同じヘッダを返しつつボディを送ってはならない（RFC 9110 §9.3.2）。
+///
+/// ステータス・ヘッダは GET と同じ組み立てを再利用し、最後にボディだけ
+/// 差し替える。エラー分岐（503 など）でも同様に空にする必要があるため、
+/// レスポンス組み立ての末尾に一括で適用する。
+fn empty_body_for_head(
+  resp: Response(ResponseData),
+  method: http.Method,
+) -> Response(ResponseData) {
+  case method {
+    Head -> response.set_body(resp, mist.Bytes(bytes_tree.new()))
+    _ -> resp
   }
 }
 

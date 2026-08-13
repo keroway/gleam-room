@@ -19,27 +19,31 @@ import gleamroom
 /// この検証のためだけの dev-dependency。
 const test_port = 4173
 
-fn start_server() -> Nil {
-  let assert Ok(_) = gleamroom.start(test_port)
+// HEAD テストは別プロセスとして並行に走りうるため、`routing_serves_the_expected_paths_test`
+// と同じポートを使うと Eaddrinuse で落ちる（#152 と同種の衝突）。専用ポートで分離する。
+const head_test_port = 4174
+
+fn start_server(port: Int) -> Nil {
+  let assert Ok(_) = gleamroom.start(port)
   // 起動直後は listen が間に合わないことがある。固定 sleep で待たず、
   // 実際に応答するまで叩いて確かめる。
-  await_ready(50)
+  await_ready(port, 50)
 }
 
-fn await_ready(remaining: Int) -> Nil {
-  case get("/health"), remaining {
+fn await_ready(port: Int, remaining: Int) -> Nil {
+  case get(port, "/health"), remaining {
     Ok(_), _ -> Nil
     Error(_), 0 -> panic as "サーバが期限内に応答しなかった"
     Error(_), _ -> {
       process.sleep(20)
-      await_ready(remaining - 1)
+      await_ready(port, remaining - 1)
     }
   }
 }
 
-fn get(path: String) -> Result(#(Int, String), Nil) {
+fn get(port: Int, path: String) -> Result(#(Int, String), Nil) {
   let assert Ok(req) =
-    request.to("http://127.0.0.1:" <> int.to_string(test_port) <> path)
+    request.to("http://127.0.0.1:" <> int.to_string(port) <> path)
   case httpc.send(req) {
     Ok(response) -> Ok(#(response.status, response.body))
     Error(_) -> Error(Nil)
@@ -47,11 +51,12 @@ fn get(path: String) -> Result(#(Int, String), Nil) {
 }
 
 fn request_with_method(
+  port: Int,
   path: String,
   method: http.Method,
 ) -> Result(response.Response(String), Nil) {
   let assert Ok(req) =
-    request.to("http://127.0.0.1:" <> int.to_string(test_port) <> path)
+    request.to("http://127.0.0.1:" <> int.to_string(port) <> path)
   let req = request.set_method(req, method)
   case httpc.send(req) {
     Ok(response) -> Ok(response)
@@ -60,21 +65,21 @@ fn request_with_method(
 }
 
 pub fn routing_serves_the_expected_paths_test() {
-  start_server()
+  start_server(test_port)
 
   // `/` はブラウザクライアントを返す。
-  let assert Ok(#(status, body)) = get("/")
+  let assert Ok(#(status, body)) = get(test_port, "/")
   assert status == 200
   assert string.contains(body, "<script>")
 
   // `/health` は registry へ問い合わせた結果を返す（#93 / #92）。
   // room がまだ無いので 0 件。**配線が繋がっていなければここで気づける。**
-  let assert Ok(#(health_status, health_body)) = get("/health")
+  let assert Ok(#(health_status, health_body)) = get(test_port, "/health")
   assert health_status == 200
   assert health_body == "ok rooms=0"
 
   // 未知のパスは 404。
-  let assert Ok(#(missing_status, _)) = get("/nope")
+  let assert Ok(#(missing_status, _)) = get(test_port, "/nope")
   assert missing_status == 404
 
   // `/ws` は WebSocket upgrade を要求する。素の GET は mist が **400** を返す
@@ -84,18 +89,34 @@ pub fn routing_serves_the_expected_paths_test() {
   // **`!= 200` では駄目（#131）。** 404 でも 500 でも通ってしまうので、
   // `/ws` のルーティングが外れて catch-all に落ちる回帰を無言で見逃す。
   // このテストの目的は「配線が繋がっていること」の検証で、そこが抜けていた。
-  let assert Ok(#(ws_status, _)) = get("/ws")
+  let assert Ok(#(ws_status, _)) = get(test_port, "/ws")
   assert ws_status == 400
 
   // パスは一致してもメソッドが対応外なら 405 を返す（#66）。
   //
   // 以前は `request.path_segments` のみでルーティングしており、
   // POST / や DELETE /health でも `/` `/health` と同じ 200 が返っていた。
-  let assert Ok(root_response) = request_with_method("/", http.Post)
+  let assert Ok(root_response) = request_with_method(test_port, "/", http.Post)
   assert root_response.status == 405
   assert response.get_header(root_response, "allow") == Ok("GET, HEAD")
 
-  let assert Ok(health_response) = request_with_method("/health", http.Delete)
+  let assert Ok(health_response) =
+    request_with_method(test_port, "/health", http.Delete)
   assert health_response.status == 405
   assert response.get_header(health_response, "allow") == Ok("GET, HEAD")
+}
+
+pub fn head_responses_have_an_empty_body_test() {
+  start_server(head_test_port)
+
+  // RFC 9110 §9.3.2: HEAD は GET と同じステータスだが、ボディを送ってはならない。
+  let assert Ok(root_response) =
+    request_with_method(head_test_port, "/", http.Head)
+  assert root_response.status == 200
+  assert root_response.body == ""
+
+  let assert Ok(health_response) =
+    request_with_method(head_test_port, "/health", http.Head)
+  assert health_response.status == 200
+  assert health_response.body == ""
 }
