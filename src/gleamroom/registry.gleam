@@ -240,13 +240,21 @@ fn handle_message(
           case room.shutdown_if_empty(current) {
             True -> {
               logging.log(logging.Info, "room closed (empty): id=" <> key)
-              // subject_owner が既に失敗しても、登録時の subject を持つ監視記録
-              // を直接除去できる。これを残すと、後から届く古い RoomDown が同じ
-              // key に作り直された room を消しうる（#160）。
-              let monitored =
-                dict.filter(state.monitored, fn(_pid, monitored_room) {
-                  monitored_room.subject != current
-                })
+              // subject_owner がまだ引ける場合だけ、その pid の記録を直接消す。
+              // subject も一致を確かめるので、pid が再利用されても別 room の監視を
+              // 消さない。既に終了して owner を引けない場合は、後続の RoomDown が
+              // 古い記録を消す。その際も subject 一致ガードが新しい room を守る
+              // （#160）。
+              let monitored = case process.subject_owner(current) {
+                Ok(pid) ->
+                  case dict.get(state.monitored, pid) {
+                    Ok(MonitoredRoom(subject: monitored_subject, ..))
+                      if monitored_subject == current
+                    -> dict.delete(state.monitored, pid)
+                    _ -> state.monitored
+                  }
+                Error(Nil) -> state.monitored
+              }
               actor.continue(
                 State(..state, rooms: dict.delete(state.rooms, key), monitored:),
               )
