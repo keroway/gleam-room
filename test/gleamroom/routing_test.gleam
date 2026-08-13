@@ -1,5 +1,7 @@
 import gleam/erlang/process
+import gleam/http
 import gleam/http/request
+import gleam/http/response
 import gleam/httpc
 import gleam/int
 import gleam/string
@@ -44,6 +46,19 @@ fn get(path: String) -> Result(#(Int, String), Nil) {
   }
 }
 
+fn request_with_method(
+  path: String,
+  method: http.Method,
+) -> Result(response.Response(String), Nil) {
+  let assert Ok(req) =
+    request.to("http://127.0.0.1:" <> int.to_string(test_port) <> path)
+  let req = request.set_method(req, method)
+  case httpc.send(req) {
+    Ok(response) -> Ok(response)
+    Error(_) -> Error(Nil)
+  }
+}
+
 pub fn routing_serves_the_expected_paths_test() {
   start_server()
 
@@ -71,4 +86,16 @@ pub fn routing_serves_the_expected_paths_test() {
   // このテストの目的は「配線が繋がっていること」の検証で、そこが抜けていた。
   let assert Ok(#(ws_status, _)) = get("/ws")
   assert ws_status == 400
+
+  // パスは一致してもメソッドが対応外なら 405 を返す（#66）。
+  //
+  // 以前は `request.path_segments` のみでルーティングしており、
+  // POST / や DELETE /health でも `/` `/health` と同じ 200 が返っていた。
+  let assert Ok(root_response) = request_with_method("/", http.Post)
+  assert root_response.status == 405
+  assert response.get_header(root_response, "allow") == Ok("GET, HEAD")
+
+  let assert Ok(health_response) = request_with_method("/health", http.Delete)
+  assert health_response.status == 405
+  assert response.get_header(health_response, "allow") == Ok("GET, HEAD")
 }
