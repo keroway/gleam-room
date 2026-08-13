@@ -109,14 +109,21 @@ pub fn routing_serves_the_expected_paths_test() {
 pub fn head_responses_have_an_empty_body_test() {
   start_server(head_test_port)
 
-  // RFC 9110 §9.3.2: HEAD は GET と同じステータスだが、ボディを送ってはならない。
+  // RFC 9110 §9.3.2: HEAD は GET と同じステータス・ヘッダーを返すが、
+  // ボディを送ってはならない。GET と比較して両方を確かめる。
+  let assert Ok(root_get_response) =
+    request_with_method(head_test_port, "/", http.Get)
   let assert Ok(root_response) =
     request_with_method(head_test_port, "/", http.Head)
-  assert root_response.status == 200
+  assert root_response.status == root_get_response.status
+  assert response.get_header(root_response, "content-type")
+    == response.get_header(root_get_response, "content-type")
   assert root_response.body == ""
 
+  let assert Ok(health_get_response) =
+    request_with_method(head_test_port, "/health", http.Get)
   let assert Ok(health_response) =
     request_with_method(head_test_port, "/health", http.Head)
-  assert health_response.status == 200
+  assert health_response.status == health_get_response.status
   assert health_response.body == ""
 }
