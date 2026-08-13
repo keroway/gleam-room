@@ -1,12 +1,14 @@
 import envoy
 import gleam/bytes_tree
 import gleam/erlang/process.{type Subject}
+import gleam/http.{Get, Head}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/int
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
+import gleam/string
 import gleamroom/call
 import gleamroom/registry
 import gleamroom/web
@@ -73,9 +75,15 @@ fn handle_request(
 ) -> Response(ResponseData) {
   case request.path_segments(req) {
     [] ->
-      response.new(200)
-      |> response.set_header("content-type", "text/html; charset=utf-8")
-      |> response.set_body(mist.Bytes(bytes_tree.from_string(web.index_html())))
+      case req.method {
+        Get | Head ->
+          response.new(200)
+          |> response.set_header("content-type", "text/html; charset=utf-8")
+          |> response.set_body(
+            mist.Bytes(bytes_tree.from_string(web.index_html())),
+          )
+        _ -> method_not_allowed(["GET", "HEAD"])
+      }
 
     // **registry に実際に問い合わせてから答える（#93）。**
     //
@@ -87,28 +95,32 @@ fn handle_request(
     // それは正しい: その瞬間 join は通らないので、503 を返して
     // ロードバランサやヘルスチェックに「まだ受けられない」と伝えるべき。
     ["health"] ->
-      case registry.health(registry_subject) {
-        Ok(rooms) ->
-          response.new(200)
-          |> response.set_body(
-            mist.Bytes(bytes_tree.from_string(
-              "ok rooms=" <> int.to_string(rooms),
-            )),
-          )
-        // **理由を分けて伝える（#92）。** どちらも 503 だが、運用者が次に
-        // 見る場所が違う。落ちているなら supervisor の再起動状況、
-        // 詰まっているなら負荷やタイムアウト値。
-        Error(reason) ->
-          response.new(503)
-          |> response.set_body(
-            mist.Bytes(
-              bytes_tree.from_string(case reason {
-                call.ActorDown -> "registry down"
-                call.Timeout -> "registry not responding"
-                call.Unknown(detail) -> "registry unavailable: " <> detail
-              }),
-            ),
-          )
+      case req.method {
+        Get | Head ->
+          case registry.health(registry_subject) {
+            Ok(rooms) ->
+              response.new(200)
+              |> response.set_body(
+                mist.Bytes(bytes_tree.from_string(
+                  "ok rooms=" <> int.to_string(rooms),
+                )),
+              )
+            // **理由を分けて伝える（#92）。** どちらも 503 だが、運用者が次に
+            // 見る場所が違う。落ちているなら supervisor の再起動状況、
+            // 詰まっているなら負荷やタイムアウト値。
+            Error(reason) ->
+              response.new(503)
+              |> response.set_body(
+                mist.Bytes(
+                  bytes_tree.from_string(case reason {
+                    call.ActorDown -> "registry down"
+                    call.Timeout -> "registry not responding"
+                    call.Unknown(detail) -> "registry unavailable: " <> detail
+                  }),
+                ),
+              )
+          }
+        _ -> method_not_allowed(["GET", "HEAD"])
       }
 
     ["ws"] -> websocket.upgrade(req, registry_subject)
@@ -117,6 +129,16 @@ fn handle_request(
       response.new(404)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
   }
+}
+
+/// パスは一致したが HTTP メソッドが対応外のときに返す（#66）。
+///
+/// 以前は `request.path_segments` だけでルーティングしており、
+/// POST / や DELETE /health でも同じ 200 が返っていた。
+fn method_not_allowed(allowed: List(String)) -> Response(ResponseData) {
+  response.new(405)
+  |> response.set_header("allow", string.join(allowed, ", "))
+  |> response.set_body(mist.Bytes(bytes_tree.new()))
 }
 
 /// `PORT` 環境変数から待ち受けポートを読む。
