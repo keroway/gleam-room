@@ -110,7 +110,9 @@ fn join_decoder() -> decode.Decoder(ClientMessage) {
 }
 
 fn is_valid_field(value: String) -> Bool {
-  !string.is_empty(value) && string.length(value) <= max_field_length
+  !string.is_empty(value)
+  && string.length(value) <= max_field_length
+  && string.byte_size(value) <= max_field_length
 }
 
 pub fn encode_server_message(message: ServerMessage) -> String {

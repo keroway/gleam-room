@@ -131,6 +131,22 @@ pub fn decode_join_display_name_at_max_length_test() {
     == Ok(protocol.Join(RoomId("ABCD"), exactly_max))
 }
 
+pub fn decode_join_display_name_multibyte_within_grapheme_limit_but_over_byte_limit_test() {
+  // Each "あ" is 1 grapheme but 3 UTF-8 bytes, so 64 of them stay within the
+  // grapheme-length limit while exceeding the byte-size limit.
+  let too_long_in_bytes = string.repeat("あ", 64)
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    <> too_long_in_bytes
+    <> "\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
 pub fn decode_unknown_type_test() {
   let json = "{\"type\":\"shout\"}"
 
