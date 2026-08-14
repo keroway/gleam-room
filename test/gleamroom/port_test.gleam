@@ -51,6 +51,28 @@ pub fn read_port_falls_back_on_an_invalid_value_test() {
   assert read_port_with("abc") == 4000
 }
 
+/// 数値としては解釈できても TCP ポート番号として無効な値
+/// (負数・0・65535超)は、非数値と同じく警告を出して既定値へ落とすこと(#144)。
+pub fn read_port_falls_back_on_a_negative_value_test() {
+  envoy.unset("PORT")
+  assert read_port_with("-1") == 4000
+}
+
+pub fn read_port_falls_back_on_zero_test() {
+  envoy.unset("PORT")
+  assert read_port_with("0") == 4000
+}
+
+pub fn read_port_falls_back_on_a_value_above_the_maximum_test() {
+  envoy.unset("PORT")
+  assert read_port_with("70000") == 4000
+}
+
+pub fn read_port_uses_the_maximum_valid_value_test() {
+  envoy.unset("PORT")
+  assert read_port_with("65535") == 65_535
+}
+
 /// **後片付けそのものを検証する（#88）。** これが無いと、片付けを消す変更を
 /// 誰も止められない（他のテストは PORT が漏れても自分では気づかない）。
 pub fn read_port_with_leaves_no_port_behind_test() {
