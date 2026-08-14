@@ -93,13 +93,24 @@ fn client_message_decoder() -> decode.Decoder(ClientMessage) {
   }
 }
 
+/// The maximum accepted length for a trimmed `room_id` or `display_name`.
+/// Chosen to comfortably fit any human-typed value while bounding the
+/// per-participant memory/bandwidth cost of broadcasting `State`.
+const max_field_length = 64
+
 fn join_decoder() -> decode.Decoder(ClientMessage) {
   use raw_room_id <- decode.field("room_id", decode.string)
-  use display_name <- decode.field("display_name", decode.string)
-  case string.is_empty(raw_room_id), string.is_empty(display_name) {
-    False, False -> decode.success(Join(RoomId(raw_room_id), display_name))
+  use raw_display_name <- decode.field("display_name", decode.string)
+  let room_id = string.trim(raw_room_id)
+  let display_name = string.trim(raw_display_name)
+  case is_valid_field(room_id), is_valid_field(display_name) {
+    True, True -> decode.success(Join(RoomId(room_id), display_name))
     _, _ -> decode.failure(Buzz, "Join")
   }
+}
+
+fn is_valid_field(value: String) -> Bool {
+  !string.is_empty(value) && string.length(value) <= max_field_length
 }
 
 pub fn encode_server_message(message: ServerMessage) -> String {

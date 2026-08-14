@@ -1,3 +1,4 @@
+import gleam/string
 import gleamroom/protocol.{
   BuzzAccepted, BuzzResult, Participant, ParticipantId, ParticipantJoined,
   ParticipantLeft, ProtocolError, ProtocolErrorMessage, RoomId, RoundReset,
@@ -60,6 +61,74 @@ pub fn decode_join_empty_room_id_test() {
       code: "invalid_message",
       message: "Message did not match a known client message shape.",
     ))
+}
+
+pub fn decode_join_whitespace_only_display_name_test() {
+  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"   \"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_whitespace_only_room_id_test() {
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"   \",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_trims_surrounding_whitespace_test() {
+  let json =
+    "{\"type\":\"join\",\"room_id\":\" ABCD \",\"display_name\":\" Alice \"}"
+
+  assert protocol.decode_client_message(json)
+    == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
+}
+
+pub fn decode_join_display_name_over_max_length_test() {
+  let too_long = string.repeat("a", 65)
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    <> too_long
+    <> "\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_room_id_over_max_length_test() {
+  let too_long = string.repeat("a", 65)
+  let json =
+    "{\"type\":\"join\",\"room_id\":\""
+    <> too_long
+    <> "\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_display_name_at_max_length_test() {
+  let exactly_max = string.repeat("a", 64)
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    <> exactly_max
+    <> "\"}"
+
+  assert protocol.decode_client_message(json)
+    == Ok(protocol.Join(RoomId("ABCD"), exactly_max))
 }
 
 pub fn decode_unknown_type_test() {
