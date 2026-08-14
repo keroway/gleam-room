@@ -205,7 +205,8 @@ fn method_not_allowed(allowed: List(String)) -> Response(ResponseData) {
 /// 「なぜか反映されない」としか見えず、原因に辿り着けない。
 ///
 /// - 未設定: 意図された既定動作。静かに `default_port` を使う
-/// - 不正値: 設定ミス。**警告を出してから** `default_port` を使う
+/// - 不正値(数値として解釈できない、または 1-65535 の範囲外): 設定ミス。
+///   **警告を出してから** `default_port` を使う
 ///
 /// 起動自体は続ける。ポートが違っても他は正常に動くため、ここで落とすと
 /// 「動くはずのものが上がらない」ほうの害が大きい。
@@ -214,7 +215,18 @@ pub fn read_port() -> Int {
     Error(Nil) -> default_port
     Ok(raw) ->
       case int.parse(raw) {
-        Ok(port) -> port
+        Ok(port) if port >= 1 && port <= 65_535 -> port
+        Ok(_) -> {
+          logging.log(
+            logging.Warning,
+            "PORT="
+              <> raw
+              <> " は有効なポート番号(1-65535)の範囲外です。既定の "
+              <> int.to_string(default_port)
+              <> " 番で起動します。",
+          )
+          default_port
+        }
         Error(Nil) -> {
           logging.log(
             logging.Warning,
