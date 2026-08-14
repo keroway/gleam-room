@@ -117,7 +117,8 @@ may vary for the same code.
 | `malformed_json` | The payload was not valid JSON. |
 | `already_joined` | This connection sent `join` after it had already joined a room. |
 | `join_rejected` | The room did not accept the join request. |
-| `buzz_rejected` | The room did not accept the buzz for the current round. |
+| `already_buzzed` | This participant already buzzed for the current round. |
+| `buzzer_not_joined` | This connection has not joined the room yet, so the buzz was rejected. |
 | `room_unavailable` | The requested room could not be started or did not respond in time. |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 

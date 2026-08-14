@@ -305,12 +305,19 @@ fn handle_buzz(
               <> ", reason="
               <> string.inspect(reason),
           )
+          let #(code, message) = case reason {
+            room.AlreadyBuzzed -> #(
+              "already_buzzed",
+              "This participant already buzzed for the current round.",
+            )
+            room.BuzzerNotJoined -> #(
+              "buzzer_not_joined",
+              "This connection has not joined the room yet.",
+            )
+          }
           send_server_message(
             connection,
-            protocol.ProtocolErrorMessage(
-              "buzz_rejected",
-              "Buzz was not accepted for the current round.",
-            ),
+            protocol.ProtocolErrorMessage(code, message),
           )
         }
         // `Buzz` never yields any other event; kept for exhaustiveness since
