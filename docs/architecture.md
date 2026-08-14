@@ -120,7 +120,7 @@ Wire-format types and domain types should not be treated as the same abstraction
 
 For the buzzer MVP, the server is authoritative for ordering. A client's wall-clock timestamp must not determine the winner because client clocks are not trusted or synchronized.
 
-The room actor should process accepted buzzer commands sequentially and assign an authoritative order. Any displayed relative timing should use a server-side monotonic time source where practical.
+The room actor processes accepted buzzer commands sequentially and assigns an authoritative order based on arrival sequence. The current implementation does not attach or display any relative timing (`room.BuzzResult` and `protocol.BuzzResult` carry no time field). If relative timing display is added later, it should use a server-side monotonic time source rather than client wall-clock time, since client clocks are not trusted or synchronized.
 
 The MVP does not promise geographically fair competitive timing. Network latency is an explicit limitation of the first version.
 
