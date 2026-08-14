@@ -148,10 +148,11 @@ fn find_participant(
   list.find(state.participants, fn(p) { p.id == id })
 }
 
-/// The current participant list, suitable for a transport adapter to turn
-/// into a state snapshot for a newly joined or reconnecting client.
+/// The current participant list, oldest (first joined) first, suitable for
+/// a transport adapter to turn into a state snapshot for a newly joined or
+/// reconnecting client.
 pub fn snapshot(state: RoomState) -> List(Participant) {
-  state.participants
+  list.reverse(state.participants)
 }
 
 /// The current round's accepted buzzes, oldest (position 1) first.

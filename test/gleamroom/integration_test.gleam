@@ -56,9 +56,9 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   // connected client observes the same presence snapshot.
   let assert Ok(looked_up_again) = registry.lookup(registry_subject, room_id)
   let expected_presence = [
-    room.Participant(carol, "Carol"),
-    room.Participant(bob, "Bob"),
     room.Participant(alice, "Alice"),
+    room.Participant(bob, "Bob"),
+    room.Participant(carol, "Carol"),
   ]
   assert room.get_snapshot(looked_up_again) == Ok(expected_presence)
   assert room.get_snapshot(room_subject) == Ok(expected_presence)
@@ -130,8 +130,8 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.ParticipantJoined(room.Participant(carol_rejoined, "Carol")))
   assert room.get_snapshot(room_subject)
     == Ok([
-      room.Participant(carol_rejoined, "Carol"),
-      room.Participant(bob, "Bob"),
       room.Participant(alice, "Alice"),
+      room.Participant(bob, "Bob"),
+      room.Participant(carol_rejoined, "Carol"),
     ])
 }

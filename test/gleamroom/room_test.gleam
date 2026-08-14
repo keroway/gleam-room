@@ -52,7 +52,7 @@ pub fn snapshot_preserves_multiple_participants_test() {
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
 
   assert room.snapshot(state)
-    == [room.Participant(bob, "Bob"), room.Participant(alice, "Alice")]
+    == [room.Participant(alice, "Alice"), room.Participant(bob, "Bob")]
 }
 
 pub fn actor_join_and_snapshot_round_trip_test() {
@@ -290,8 +290,8 @@ pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() 
 
   assert room.get_snapshot(subject)
     == Ok([
-      room.Participant(alice_new, "Alice"),
       room.Participant(alice_old, "Alice"),
+      room.Participant(alice_new, "Alice"),
     ])
 
   let assert Ok(_) =
@@ -349,8 +349,8 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
     })
 
   let both = [
-    room.Participant(doomed, "Doomed"),
     room.Participant(survivor, "Survivor"),
+    room.Participant(doomed, "Doomed"),
   ]
   wait.until(fn() { room.get_snapshot(subject) == Ok(both) }, "2 人とも join し終わる")
 
