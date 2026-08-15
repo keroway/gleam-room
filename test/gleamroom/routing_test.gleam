@@ -7,6 +7,8 @@ import gleam/int
 import gleam/string
 import gleamroom
 import gleamroom/call
+import gleamroom/registry
+import gleamroom/wait
 
 /// HTTP ルーティングを**実際にサーバを起動して**確かめる（#34）。
 ///
@@ -24,10 +26,23 @@ const test_port = 4173
 // と同じポートを使うと Eaddrinuse で落ちる（#152 と同種の衝突）。専用ポートで分離する。
 const head_test_port = 4174
 
+// 以下2つも同じ理由で専用ポートに分離する（#142）。
+const health_actor_down_port = 4175
+
+const health_timeout_port = 4176
+
 fn start_server(port: Int) -> Nil {
   let assert Ok(_) = gleamroom.start(port)
   // 起動直後は listen が間に合わないことがある。固定 sleep で待たず、
   // 実際に応答するまで叩いて確かめる。
+  await_ready(port, 50)
+}
+
+fn start_web_only_server(
+  port: Int,
+  registry_subject: process.Subject(registry.Message),
+) -> Nil {
+  let assert Ok(_) = gleamroom.start_web_only(port, registry_subject)
   await_ready(port, 50)
 }
 
@@ -138,4 +153,44 @@ pub fn health_failure_body_distinguishes_all_three_reasons_test() {
     == "registry not responding"
   assert gleamroom.health_failure_body(call.Unknown("boom"))
     == "registry unavailable: boom"
+}
+
+/// `/health` の503分岐は純粋関数のテストしか無く、実際にHTTP経由で叩いた
+/// ときに `handle_request` の配線が正しくステータス・本文を返すことは
+/// 一度も検証されていなかった（#142）。ここでは registry actor を意図的に
+/// 停止させ、`ActorDown` 分岐を実サーバ越しに確かめる。
+pub fn health_returns_503_actor_down_via_http_test() {
+  // registry_test.gleam の `health_fails_when_the_registry_is_dead_test` と
+  // 同じ手法: このテストプロセス自身が registry を起動すると link されており、
+  // `process.kill` した瞬間にテストプロセスまで巻き添えで落ちる。
+  // 別プロセスに起動させ、subject だけ受け取る。
+  let ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(started) = registry.start()
+    process.send(ready, started.data)
+    process.sleep(3000)
+  })
+  let assert Ok(subject) = process.receive(ready, 1000)
+  let assert Ok(pid) = process.subject_owner(subject)
+
+  process.kill(pid)
+  wait.until_dead(pid, "registry が終了する")
+
+  start_web_only_server(health_actor_down_port, subject)
+
+  let assert Ok(#(status, body)) = get(health_actor_down_port, "/health")
+  assert status == 503
+  assert body == "registry down"
+}
+
+/// `Timeout` 分岐の実サーバ越し確認（#142）。誰も処理しない subject を渡し、
+/// `registry.health` を詰まらせる（registry_test.gleam と同じ手法）。
+pub fn health_returns_503_timeout_via_http_test() {
+  let unresponsive: process.Subject(registry.Message) = process.new_subject()
+
+  start_web_only_server(health_timeout_port, unresponsive)
+
+  let assert Ok(#(status, body)) = get(health_timeout_port, "/health")
+  assert status == 503
+  assert body == "registry not responding"
 }
