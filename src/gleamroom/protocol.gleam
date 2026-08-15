@@ -69,6 +69,8 @@ pub fn decode_client_message(
   from json_string: String,
 ) -> Result(ClientMessage, ProtocolError) {
   case json.parse(from: json_string, using: client_message_decoder()) {
+    Ok(Join(RoomId(room_id), display_name)) ->
+      validate_join(room_id, display_name)
     Ok(message) -> Ok(message)
     Error(json.UnableToDecode(_)) ->
       Error(ProtocolError(
@@ -103,9 +105,30 @@ fn join_decoder() -> decode.Decoder(ClientMessage) {
   use raw_display_name <- decode.field("display_name", decode.string)
   let room_id = string.trim(raw_room_id) |> string.uppercase
   let display_name = string.trim(raw_display_name)
+  decode.success(Join(RoomId(room_id), display_name))
+}
+
+/// Content-validates an already-shape-decoded `join` message, reporting
+/// which field is invalid instead of collapsing both cases into the generic
+/// `invalid_message` shape error. A `room_id` failure takes priority over a
+/// `display_name` failure when both are invalid, since `room_id` decides
+/// which room the client would otherwise join.
+fn validate_join(
+  room_id: String,
+  display_name: String,
+) -> Result(ClientMessage, ProtocolError) {
   case is_valid_field(room_id), is_valid_field(display_name) {
-    True, True -> decode.success(Join(RoomId(room_id), display_name))
-    _, _ -> decode.failure(Buzz, "Join")
+    True, True -> Ok(Join(RoomId(room_id), display_name))
+    False, _ ->
+      Error(ProtocolError(
+        code: "invalid_room_id",
+        message: "room_id must be 1-64 characters after trimming whitespace.",
+      ))
+    True, False ->
+      Error(ProtocolError(
+        code: "invalid_display_name",
+        message: "display_name must be 1-64 characters after trimming whitespace.",
+      ))
   }
 }
 
