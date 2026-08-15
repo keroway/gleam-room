@@ -101,7 +101,7 @@ const max_field_length = 64
 fn join_decoder() -> decode.Decoder(ClientMessage) {
   use raw_room_id <- decode.field("room_id", decode.string)
   use raw_display_name <- decode.field("display_name", decode.string)
-  let room_id = string.trim(raw_room_id)
+  let room_id = string.trim(raw_room_id) |> string.uppercase
   let display_name = string.trim(raw_display_name)
   case is_valid_field(room_id), is_valid_field(display_name) {
     True, True -> decode.success(Join(RoomId(room_id), display_name))

@@ -92,6 +92,14 @@ pub fn decode_join_trims_surrounding_whitespace_test() {
     == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
 }
 
+pub fn decode_join_normalizes_room_id_case_test() {
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"abCD\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
+}
+
 pub fn decode_join_display_name_over_max_length_test() {
   let too_long = string.repeat("a", 65)
   let json =
