@@ -88,9 +88,9 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   assert process.receive(bob_session, 100) == Ok(room.BuzzAccepted(carol, 3))
 
   let expected_order = [
-    room.BuzzResult(bob, 1),
-    room.BuzzResult(alice, 2),
-    room.BuzzResult(carol, 3),
+    room.BuzzResult(bob, "Bob", 1),
+    room.BuzzResult(alice, "Alice", 2),
+    room.BuzzResult(carol, "Carol", 3),
   ]
   assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
 

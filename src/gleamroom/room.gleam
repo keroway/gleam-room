@@ -26,9 +26,12 @@ pub type Participant {
 
 /// One accepted buzz, in the order the Room actor's mailbox processed it.
 /// `position` is 1-based and assigned when the buzz is accepted, so it never
-/// changes even as later buzzes are appended.
+/// changes even as later buzzes are appended. `display_name` is a snapshot
+/// taken at accept time (per ADR 0003, buzz history outlives the
+/// participant's connection, so it cannot be re-resolved from the current
+/// participant list later — see #30).
 pub type BuzzResult {
-  BuzzResult(participant_id: ParticipantId, position: Int)
+  BuzzResult(participant_id: ParticipantId, display_name: String, position: Int)
 }
 
 pub type RoomState {
@@ -133,14 +136,14 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
 fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
     Error(Nil) -> #(state, BuzzRejected(id, BuzzerNotJoined))
-    Ok(_) ->
+    Ok(participant) ->
       case has_buzzed(state, id) {
         True -> #(state, BuzzRejected(id, AlreadyBuzzed))
         False -> {
           let position = list.length(state.buzzes) + 1
           let next =
             RoomState(..state, buzzes: [
-              BuzzResult(id, position),
+              BuzzResult(id, participant.display_name, position),
               ..state.buzzes
             ])
           #(next, BuzzAccepted(id, position))

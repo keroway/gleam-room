@@ -39,7 +39,7 @@ pub type Participant {
 }
 
 pub type BuzzResult {
-  BuzzResult(participant_id: ParticipantId, position: Int)
+  BuzzResult(participant_id: ParticipantId, display_name: String, position: Int)
 }
 
 /// A message sent from a client to the server.
@@ -197,6 +197,7 @@ fn buzz_result_to_json(buzz_result: BuzzResult) -> json.Json {
       "participant_id",
       json.string(participant_id_to_string(buzz_result.participant_id)),
     ),
+    #("display_name", json.string(buzz_result.display_name)),
     #("position", json.int(buzz_result.position)),
   ])
 }

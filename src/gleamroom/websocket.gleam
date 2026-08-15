@@ -598,6 +598,7 @@ pub fn to_wire_participant_id(
 pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
   protocol.BuzzResult(
     participant_id: to_wire_participant_id(result.participant_id),
+    display_name: result.display_name,
     position: result.position,
   )
 }
