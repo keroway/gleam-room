@@ -175,8 +175,16 @@ fn handle_message(
                     MonitoredRoom(key:, subject:),
                   )
                 // 持ち主が引けないのは想定外だが、追跡できないだけで
-                // room 自体は使えるので登録は続ける。
-                Error(Nil) -> state.monitored
+                // room 自体は使える。未登録のため #39 の RoomDown 逆引きが
+                // 効かなくなるので、後から追えるようにログだけは残す。
+                Error(Nil) -> {
+                  logging.log(
+                    logging.Warning,
+                    "subject_owner failed for started room, room not monitored: id="
+                      <> key,
+                  )
+                  state.monitored
+                }
               }
               actor.continue(
                 State(
