@@ -4,6 +4,7 @@ import gleam/list
 import gleam/otp/actor
 import gleam/string
 import gleamroom/call
+import logging
 
 /// Opaque so callers cannot construct a `ParticipantId` except through
 /// `participant_id`, keeping room state free of ad-hoc string comparisons.
@@ -374,7 +375,16 @@ fn update_sessions(
           ))
         }
         // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
-        Error(Nil) -> sessions
+        // 未登録のため #56 の切断検知が効かない参加者になるので、後から
+        // 追えるようにログだけは残す。
+        Error(Nil) -> {
+          logging.log(
+            logging.Warning,
+            "subject_owner failed for joining participant, session not monitored: participant_id="
+              <> participant_id_to_string(participant.id),
+          )
+          sessions
+        }
       }
     ParticipantLeft(id) -> {
       let key = participant_id_to_string(id)
