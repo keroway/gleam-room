@@ -158,6 +158,7 @@ pub fn index_html() -> String {
       case \"state\":
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
         reconnectAttempts = 0;
+        setConnected(true);
         participants = new Map(message.participants.map((p) => [p.id, p]));
         buzzes = message.buzzes;
         renderParticipants();
@@ -186,6 +187,23 @@ pub fn index_html() -> String {
         break;
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
+        // join_rejected/room_unavailable はソケットを閉じずに返る
+        // （websocket.gleam の with_room/JoinRejected 分岐）。実接続の
+        // close イベントを待つと再joinまで時間差ができるため、ここで
+        // 即座に \"未接続・再度join可能\" な状態へ戻す。実ソケットも
+        // 明示的に閉じ、以降そのソケットからのイベントは無視する
+        // （close は自然発火してもここでの状態は既にリセット済み）。
+        // 明示的な拒否なので自動再接続はしない（lastJoin をクリア）。
+        if (message.code === \"join_rejected\" || message.code === \"room_unavailable\") {
+          if (socket) socket.close();
+          socket = null;
+          lastJoin = null;
+          setConnected(false);
+          participants = new Map();
+          buzzes = [];
+          renderParticipants();
+          renderBuzzes();
+        }
         break;
       default:
         log(`unrecognized message: ${JSON.stringify(message)}`);
@@ -199,12 +217,12 @@ pub fn index_html() -> String {
     socket = new WebSocket(`${protocol}//${location.host}/ws`);
 
     socket.addEventListener(\"open\", () => {
-      setConnected(true);
-      // **ここでは試行回数を戻さない（#87）。** WebSocket が開いただけでは
-      // 参加できたことにならない。join が通らずサーバ側から即切断される状況では
-      // open → close が繰り返され、open ごとに 0 に戻すと上限に永久に到達せず、
+      // **ここでは setConnected(true) を呼ばない・試行回数も戻さない（#62, #87）。**
+      // WebSocket が開いただけでは join できたことにならない。UI が
+      // \"connected\" になるのはサーバから state（join成立）が届いたときのみ。
+      // join が通らずサーバ側から即切断される状況では open → close が
+      // 繰り返され、open ごとに試行回数を 0 に戻すと上限に永久に到達せず、
       // 「5 回で諦める」という約束が効かなくなる。
-      // 戻すのは join が成立したとき（サーバから state が届いたとき）。
       log(`connected, joining room ${roomId} as ${displayName}`);
       socket.send(JSON.stringify({
         type: \"join\",
