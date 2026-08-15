@@ -6,6 +6,7 @@ import gleam/httpc
 import gleam/int
 import gleam/string
 import gleamroom
+import gleamroom/call
 
 /// HTTP ルーティングを**実際にサーバを起動して**確かめる（#34）。
 ///
@@ -126,4 +127,15 @@ pub fn head_responses_have_an_empty_body_test() {
     request_with_method(head_test_port, "/health", http.Head)
   assert health_response.status == health_get_response.status
   assert health_response.body == ""
+}
+
+/// `/health` の 503 本文は `call.Failure` の3バリアントすべてを区別する
+/// （#114）。`ActorDown`/`Timeout` は README とテストが既にあったが、
+/// `call.Unknown`（文字列一致で分類できなかった例外）だけが欠けていた。
+pub fn health_failure_body_distinguishes_all_three_reasons_test() {
+  assert gleamroom.health_failure_body(call.ActorDown) == "registry down"
+  assert gleamroom.health_failure_body(call.Timeout)
+    == "registry not responding"
+  assert gleamroom.health_failure_body(call.Unknown("boom"))
+    == "registry unavailable: boom"
 }

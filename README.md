@@ -83,10 +83,13 @@ whether it is responsive:
 | answers | `200 ok rooms=<n>` |
 | process is gone | `503 registry down` |
 | alive but not answering | `503 registry not responding` |
+| call failed for an unrecognized reason | `503 registry unavailable: <detail>` |
 
-The two failure bodies differ on purpose: a dead registry means waiting on (or
-investigating) the supervisor restart, while a wedged one means looking at load
-and timeouts.
+The failure bodies differ on purpose: a dead registry means waiting on (or
+investigating) the supervisor restart, a wedged one means looking at load and
+timeouts, and the third body is what `gleamroom/call.classify` falls back to
+when the underlying exception doesn't match either known pattern — it carries
+the raw exception text so the operator isn't left guessing.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
 `gleam test`, and the client tests on every pull request and push to `main`.
