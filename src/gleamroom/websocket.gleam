@@ -273,7 +273,7 @@ fn handle_join(
         // `room.RoomEvent` is shared across every room command.
         room.ParticipantLeft(_)
         | room.LeaveRejected(_, _)
-        | room.BuzzAccepted(_, _)
+        | room.BuzzAccepted(_, _, _)
         | room.BuzzRejected(_, _)
         | room.RoundReset -> mist.continue(state)
       }
@@ -301,7 +301,7 @@ fn handle_buzz(
         ),
       )
       case event {
-        room.BuzzAccepted(id, position) -> {
+        room.BuzzAccepted(id, display_name, position) -> {
           logging.log(
             logging.Info,
             "buzz accepted: room="
@@ -313,7 +313,11 @@ fn handle_buzz(
           )
           send_server_message(
             connection,
-            protocol.BuzzAccepted(to_wire_participant_id(id), position),
+            protocol.BuzzAccepted(
+              to_wire_participant_id(id),
+              display_name,
+              position,
+            ),
           )
         }
         room.BuzzRejected(id, reason) -> {
@@ -386,7 +390,7 @@ fn handle_reset(
         | room.JoinRejected(_, _)
         | room.ParticipantLeft(_)
         | room.LeaveRejected(_, _)
-        | room.BuzzAccepted(_, _)
+        | room.BuzzAccepted(_, _, _)
         | room.BuzzRejected(_, _) -> Nil
       }
       mist.continue(state)
@@ -565,8 +569,12 @@ pub fn room_event_to_server_message(
       Some(protocol.ParticipantJoined(to_wire_participant(participant)))
     room.ParticipantLeft(id) ->
       Some(protocol.ParticipantLeft(to_wire_participant_id(id)))
-    room.BuzzAccepted(id, position) ->
-      Some(protocol.BuzzAccepted(to_wire_participant_id(id), position))
+    room.BuzzAccepted(id, display_name, position) ->
+      Some(protocol.BuzzAccepted(
+        to_wire_participant_id(id),
+        display_name,
+        position,
+      ))
     room.RoundReset -> Some(protocol.RoundReset)
     room.JoinRejected(_, _) -> None
     room.LeaveRejected(_, _) -> None
