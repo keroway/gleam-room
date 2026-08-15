@@ -15,12 +15,6 @@ erl_crash.dump
 # Claude Code: shared configuration is tracked; local state stays private.
 .claude/*
 !.claude/settings.json
-!.claude/agents/
-!.claude/commands/
-!.claude/rules/
-!.claude/hooks/
-!.claude/skills/
-!.claude/claude-security-guidance.md
 !.claude/README.md
 
 .claude/settings.local.json
