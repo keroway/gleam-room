@@ -64,9 +64,10 @@ reconnect recovers a current snapshot, not a durable event history.
 
 **Participant identity on reconnect (transient, by design):**
 
-- A `ParticipantId` is derived from the WebSocket connection's own process
-  identity (see `websocket.new_participant_id`), not from any
-  client-supplied or persisted token.
+- A `ParticipantId` is a cryptographically random, opaque token generated
+  fresh for each connection (see `websocket.new_participant_id`), not from
+  any client-supplied or persisted token, and not derived from the
+  connection's BEAM process identity.
 - A dropped connection is therefore indistinguishable, on the server, from a
   participant leaving: when the socket closes, the transport layer dispatches
   `Leave` for that connection's `ParticipantId` and the Room actor removes it
