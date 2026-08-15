@@ -113,7 +113,7 @@ may vary for the same code.
 
 | Code | Meaning |
 |---|---|
-| `invalid_message` | The payload was JSON but did not match a supported client-message shape. |
+| `invalid_message` | The payload was JSON but did not match a supported client-message shape. `room_id` and `display_name` must be non-empty and at most 64 characters (and 64 bytes) long; exceeding this limit also produces `invalid_message`. |
 | `malformed_json` | The payload was not valid JSON. |
 | `already_joined` | This connection sent `join` after it had already joined a room. |
 | `join_rejected` | The room did not accept the join request. |
