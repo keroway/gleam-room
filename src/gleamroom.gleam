@@ -108,6 +108,22 @@ pub fn start(
   |> supervisor.start
 }
 
+/// registry を外部から注入して web server だけを起動する（#142）。
+///
+/// `start` は registry の名前を呼び出しごとに内部生成するため、テストから
+/// 「停止した／無応答の registry」を差し込む手段が無い。`/health` の 503 分岐
+/// （`call.ActorDown` / `call.Timeout`）を実サーバ越しに検証するには、意図的に
+/// 壊れた `registry_subject` を渡して web server だけを直接起動する必要がある。
+pub fn start_web_only(
+  port: Int,
+  registry_subject: Subject(registry.Message),
+) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
+  handle_request(_, registry_subject)
+  |> mist.new
+  |> mist.port(port)
+  |> mist.start
+}
+
 fn handle_request(
   req: Request(Connection),
   registry_subject: Subject(registry.Message),
