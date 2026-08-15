@@ -113,8 +113,10 @@ may vary for the same code.
 
 | Code | Meaning |
 |---|---|
-| `invalid_message` | The payload was JSON but did not match a supported client-message shape. `room_id` and `display_name` must be non-empty and at most 64 characters (and 64 bytes) long; exceeding this limit also produces `invalid_message`. |
+| `invalid_message` | The payload was JSON but did not match a supported client-message shape (e.g. an unknown `type`, or a `join` missing the `room_id`/`display_name` field entirely). |
 | `malformed_json` | The payload was not valid JSON. |
+| `invalid_room_id` | A `join` request's `room_id` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. Takes priority over `invalid_display_name` when both fields are invalid. |
+| `invalid_display_name` | A `join` request's `display_name` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. |
 | `already_joined` | This connection sent `join` after it had already joined a room. |
 | `join_rejected` | The room did not accept the join request. |
 | `already_buzzed` | This participant already buzzed for the current round. |
