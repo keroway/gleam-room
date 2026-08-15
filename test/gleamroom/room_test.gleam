@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/int
 import gleam/list
+import gleam/string
 import gleamroom/room
 import gleamroom/wait
 
@@ -22,6 +23,38 @@ pub fn duplicate_join_is_rejected_and_state_is_unchanged_test() {
 
   assert next == state
   assert event == room.JoinRejected(id, room.AlreadyJoined)
+}
+
+pub fn join_with_blank_display_name_is_rejected_and_state_is_unchanged_test() {
+  let id = room.participant_id("p1")
+  let state = room.new_state()
+
+  let #(next, event) = room.apply_command(state, room.Join(id, "   "))
+
+  assert next == state
+  assert event == room.JoinRejected(id, room.InvalidDisplayName)
+}
+
+pub fn join_with_display_name_over_the_length_limit_is_rejected_test() {
+  let id = room.participant_id("p1")
+  let state = room.new_state()
+  let too_long = string.repeat("a", 65)
+
+  let #(next, event) = room.apply_command(state, room.Join(id, too_long))
+
+  assert next == state
+  assert event == room.JoinRejected(id, room.InvalidDisplayName)
+}
+
+pub fn join_with_display_name_at_the_length_limit_is_accepted_test() {
+  let id = room.participant_id("p1")
+  let state = room.new_state()
+  let at_limit = string.repeat("a", 64)
+
+  let #(next, event) = room.apply_command(state, room.Join(id, at_limit))
+
+  assert room.snapshot(next) == [room.Participant(id, at_limit)]
+  assert event == room.ParticipantJoined(room.Participant(id, at_limit))
 }
 
 pub fn leave_removes_participant_and_emits_left_test() {

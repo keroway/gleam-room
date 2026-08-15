@@ -2,6 +2,7 @@ import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/otp/actor
+import gleam/string
 import gleamroom/call
 
 /// Opaque so callers cannot construct a `ParticipantId` except through
@@ -47,6 +48,7 @@ pub type RoomCommand {
 
 pub type JoinRejectReason {
   AlreadyJoined
+  InvalidDisplayName
 }
 
 pub type LeaveRejectReason {
@@ -84,20 +86,34 @@ pub fn apply_command(
   }
 }
 
+/// Domain-level ceiling on `display_name`, independent of the WebSocket
+/// boundary's own limit in `protocol.join_decoder`. `apply_join` is the only
+/// place that constructs a `Participant`, so this is the last line of
+/// defense if a future caller (a different transport, a test) reaches it
+/// without going through the boundary's validation.
+const max_display_name_length = 64
+
 fn apply_join(
   state: RoomState,
   id: ParticipantId,
   display_name: String,
 ) -> #(RoomState, RoomEvent) {
-  case find_participant(state, id) {
-    Ok(_) -> #(state, JoinRejected(id, AlreadyJoined))
-    Error(Nil) -> {
+  case find_participant(state, id), is_valid_display_name(display_name) {
+    _, False -> #(state, JoinRejected(id, InvalidDisplayName))
+    Ok(_), True -> #(state, JoinRejected(id, AlreadyJoined))
+    Error(Nil), True -> {
       let participant = Participant(id, display_name)
       let next =
         RoomState(..state, participants: [participant, ..state.participants])
       #(next, ParticipantJoined(participant))
     }
   }
+}
+
+fn is_valid_display_name(display_name: String) -> Bool {
+  string.trim(display_name) != ""
+  && string.length(display_name) <= max_display_name_length
+  && string.byte_size(display_name) <= max_display_name_length
 }
 
 fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
