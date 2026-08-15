@@ -79,6 +79,10 @@ export function startClient() {
     latestSocket() {
       return sockets[sockets.length - 1];
     },
+    /// status 要素の接続状態（"connected"/"disconnected"）を読む。
+    connectionState() {
+      return nodes.get("status")?.dataset.state;
+    },
     /// 保留中の setTimeout をすべて発火させる（再接続待ちを進める）。
     runTimers() {
       const pending = timers;
