@@ -12,10 +12,6 @@ pub type RoomId {
   RoomId(String)
 }
 
-pub fn room_id(value: String) -> RoomId {
-  RoomId(value)
-}
-
 pub fn room_id_to_string(id: RoomId) -> String {
   let RoomId(value) = id
   value
