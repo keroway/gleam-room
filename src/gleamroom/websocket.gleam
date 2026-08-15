@@ -94,10 +94,7 @@ fn on_close(state: ConnectionState) -> Nil {
       // 判定は room actor が自分のメールボックスの中で行う。
       //
       // 切断を知っているのはこの層なので、きっかけを送るのはここでよい。
-      process.send(
-        state.registry,
-        registry.Release(handle.room_id, handle.subject),
-      )
+      release_room(state.registry, handle.room_id, handle.subject)
       Nil
     }
   }
@@ -397,6 +394,31 @@ fn handle_reset(
   }
 }
 
+/// registry へ `Release` を送る。送信前に named subject の登録先を
+/// `process.subject_owner` で確認し、registry が(再起動中などで)不在なら
+/// パニックせずログだけ残して送信をスキップする（#116）。
+///
+/// `process.send` は named subject が未登録だと `let assert` で panic する
+/// (`gleam_erlang` のドキュメントとは矛盾するが実装はそう)。registry は
+/// `RestForOne` の supervisor 配下にあり再起動中は一時的に名前が外れうるため、
+/// 無guardで呼ぶとその窓に閉じた接続が mist の接続プロセスごとクラッシュする。
+pub fn release_room(
+  registry_subject: Subject(registry.Message),
+  room_id: registry.RoomId,
+  room_subject: Subject(room.Message),
+) -> Nil {
+  case process.subject_owner(registry_subject) {
+    Ok(_pid) ->
+      process.send(registry_subject, registry.Release(room_id, room_subject))
+    Error(Nil) ->
+      logging.log(
+        logging.Warning,
+        "registry unavailable, skipping release: room="
+          <> registry.room_id_to_string(room_id),
+      )
+  }
+}
+
 /// room を引けたときだけ `next` を実行する。引けなければクライアントへ
 /// `room_unavailable` を返し、接続はそのまま維持する（#32）。
 fn with_room(
@@ -454,7 +476,7 @@ fn with_join_reply(
       // RoomHandle が無い。そのまま接続を止めると on_close から Release されず、
       // 空の room actor が registry に残り続ける（#168）。room 自身が空かを
       // 判定するので、遅延した Join が先に成立していても停止させない。
-      process.send(registry_subject, registry.Release(room_id, room_subject))
+      release_room(registry_subject, room_id, room_subject)
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
