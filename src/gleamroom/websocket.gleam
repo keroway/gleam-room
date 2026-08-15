@@ -107,9 +107,21 @@ fn handle_message(
 ) -> Next(ConnectionState, room.RoomEvent) {
   case message {
     mist.Text(text) -> handle_text(state, text, connection)
-    // Binary frames carry no protocol meaning yet; ignoring them keeps the
-    // connection alive instead of crashing.
-    mist.Binary(_data) -> mist.continue(state)
+    // Binary frames carry no protocol meaning yet. Unlike a silent ignore,
+    // this responds the same way other unrecognized input does (#47), so a
+    // client sending binary frames by mistake can tell it was rejected
+    // rather than swallowed.
+    mist.Binary(_data) -> {
+      logging.log(logging.Info, "protocol message rejected: code=binary_frame")
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(
+          "binary_frame",
+          "Binary frames are not supported.",
+        ),
+      )
+      mist.continue(state)
+    }
     mist.Custom(event) -> {
       case room_event_to_server_message(event) {
         Some(server_message) -> send_server_message(connection, server_message)
