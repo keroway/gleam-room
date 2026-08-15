@@ -28,6 +28,10 @@ jobs:
           gleam-version: "latest"
           rebar3-version: "3"
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+
       - name: Check formatting
         run: gleam format --check src test
 
@@ -41,6 +45,6 @@ jobs:
       # docs/mvp.md の MVP 必須機能 "Basic reconnect handling" は Gleam 側からは
       # 検証できないため、Node 標準のテストランナーで駆動する。
       # **新しい依存は入れていない**（package.json も node_modules も無い）。
-      # ubuntu-latest には node が入っているので setup-node も要らない。
+      # Node のバージョンは setup-node で固定する（#108）。
       - name: Test (client JS)
         run: node --test 'test/client/*.test.mjs'
