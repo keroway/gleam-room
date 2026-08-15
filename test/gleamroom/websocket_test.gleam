@@ -1,5 +1,7 @@
+import gleam/erlang/process
 import gleam/option.{None, Some}
 import gleamroom/protocol
+import gleamroom/registry
 import gleamroom/room
 import gleamroom/websocket
 
@@ -78,4 +80,27 @@ pub fn to_wire_buzz_result_test() {
 
   assert websocket.to_wire_buzz_result(result)
     == protocol.BuzzResult(protocol.participant_id("p1"), 3)
+}
+
+pub fn release_room_sends_release_when_registry_is_reachable_test() {
+  let registry_subject = process.new_subject()
+  let room_subject = process.new_subject()
+  let room_id = registry.room_id("room-1")
+
+  websocket.release_room(registry_subject, room_id, room_subject)
+
+  let assert Ok(received) = process.receive(registry_subject, 100)
+  assert received == registry.Release(room_id, room_subject)
+}
+
+/// registry の named subject が(再起動中などで)未登録でも panic しないこと（#116）。
+/// 以前は `process.send` を無guardで呼んでおり、named subject 未登録時に
+/// `let assert` で panic して mist の接続プロセスごとクラッシュしていた。
+pub fn release_room_does_not_panic_when_registry_is_unregistered_test() {
+  let name = process.new_name("gleamroom_release_room_test")
+  let registry_subject = process.named_subject(name)
+  let room_subject = process.new_subject()
+  let room_id = registry.room_id("room-2")
+
+  websocket.release_room(registry_subject, room_id, room_subject)
 }
