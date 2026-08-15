@@ -151,13 +151,7 @@ fn handle_request(
             Error(reason) ->
               response.new(503)
               |> response.set_body(
-                mist.Bytes(
-                  bytes_tree.from_string(case reason {
-                    call.ActorDown -> "registry down"
-                    call.Timeout -> "registry not responding"
-                    call.Unknown(detail) -> "registry unavailable: " <> detail
-                  }),
-                ),
+                mist.Bytes(bytes_tree.from_string(health_failure_body(reason))),
               )
           }
           |> empty_body_for_head(req.method)
@@ -169,6 +163,20 @@ fn handle_request(
     _ ->
       response.new(404)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
+  }
+}
+
+/// `/health` が 503 を返すときの本文（#114）。
+///
+/// `pub` にして単体テストから直接呼べるようにしている。`call.Unknown` は
+/// 生の `actor.call` 失敗をそのまま HTTP 経由で再現するのが難しいため
+/// （registry actor を意図的に想定外の例外で落とす必要がある）、実サーバ越しの
+/// ルーティングテストではなくこの純粋関数を直接検証する。
+pub fn health_failure_body(reason: call.Failure) -> String {
+  case reason {
+    call.ActorDown -> "registry down"
+    call.Timeout -> "registry not responding"
+    call.Unknown(detail) -> "registry unavailable: " <> detail
   }
 }
 
