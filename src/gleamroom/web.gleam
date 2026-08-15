@@ -42,8 +42,8 @@ pub fn index_html() -> String {
 
 <form id=\"join-form\">
   <fieldset>
-    <label>Room <input id=\"room-id\" required autocomplete=\"off\" placeholder=\"ABCD\"></label>
-    <label>Name <input id=\"display-name\" required autocomplete=\"off\" placeholder=\"Alice\"></label>
+    <label>Room <input id=\"room-id\" required autocomplete=\"off\" placeholder=\"ABCD\" maxlength=\"64\"></label>
+    <label>Name <input id=\"display-name\" required autocomplete=\"off\" placeholder=\"Alice\" maxlength=\"64\"></label>
     <button type=\"submit\" id=\"join\">Join</button>
     <span id=\"status\" data-state=\"disconnected\">disconnected</span>
   </fieldset>
