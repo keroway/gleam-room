@@ -6,7 +6,6 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import gleam/result
 import gleam/string
 import gleamroom/protocol
 import gleamroom/registry
@@ -208,9 +207,34 @@ fn handle_join(
           )
           // snapshot が取れないときは空として扱う。join 自体は成立して
           // いるので、接続を落とすより「まだ誰も見えない」状態で続けるほうがよい。
-          let snapshot = result.unwrap(room.get_snapshot(room_subject), [])
-          let buzz_snapshot =
-            result.unwrap(room.get_buzz_snapshot(room_subject), [])
+          // ただし無警告だと「本当に room が空」なのか「取得だけタイムアウトした」
+          // のか区別できなくなるため、フォールバック時は必ず warning を残す（#65）。
+          let snapshot = case room.get_snapshot(room_subject) {
+            Ok(participants) -> participants
+            Error(Nil) -> {
+              logging.log(
+                logging.Warning,
+                "get_snapshot timed out after join, returning empty participants: room="
+                  <> registry.room_id_to_string(room_id)
+                  <> ", participant="
+                  <> room.participant_id_to_string(participant.id),
+              )
+              []
+            }
+          }
+          let buzz_snapshot = case room.get_buzz_snapshot(room_subject) {
+            Ok(buzzes) -> buzzes
+            Error(Nil) -> {
+              logging.log(
+                logging.Warning,
+                "get_buzz_snapshot timed out after join, returning empty buzzes: room="
+                  <> registry.room_id_to_string(room_id)
+                  <> ", participant="
+                  <> room.participant_id_to_string(participant.id),
+              )
+              []
+            }
+          }
           send_server_message(
             connection,
             protocol.State(
