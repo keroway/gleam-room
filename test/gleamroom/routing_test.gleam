@@ -120,6 +120,14 @@ pub fn routing_serves_the_expected_paths_test() {
     request_with_method(test_port, "/health", http.Delete)
   assert health_response.status == 405
   assert response.get_header(health_response, "allow") == Ok("GET, HEAD")
+
+  // `/ws` も GET 以外は 405（#176）。以前は `websocket.upgrade` へ
+  // メソッド検証なしで丸投げしており、必要なヘッダさえ揃えば POST/DELETE
+  // でも WebSocket アップグレードが成立しうる状態だった（RFC 6455 §4.1
+  // はハンドシェイクを GET に限定している）。
+  let assert Ok(ws_response) = request_with_method(test_port, "/ws", http.Post)
+  assert ws_response.status == 405
+  assert response.get_header(ws_response, "allow") == Ok("GET")
 }
 
 pub fn head_responses_have_an_empty_body_test() {

@@ -174,7 +174,11 @@ fn handle_request(
         _ -> method_not_allowed(["GET", "HEAD"])
       }
 
-    ["ws"] -> websocket.upgrade(req, registry_subject)
+    ["ws"] ->
+      case req.method {
+        Get -> websocket.upgrade(req, registry_subject)
+        _ -> method_not_allowed(["GET"])
+      }
 
     _ ->
       response.new(404)
