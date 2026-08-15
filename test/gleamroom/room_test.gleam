@@ -162,9 +162,9 @@ pub fn buzz_order_matches_acceptance_order_test() {
   let #(state, alice_event) = room.apply_command(state, room.Buzz(alice))
   let #(state, carol_event) = room.apply_command(state, room.Buzz(carol))
 
-  assert bob_event == room.BuzzAccepted(bob, 1)
-  assert alice_event == room.BuzzAccepted(alice, 2)
-  assert carol_event == room.BuzzAccepted(carol, 3)
+  assert bob_event == room.BuzzAccepted(bob, "Bob", 1)
+  assert alice_event == room.BuzzAccepted(alice, "Alice", 2)
+  assert carol_event == room.BuzzAccepted(carol, "Carol", 3)
   assert room.buzz_snapshot(state)
     == [
       room.BuzzResult(bob, "Bob", 1),
@@ -205,7 +205,7 @@ pub fn reset_round_clears_buzzes_and_permits_rebuzz_test() {
   assert room.buzz_snapshot(reset_state) == []
 
   let #(_, rebuzz_event) = room.apply_command(reset_state, room.Buzz(id))
-  assert rebuzz_event == room.BuzzAccepted(id, 1)
+  assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1)
 }
 
 pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
@@ -222,8 +222,9 @@ pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
 
   let assert Ok(event) = room.dispatch(subject, room.Buzz(bob), bob_session)
 
-  assert event == room.BuzzAccepted(bob, 1)
-  assert process.receive(alice_session, 100) == Ok(room.BuzzAccepted(bob, 1))
+  assert event == room.BuzzAccepted(bob, "Bob", 1)
+  assert process.receive(alice_session, 100)
+    == Ok(room.BuzzAccepted(bob, "Bob", 1))
   assert process.receive(bob_session, 100) == Error(Nil)
 }
 
@@ -527,7 +528,7 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   let positions =
     accepted
     |> list.map(fn(reported) {
-      let assert room.BuzzAccepted(_, position) = reported.0
+      let assert room.BuzzAccepted(_, _, position) = reported.0
       position
     })
     |> list.sort(int.compare)
@@ -543,7 +544,7 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   let reported =
     accepted
     |> list.map(fn(reported) {
-      let assert room.BuzzAccepted(id, position) = reported.0
+      let assert room.BuzzAccepted(id, _, position) = reported.0
       room.BuzzResult(id, reported.1, position)
     })
     |> list.sort(fn(a, b) { int.compare(a.position, b.position) })

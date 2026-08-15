@@ -73,19 +73,25 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   // 4 & 5. Clients buzz in the accepted order B, A, C; all clients observe
   // the identical ordering.
   assert room.dispatch(room_subject, room.Buzz(bob), bob_session)
-    == Ok(room.BuzzAccepted(bob, 1))
-  assert process.receive(alice_session, 100) == Ok(room.BuzzAccepted(bob, 1))
-  assert process.receive(carol_session, 100) == Ok(room.BuzzAccepted(bob, 1))
+    == Ok(room.BuzzAccepted(bob, "Bob", 1))
+  assert process.receive(alice_session, 100)
+    == Ok(room.BuzzAccepted(bob, "Bob", 1))
+  assert process.receive(carol_session, 100)
+    == Ok(room.BuzzAccepted(bob, "Bob", 1))
 
   assert room.dispatch(room_subject, room.Buzz(alice), alice_session)
-    == Ok(room.BuzzAccepted(alice, 2))
-  assert process.receive(bob_session, 100) == Ok(room.BuzzAccepted(alice, 2))
-  assert process.receive(carol_session, 100) == Ok(room.BuzzAccepted(alice, 2))
+    == Ok(room.BuzzAccepted(alice, "Alice", 2))
+  assert process.receive(bob_session, 100)
+    == Ok(room.BuzzAccepted(alice, "Alice", 2))
+  assert process.receive(carol_session, 100)
+    == Ok(room.BuzzAccepted(alice, "Alice", 2))
 
   assert room.dispatch(room_subject, room.Buzz(carol), carol_session)
-    == Ok(room.BuzzAccepted(carol, 3))
-  assert process.receive(alice_session, 100) == Ok(room.BuzzAccepted(carol, 3))
-  assert process.receive(bob_session, 100) == Ok(room.BuzzAccepted(carol, 3))
+    == Ok(room.BuzzAccepted(carol, "Carol", 3))
+  assert process.receive(alice_session, 100)
+    == Ok(room.BuzzAccepted(carol, "Carol", 3))
+  assert process.receive(bob_session, 100)
+    == Ok(room.BuzzAccepted(carol, "Carol", 3))
 
   let expected_order = [
     room.BuzzResult(bob, "Bob", 1),

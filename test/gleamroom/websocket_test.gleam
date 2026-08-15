@@ -29,9 +29,10 @@ pub fn room_event_to_server_message_participant_left_test() {
 pub fn room_event_to_server_message_buzz_accepted_test() {
   assert websocket.room_event_to_server_message(room.BuzzAccepted(
       room.participant_id("p1"),
+      "Alice",
       1,
     ))
-    == Some(protocol.BuzzAccepted(protocol.participant_id("p1"), 1))
+    == Some(protocol.BuzzAccepted(protocol.participant_id("p1"), "Alice", 1))
 }
 
 pub fn room_event_to_server_message_round_reset_test() {

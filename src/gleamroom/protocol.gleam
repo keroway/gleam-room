@@ -54,7 +54,11 @@ pub type ServerMessage {
   State(participants: List(Participant), buzzes: List(BuzzResult))
   ParticipantJoined(participant: Participant)
   ParticipantLeft(participant_id: ParticipantId)
-  BuzzAccepted(participant_id: ParticipantId, position: Int)
+  BuzzAccepted(
+    participant_id: ParticipantId,
+    display_name: String,
+    position: Int,
+  )
   RoundReset
   ProtocolErrorMessage(code: String, message: String)
 }
@@ -165,13 +169,14 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
           json.string(participant_id_to_string(left_participant_id)),
         ),
       ])
-    BuzzAccepted(accepted_participant_id, position) ->
+    BuzzAccepted(accepted_participant_id, display_name, position) ->
       json.object([
         #("type", json.string("buzz_accepted")),
         #(
           "participant_id",
           json.string(participant_id_to_string(accepted_participant_id)),
         ),
+        #("display_name", json.string(display_name)),
         #("position", json.int(position)),
       ])
     RoundReset -> json.object([#("type", json.string("round_reset"))])

@@ -69,7 +69,7 @@ pub type RoomEvent {
   JoinRejected(id: ParticipantId, reason: JoinRejectReason)
   ParticipantLeft(ParticipantId)
   LeaveRejected(id: ParticipantId, reason: LeaveRejectReason)
-  BuzzAccepted(id: ParticipantId, position: Int)
+  BuzzAccepted(id: ParticipantId, display_name: String, position: Int)
   BuzzRejected(id: ParticipantId, reason: BuzzRejectReason)
   RoundReset
 }
@@ -147,7 +147,7 @@ fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
               BuzzResult(id, participant.display_name, position),
               ..state.buzzes
             ])
-          #(next, BuzzAccepted(id, position))
+          #(next, BuzzAccepted(id, participant.display_name, position))
         }
       }
   }
@@ -402,7 +402,7 @@ fn update_sessions(
     }
     JoinRejected(_, _)
     | LeaveRejected(_, _)
-    | BuzzAccepted(_, _)
+    | BuzzAccepted(_, _, _)
     | BuzzRejected(_, _)
     | RoundReset -> sessions
   }
@@ -434,7 +434,7 @@ fn update_subscribers(
       dict.delete(subscribers, participant_id_to_string(id))
     JoinRejected(_, _)
     | LeaveRejected(_, _)
-    | BuzzAccepted(_, _)
+    | BuzzAccepted(_, _, _)
     | BuzzRejected(_, _)
     | RoundReset -> subscribers
   }
@@ -452,7 +452,7 @@ fn broadcast(
   case event {
     ParticipantJoined(_)
     | ParticipantLeft(_)
-    | BuzzAccepted(_, _)
+    | BuzzAccepted(_, _, _)
     | RoundReset ->
       subscribers
       |> dict.to_list

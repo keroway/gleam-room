@@ -208,10 +208,10 @@ pub fn encode_participant_left_test() {
 }
 
 pub fn encode_buzz_accepted_test() {
-  let message = BuzzAccepted(ParticipantId("p1"), 1)
+  let message = BuzzAccepted(ParticipantId("p1"), "Alice", 1)
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"buzz_accepted\",\"participant_id\":\"p1\",\"position\":1}"
+    == "{\"type\":\"buzz_accepted\",\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}"
 }
 
 pub fn encode_round_reset_test() {
