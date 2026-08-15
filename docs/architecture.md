@@ -126,16 +126,18 @@ The MVP does not promise geographically fair competitive timing. Network latency
 
 ## Supervision and lifecycle
 
-The intended BEAM model is:
+The actual BEAM model, matching `RestForOne` add order in `gleamroom.gleam`:
 
 ```text
-Application supervisor
+Application supervisor (RestForOne)
   |
-  +-- Web server
   +-- Room registry
-       |
-       +-- active room processes (directly or via an appropriate dynamic lifecycle mechanism)
+  +-- Web server
 ```
+
+Child order under `RestForOne` is the dependency order: the web server depends on the registry, not the reverse, so the registry is added first. If the registry crashes, the web server is restarted alongside it to avoid holding stale name resolution.
+
+Active room processes are not supervised children of the registry. The registry starts each room actor directly (linking to it) and traps its exit signal, then removes the dead entry from its own state; a new room actor is only started lazily on the next lookup. This means room crashes are not automatically restarted by the supervision tree — recovery is registry-driven and deferred.
 
 Exact supervision mechanics should follow the capabilities and idioms of the selected Gleam/OTP packages rather than forcing an abstraction before implementation.
 
