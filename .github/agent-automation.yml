@@ -12,7 +12,5 @@ allow_merge: true
 # 以前あった `interval: 30m` は**どのコードからも読まれていなかった**ため外した
 # (keroway/agent-assets#184)。実行間隔はここでは決まらない: 横断ループの
 # ペースは Claude の利用枠の残量から、cron の起動間隔は launchd の設定から決まる。
-#
-
-# codex 実装許可
-allow_codex_implementation: true
+# 同じ理由で `allow_codex_implementation` も外した(#191)。読む側の実装が
+# 用意された時点で改めて追記する。
