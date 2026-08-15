@@ -560,9 +560,19 @@ fn send_server_message(
   connection: WebsocketConnection,
   message: protocol.ServerMessage,
 ) -> Nil {
-  let _ =
+  case
     mist.send_text_frame(connection, protocol.encode_server_message(message))
-  Nil
+  {
+    Ok(Nil) -> Nil
+    Error(reason) ->
+      logging.log(
+        logging.Warning,
+        "server message send failed: reason="
+          <> string.inspect(reason)
+          <> " "
+          <> connection_tag(),
+      )
+  }
 }
 
 /// Translates a `RoomEvent` broadcast from the Room actor into the wire
