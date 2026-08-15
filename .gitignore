@@ -9,11 +9,6 @@ erl_crash.dump
 .idea/
 .vscode/
 
-# Local environment
-.env
-.env.*
-!.env.example
-
 # Logs
 *.log
 
