@@ -261,7 +261,10 @@ pub fn index_html() -> String {
 
     const roomId = roomInput.value.trim();
     const displayName = nameInput.value.trim();
-    if (!roomId || !displayName) return;
+    if (!roomId || !displayName) {
+      log(\"room ID と display name を入力してください\");
+      return;
+    }
 
     cancelReconnect();
     lastJoin = { roomId, displayName };

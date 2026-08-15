@@ -61,6 +61,28 @@ for (const code of ["join_rejected", "room_unavailable"]) {
   });
 }
 
+// 空白のみの入力で無音 no-op になる問題の回帰テスト（#123）。
+for (const [roomId, displayName] of [
+  [" ", "N"],
+  ["R", " "],
+  ["", ""],
+]) {
+  test(`room ID/display name が空白のみだと接続を試みずログに理由を出す (roomId=${JSON.stringify(roomId)}, displayName=${JSON.stringify(displayName)})`, () => {
+    const client = startClient();
+    try {
+      client.submitJoin(roomId, displayName);
+
+      assert.equal(client.sockets.length, 0, "空白のみの入力で接続を試みてはいけない");
+      assert.ok(
+        client.logs.some((line) => line.includes("入力してください")),
+        "理由がログに出ていない",
+      );
+    } finally {
+      client.dispose();
+    }
+  });
+}
+
 test("not_joined のような join 以外のエラーは接続状態を変えない", () => {
   const client = startClient();
   try {
