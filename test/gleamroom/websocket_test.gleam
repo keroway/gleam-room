@@ -76,10 +76,10 @@ pub fn to_wire_participant_id_test() {
 }
 
 pub fn to_wire_buzz_result_test() {
-  let result = room.BuzzResult(room.participant_id("p1"), 3)
+  let result = room.BuzzResult(room.participant_id("p1"), "Alice", 3)
 
   assert websocket.to_wire_buzz_result(result)
-    == protocol.BuzzResult(protocol.participant_id("p1"), 3)
+    == protocol.BuzzResult(protocol.participant_id("p1"), "Alice", 3)
 }
 
 pub fn release_room_sends_release_when_registry_is_reachable_test() {

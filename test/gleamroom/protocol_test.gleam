@@ -186,11 +186,11 @@ pub fn decode_malformed_json_test() {
 pub fn encode_state_test() {
   let message =
     State(participants: [Participant(ParticipantId("p1"), "Alice")], buzzes: [
-      BuzzResult(ParticipantId("p1"), 1),
+      BuzzResult(ParticipantId("p1"), "Alice", 1),
     ])
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"participants\":[{\"id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"participants\":[{\"id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
 }
 
 pub fn encode_participant_joined_test() {

@@ -167,9 +167,9 @@ pub fn buzz_order_matches_acceptance_order_test() {
   assert carol_event == room.BuzzAccepted(carol, 3)
   assert room.buzz_snapshot(state)
     == [
-      room.BuzzResult(bob, 1),
-      room.BuzzResult(alice, 2),
-      room.BuzzResult(carol, 3),
+      room.BuzzResult(bob, "Bob", 1),
+      room.BuzzResult(alice, "Alice", 2),
+      room.BuzzResult(carol, "Carol", 3),
     ]
 }
 
@@ -302,7 +302,8 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // reflects only the reconnected participant.
   assert room.get_snapshot(subject)
     == Ok([room.Participant(alice_new, "Alice")])
-  assert room.get_buzz_snapshot(subject) == Ok([room.BuzzResult(alice_old, 1)])
+  assert room.get_buzz_snapshot(subject)
+    == Ok([room.BuzzResult(alice_old, "Alice", 1)])
 }
 
 pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() {
@@ -346,7 +347,8 @@ pub fn independent_room_actors_do_not_share_buzz_state_test() {
 
   let assert Ok(_) = room.dispatch(room_a.data, room.Buzz(id), session)
 
-  assert room.get_buzz_snapshot(room_a.data) == Ok([room.BuzzResult(id, 1)])
+  assert room.get_buzz_snapshot(room_a.data)
+    == Ok([room.BuzzResult(id, "Alice", 1)])
   assert room.get_buzz_snapshot(room_b.data) == Ok([])
 }
 
@@ -512,10 +514,11 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
     process.spawn_unlinked(fn() {
       let session = process.new_subject()
       let id = room.participant_id("p" <> int.to_string(n))
+      let display_name = "P" <> int.to_string(n)
       let assert Ok(_) =
-        room.dispatch(subject, room.Join(id, "P" <> int.to_string(n)), session)
+        room.dispatch(subject, room.Join(id, display_name), session)
       let assert Ok(event) = room.dispatch(subject, room.Buzz(id), session)
-      process.send(results, event)
+      process.send(results, #(event, display_name))
       process.sleep(3000)
     })
   })
@@ -523,8 +526,8 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   let accepted = collect_buzz_events(results, count, [])
   let positions =
     accepted
-    |> list.map(fn(event) {
-      let assert room.BuzzAccepted(_, position) = event
+    |> list.map(fn(reported) {
+      let assert room.BuzzAccepted(_, position) = reported.0
       position
     })
     |> list.sort(int.compare)
@@ -539,9 +542,9 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
 
   let reported =
     accepted
-    |> list.map(fn(event) {
-      let assert room.BuzzAccepted(id, position) = event
-      room.BuzzResult(id, position)
+    |> list.map(fn(reported) {
+      let assert room.BuzzAccepted(id, position) = reported.0
+      room.BuzzResult(id, reported.1, position)
     })
     |> list.sort(fn(a, b) { int.compare(a.position, b.position) })
   assert reported == snapshot
@@ -550,10 +553,10 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
 /// 期待件数だけ結果を集める。件数が揃わなければ待ち続けず落とす
 /// （黙って少ない件数で assert すると、取りこぼしを「成功」と読み違える）。
 fn collect_buzz_events(
-  results: process.Subject(room.RoomEvent),
+  results: process.Subject(#(room.RoomEvent, String)),
   remaining: Int,
-  acc: List(room.RoomEvent),
-) -> List(room.RoomEvent) {
+  acc: List(#(room.RoomEvent, String)),
+) -> List(#(room.RoomEvent, String)) {
   case remaining {
     0 -> acc
     _ ->
