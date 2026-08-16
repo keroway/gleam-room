@@ -80,6 +80,11 @@ pub type Failure {
 ///
 ///   - タイムアウト: `Message: "callee did not send reply before timeout"`
 ///   - 相手が死亡:   `Message: "callee exited: ProcessDown(...)"`
+///   - 相手が named subject 経由で既に死んでいる（呼び出し開始時点で
+///     名前解決テーブルに載っていない）:
+///     `Message: "Callee subject had no owner"`（#115）。`perform_call` は
+///     `subject_owner` を呼び出しの最初に `let assert` しており、
+///     `"callee exited"` を経由しないためこの分岐が別に必要。
 ///
 /// 文字列一致は依存先の文言変更で壊れうるので、**外れたら `Timeout` に
 /// 倒さず `Unknown` にする**。誤った断定より、生の情報を渡すほうが調査に効く。
@@ -88,7 +93,10 @@ pub fn classify(reason: exception.Exception) -> Failure {
   case string.contains(detail, "did not send reply before timeout") {
     True -> Timeout
     False ->
-      case string.contains(detail, "callee exited") {
+      case
+        string.contains(detail, "callee exited")
+        || string.contains(detail, "Callee subject had no owner")
+      {
         True -> ActorDown
         False -> Unknown(detail)
       }

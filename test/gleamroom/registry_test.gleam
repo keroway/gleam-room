@@ -354,3 +354,39 @@ pub fn health_fails_when_the_registry_is_dead_test() {
   // **ActorDown と分類される**こと。詰まっているのではなく落ちている。
   assert registry.health(reg) == Error(call.ActorDown)
 }
+
+/// named subject 経由で死んだ registry でも `ActorDown` になること（#115）。
+///
+/// 本番経路（`gleamroom.start`）が渡す `registry_subject` は
+/// `process.named_subject` 由来で、pid ベースの `Subject`（上のテストが使う
+/// `registry.start()`）とは失敗時の例外文言が異なる。`perform_call` は
+/// 呼び出し開始時に `subject_owner` を `let assert` しており、registry が
+/// 死んでいて名前解決できない場合は `"callee exited"` ではなく
+/// `"Callee subject had no owner"` で落ちる。この経路を `call.classify` が
+/// `ActorDown` として拾えなければ、`/health` は生の例外文字列を
+/// `Unknown(detail)` としてそのまま返してしまう。
+pub fn health_fails_when_the_registry_is_dead_via_named_subject_test() {
+  let name = process.new_name("registry_test_named")
+  let ready = process.new_subject()
+  // `registry.start` は起動元プロセスへ link する。テストプロセスで直接
+  // 起動して kill すると、テストプロセス自身も巻き添えで落ちる
+  // （上の `health_fails_when_the_registry_is_dead_test` と同じ理由）。
+  process.spawn_unlinked(fn() {
+    let assert Ok(_) = registry.start_named(name)
+    process.send(ready, Nil)
+    process.sleep(3000)
+  })
+  let assert Ok(Nil) = process.receive(ready, 1000)
+
+  let reg = process.named_subject(name)
+  let assert Ok(pid) = process.subject_owner(reg)
+
+  assert registry.health(reg) == Ok(0)
+
+  process.kill(pid)
+  wait.until_dead(pid, "named registry が終了する")
+
+  // **ActorDown と分類される**こと。名前解決テーブルへの再登録前でも
+  // 「詰まっている」ではなく「落ちている」として伝わる必要がある。
+  assert registry.health(reg) == Error(call.ActorDown)
+}
