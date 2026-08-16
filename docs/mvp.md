@@ -122,7 +122,7 @@ may vary for the same code.
 | `join_rejected` | The room did not accept the join request. |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `buzzer_not_joined` | This connection has not joined the room yet, so the buzz was rejected. |
-| `room_unavailable` | The requested room could not be started or did not respond in time. |
+| `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; buzz/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.
