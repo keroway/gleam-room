@@ -32,6 +32,7 @@ export function startClient() {
 
   const sockets = [];
   let timers = [];
+  let nextTimerId = 1;
 
   const sandbox = {
     document: {
@@ -43,8 +44,15 @@ export function startClient() {
       createElement: () => makeNode("created"),
     },
     location: { protocol: "http:", host: "127.0.0.1:4000" },
-    setTimeout: (fn, delay) => timers.push({ fn, delay }),
-    clearTimeout: () => {},
+    setTimeout: (fn, delay) => {
+      const id = nextTimerId;
+      nextTimerId += 1;
+      timers.push({ id, fn, delay });
+      return id;
+    },
+    clearTimeout: (id) => {
+      timers = timers.filter((timer) => timer.id !== id);
+    },
     WebSocket: class {
       constructor() {
         this.handlers = {};
