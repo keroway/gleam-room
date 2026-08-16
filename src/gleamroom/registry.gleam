@@ -1,4 +1,6 @@
 import gleam/dict.{type Dict}
+import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
 import gleam/result
@@ -54,6 +56,15 @@ pub type Message {
   /// `Lookup` を健全性確認に流用すると room を作ってしまうので、
   /// 副作用の無い読み取り専用の口を分けている。
   Health(reply_to: Subject(Int))
+  /// `trap_exits(True)` はリンクされた**全て**の相手からの exit を拾うため、
+  /// registry を起動した supervisor が shutdown で子を畳もうとした exit
+  /// （reason: `shutdown`）も room のクラッシュと区別なく届いてしまう（#117）。
+  ///
+  /// これを `RoomDown` として無視すると、registry は shutdown 要求に一切
+  /// 応答せず生き続け、supervisor は既定の shutdown タイムアウト（5秒）を
+  /// 使い切ってから brutal kill するしかなくなる。reason が `shutdown` の
+  /// 場合だけこの別メッセージにして、即座に `actor.stop()` する。
+  ParentShutdown
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -131,6 +142,25 @@ pub fn start_with_max_rooms(
   |> actor.start
 }
 
+/// trapped exit を `RoomDown`（room のクラッシュ）と `ParentShutdown`
+/// （親からの shutdown 要求）に振り分ける（#117）。
+///
+/// reason が `Abnormal` にラップされた atom `shutdown` のときだけ
+/// `ParentShutdown` とみなす。room のクラッシュ理由は通常タプル
+/// （`{badmatch, ...}` 等）で atom ではないため、`decode.run` で
+/// atom へのデコードに失敗し `RoomDown` 側に安全に落ちる。
+fn exit_to_message(exit: process.ExitMessage) -> Message {
+  let shutdown = atom.create("shutdown")
+  case exit.reason {
+    process.Abnormal(reason) ->
+      case decode.run(reason, atom.decoder()) {
+        Ok(reason_atom) if reason_atom == shutdown -> ParentShutdown
+        _ -> RoomDown(exit.pid)
+      }
+    process.Normal | process.Killed -> RoomDown(exit.pid)
+  }
+}
+
 /// room の死を Down メッセージとして受け取れる形で actor を組み立てる（#39）。
 ///
 /// `trap_exits(True)` + `select_trapped_exits` を使うのは、room の起動時に
@@ -142,7 +172,7 @@ fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
     let selector =
       process.new_selector()
       |> process.select(subject)
-      |> process.select_trapped_exits(fn(exit) { RoomDown(exit.pid) })
+      |> process.select_trapped_exits(exit_to_message)
     // link された room の死を signal ではなくメッセージとして受け取る。
     // これを外すと room のクラッシュが registry を道連れにする。
     process.trap_exits(True)
@@ -287,6 +317,12 @@ fn handle_message(
       // 副作用なし。返事が来ること自体が「registry が詰まっていない」証拠。
       process.send(reply_to, dict.size(state.rooms))
       actor.continue(state)
+    }
+    ParentShutdown -> {
+      // 親（supervisor）からの shutdown 要求。無視して生き続けると
+      // supervisor は既定の shutdown タイムアウト（5秒）を待ってから
+      // brutal kill するしかない（#117）。即座に止まって応答する。
+      actor.stop()
     }
     Release(id, subject) -> {
       let key = room_id_to_string(id)

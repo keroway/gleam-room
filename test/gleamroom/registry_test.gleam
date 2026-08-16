@@ -1,3 +1,4 @@
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/otp/actor
@@ -416,4 +417,39 @@ pub fn health_fails_when_the_registry_is_dead_via_named_subject_test() {
   // **ActorDown と分類される**こと。名前解決テーブルへの再登録前でも
   // 「詰まっている」ではなく「落ちている」として伝わる必要がある。
   assert registry.health(reg) == Error(call.ActorDown)
+}
+
+/// 親（supervisor 相当）からの `exit(RegistryPid, shutdown)` を受けた
+/// registry が、無視せず即座に自ら終了すること（#117）。
+///
+/// `static_supervisor` は子を畳むとき `exit(Child, shutdown)` を送り、
+/// 子からの応答（＝終了）を既定 5 秒待ってから brutal kill する。
+/// registry は room のクラッシュを exit signal として受けるために
+/// `trap_exits(True)` を有効にしており、以前はこの shutdown 要求も
+/// 無条件に `RoomDown` 扱いで握りつぶし、5 秒待たされていた。
+///
+/// `erlang:exit/2`（`process.send_abnormal_exit`）は実際のリンクの有無に
+/// 関わらず対象へ exit signal を送れるため、supervisor を組まなくても
+/// 同じ経路を直接再現できる。
+pub fn parent_shutdown_stops_the_registry_promptly_test() {
+  let name = process.new_name("registry_test_parent_shutdown")
+  let ready = process.new_subject()
+  // registry.start は起動元へ link するため、テストプロセスで直接起動すると
+  // 送った exit signal でテストプロセス自身も巻き添えで落ちる。
+  process.spawn_unlinked(fn() {
+    let assert Ok(_) = registry.start_named(name)
+    process.send(ready, Nil)
+    process.sleep(3000)
+  })
+  let assert Ok(Nil) = process.receive(ready, 1000)
+
+  let reg = process.named_subject(name)
+  let assert Ok(pid) = process.subject_owner(reg)
+
+  process.send_abnormal_exit(pid, atom.create("shutdown"))
+
+  // wait.until_dead の上限（2秒）は static_supervisor の既定 shutdown
+  // タイムアウト（5秒）より短い。ここで死ねば「brutal kill を待たずに
+  // 自ら終了した」ことの証拠になる。
+  wait.until_dead(pid, "shutdown要求を受けたregistryが即座に終了する")
 }
