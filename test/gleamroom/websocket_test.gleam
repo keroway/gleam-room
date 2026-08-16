@@ -151,3 +151,13 @@ pub fn origin_header_allowed_mismatched_origin_is_rejected_test() {
 pub fn origin_header_allowed_unparsable_origin_is_rejected_test() {
   assert !websocket.origin_header_allowed(Ok("not a uri"), "example.com")
 }
+
+/// 前回の tick 以降にクライアントから何も届いていなければタイムアウトと判定する（#35）。
+pub fn heartbeat_outcome_idle_times_out_test() {
+  assert websocket.heartbeat_outcome(False) == websocket.HeartbeatTimedOut
+}
+
+/// 前回の tick 以降にクライアントから何か届いていれば続行と判定する（#35）。
+pub fn heartbeat_outcome_active_continues_test() {
+  assert websocket.heartbeat_outcome(True) == websocket.HeartbeatContinues
+}
