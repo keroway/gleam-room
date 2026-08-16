@@ -108,6 +108,36 @@ pub fn start(
   |> supervisor.start
 }
 
+/// `start` の、ポートをOSに動的採番させる版（#152）。
+///
+/// テストが固定ポートを使うと、CI・開発機でそのポートが既に他プロセスに
+/// 専有されている場合に、ルーティング自体とは無関係な bind 失敗で落ちる。
+/// ポート `0` を渡すとOSが空きポートを選んで bind するため、この衝突自体が
+/// 起こらなくなる。実際に採番されたポートは mist の `after_start` フックで
+/// 受け取り、呼び出し元へ返す。
+pub fn start_on_ephemeral_port() -> Result(
+  #(Int, actor.Started(supervisor.Supervisor)),
+  actor.StartError,
+) {
+  let registry_name = process.new_name("gleamroom_registry")
+  let registry_subject = process.named_subject(registry_name)
+
+  let bound_port = process.new_subject()
+
+  supervisor.new(supervisor.RestForOne)
+  |> supervisor.restart_tolerance(intensity: 2, period: 5)
+  |> supervisor.add(
+    supervision.worker(fn() { registry.start_named(registry_name) }),
+  )
+  |> supervisor.add(mist.supervised(
+    handle_request(_, registry_subject)
+    |> mist.new
+    |> with_ephemeral_port(bound_port),
+  ))
+  |> supervisor.start
+  |> with_bound_port(bound_port)
+}
+
 /// registry を外部から注入して web server だけを起動する（#142）。
 ///
 /// `start` は registry の名前を呼び出しごとに内部生成するため、テストから
@@ -122,6 +152,50 @@ pub fn start_web_only(
   |> mist.new
   |> mist.port(port)
   |> mist.start
+}
+
+/// `start_web_only` の、ポートをOSに動的採番させる版（#152）。
+pub fn start_web_only_on_ephemeral_port(
+  registry_subject: Subject(registry.Message),
+) -> Result(#(Int, actor.Started(supervisor.Supervisor)), actor.StartError) {
+  let bound_port = process.new_subject()
+
+  handle_request(_, registry_subject)
+  |> mist.new
+  |> with_ephemeral_port(bound_port)
+  |> mist.start
+  |> with_bound_port(bound_port)
+}
+
+/// ポート `0`（OS動的採番）を割り当て、実際に採番されたポートを
+/// `bound_port` へ送るよう `after_start` を設定する。
+fn with_ephemeral_port(
+  builder: mist.Builder(a, b),
+  bound_port: Subject(Int),
+) -> mist.Builder(a, b) {
+  builder
+  |> mist.port(0)
+  |> mist.after_start(fn(port, _scheme, _ip_address) {
+    process.send(bound_port, port)
+  })
+}
+
+/// `with_ephemeral_port` が送った実ポートを `Result` へ合流させる。
+///
+/// `mist.after_start` はサーバが listen を開始した時点で同期的に呼ばれる
+/// （`supervisor.start`/`mist.start` が戻る前）ため、ここでの `receive` は
+/// 待ちぼうけにならない。
+fn with_bound_port(
+  result: Result(actor.Started(a), actor.StartError),
+  bound_port: Subject(Int),
+) -> Result(#(Int, actor.Started(a)), actor.StartError) {
+  case result {
+    Ok(started) -> {
+      let assert Ok(port) = process.receive(bound_port, 1000)
+      Ok(#(port, started))
+    }
+    Error(err) -> Error(err)
+  }
 }
 
 fn handle_request(
