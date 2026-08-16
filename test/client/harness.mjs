@@ -67,15 +67,40 @@ export function startClient() {
       timers = timers.filter((timer) => timer.id !== id);
     },
     WebSocket: class {
+      static CONNECTING = 0;
+      static OPEN = 1;
+      static CLOSING = 2;
+      static CLOSED = 3;
       constructor() {
         this.handlers = {};
+        this.readyState = this.constructor.CONNECTING;
+        this.sent = [];
         sockets.push(this);
       }
       addEventListener(type, fn) {
-        this.handlers[type] = fn;
+        // ブラウザは open/close イベント発火前に readyState を更新してから
+        // ハンドラを呼ぶ。テストは socket.handlers.open?.() 等でイベントを
+        // 直接発火させるため、その経路でも readyState が追従するようにする。
+        if (type === "open") {
+          this.handlers.open = (...args) => {
+            this.readyState = this.constructor.OPEN;
+            return fn(...args);
+          };
+        } else if (type === "close") {
+          this.handlers.close = (...args) => {
+            this.readyState = this.constructor.CLOSED;
+            return fn(...args);
+          };
+        } else {
+          this.handlers[type] = fn;
+        }
       }
-      send() {}
-      close() {}
+      send(data) {
+        this.sent.push(data);
+      }
+      close() {
+        this.readyState = this.constructor.CLOSED;
+      }
     },
   };
 
@@ -101,6 +126,10 @@ export function startClient() {
     },
     latestSocket() {
       return sockets[sockets.length - 1];
+    },
+    /// 指定した id の要素の click リスナーを発火させる。
+    click(id) {
+      listeners.get(`${id}:click`)?.();
     },
     /// status 要素の接続状態（"connected"/"disconnected"）を読む。
     connectionState() {
