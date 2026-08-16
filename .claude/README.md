@@ -48,6 +48,10 @@ Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が�
 
 - format-on-write hook: formatter の対象範囲が広がるたびに個別リポジトリの都合で
   分岐させたくないため、現時点では Stop hook の `gleam format --check` のみに留める。
-- `justfile` / lefthook: 実際の Gleam プロジェクト構成と CI を薄く委譲できる段階で追加する。
+- `justfile` / lefthook: `.github/workflows/ci.yml` と Stop hook がすでに
+  `gleam format --check` / `gleam build --warnings-as-errors` / `gleam test` /
+  client JS テストの決定的チェックを担っており、ローカル短縮コマンドを別途
+  用意する必要性が薄い。Gleam エコシステムにも lefthook 相当の広く定着した
+  慣行が無いため、現時点では見送る。
 
 codex stop review gate は、ワークスペース共通方針どおり無効のまま運用します。
