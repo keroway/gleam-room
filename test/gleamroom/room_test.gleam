@@ -433,6 +433,33 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
   )
 }
 
+/// `select_monitors` の `PortDown` 分岐が no-op であること（#147）。
+///
+/// room actor は Port を監視していないため、`PortDown` を受けても
+/// `SessionDown(process.self())` を送るだけで、`sessions` に自分の pid の
+/// エントリが無いので何も変わらない（room.gleam:269-276）。
+///
+/// 実際に Port を監視して `PortDown` を発火させる代わりに、room actor に
+/// 追跡していない pid（room 自身の pid）で `SessionDown` を直接送ることで
+/// 同じ帰結（sessions に一致するエントリが無い → 何も変わらない）を検証する。
+pub fn session_down_for_an_untracked_pid_is_a_no_op_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let assert Ok(room_pid) = process.subject_owner(subject)
+
+  let id = room.participant_id("p1")
+  let session = process.new_subject()
+  let assert Ok(_) = room.dispatch(subject, room.Join(id, "Alice"), session)
+
+  // `PortDown` 分岐が実際に送るのと同じメッセージを、追跡されていない pid
+  // （room actor 自身の pid）で直接送る。
+  process.send(subject, room.SessionDown(room_pid))
+
+  // no-op なので room は生きたままで、参加者も変わらない。
+  assert process.is_alive(room_pid)
+  assert room.get_snapshot(subject) == Ok([room.Participant(id, "Alice")])
+}
+
 /// 接続プロセスがクラッシュしても room actor が生き残ること（#69）。
 ///
 /// #56 で「接続が死んだら参加者も消える」を実装した際、`process.link` を
