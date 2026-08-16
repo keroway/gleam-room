@@ -1,6 +1,7 @@
 import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
+import gleamroom
 import gleamroom/registry
 import gleamroom/room
 import gleamroom/wait
@@ -112,4 +113,39 @@ pub fn rest_for_one_restarts_children_added_after_the_killed_child_test() {
   // **RestForOne 選択の根拠そのもの**: registry の後ろに追加した子も
   // 巻き添えで作り直されている。OneForOne ならここは変わらないはず。
   assert after_pid_before != after_pid_after
+}
+
+/// `await_supervisor_exit` が対象 pid の trapped exit を受け取ったときに
+/// `on_exit` を呼ぶこと（#189）。`erlang:halt` を直接呼ぶプロダクション経路
+/// (`halt_with_failure`) はテストプロセスごと落ちるため検証できないが、
+/// 「supervisor の exit をどう検知して何を呼ぶか」という差し替え可能な
+/// ロジック自体は `on_exit` を注入して確認できる。
+pub fn await_supervisor_exit_calls_on_exit_when_target_pid_exits_test() {
+  process.trap_exits(True)
+  let done = process.new_subject()
+  let target_pid = process.spawn(fn() { process.sleep_forever() })
+  process.kill(target_pid)
+
+  gleamroom.await_supervisor_exit(target_pid, fn() { process.send(done, Nil) })
+
+  let assert Ok(Nil) = process.receive(done, 1000)
+}
+
+/// 対象以外の pid からの exit では `on_exit` を呼ばず待ち続けること（#190）。
+/// 「未知の pid からの exit は無視する」という `await_supervisor_exit` の
+/// ドキュメントコメントが主張する再帰分岐そのものを検証する。
+pub fn await_supervisor_exit_ignores_exit_of_other_pid_test() {
+  process.trap_exits(True)
+  let done = process.new_subject()
+  let decoy_pid = process.spawn(fn() { process.sleep_forever() })
+  let target_pid = process.spawn(fn() { process.sleep_forever() })
+
+  // decoy を先に殺し、対象より前に無関係な trapped exit が届く状況を作る。
+  process.kill(decoy_pid)
+  wait.until_dead(decoy_pid, "decoy が終了する")
+  process.kill(target_pid)
+
+  gleamroom.await_supervisor_exit(target_pid, fn() { process.send(done, Nil) })
+
+  let assert Ok(Nil) = process.receive(done, 1000)
 }

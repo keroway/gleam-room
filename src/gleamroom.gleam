@@ -46,7 +46,7 @@ pub fn main() -> Nil {
   process.trap_exits(True)
 
   case start(read_port()) {
-    Ok(started) -> await_supervisor_exit(started.pid)
+    Ok(started) -> await_supervisor_exit(started.pid, halt_with_failure)
     Error(reason) -> {
       // #29 / #32 / #53 と同じ方針: 失敗を無警告でクラッシュさせず、
       // 理由をログに残してから終了する（#136）。
@@ -60,27 +60,51 @@ pub fn main() -> Nil {
 }
 
 /// supervisor（または他の何らかの理由で main にリンクされたプロセス）の
-/// exit を待ち、supervisor 自身の exit だけをログしてから戻る。
+/// exit を待ち、supervisor 自身の exit をログしてから `on_exit` を呼ぶ。
 ///
 /// 未知の pid からの exit は無視して待ち続ける。現状 main にリンクされる
 /// プロセスは supervisor だけだが、将来リンクが増えても無関係な exit で
 /// アプリ全体の終了ログを誤って出さないようにするため。
-fn await_supervisor_exit(supervisor_pid: process.Pid) -> Nil {
+///
+/// `on_exit` を引数として受け取るのは、`erlang:halt` を直接呼ぶとプロセスが
+/// 実際に終了しテストランナーごと落ちるため、テストからは差し替え可能に
+/// しておく必要があるから（#189/#190）。本番呼び出しは常に
+/// `halt_with_failure`。
+pub fn await_supervisor_exit(
+  supervisor_pid: process.Pid,
+  on_exit: fn() -> Nil,
+) -> Nil {
   let exit =
     process.new_selector()
     |> process.select_trapped_exits(fn(exit) { exit })
     |> process.selector_receive_forever()
 
   case exit.pid == supervisor_pid {
-    True ->
+    True -> {
       logging.log(
         logging.Emergency,
         "アプリ最上位 supervisor が終了したため、アプリケーションを終了します: "
           <> string.inspect(exit.reason),
       )
-    False -> await_supervisor_exit(supervisor_pid)
+      on_exit()
+    }
+    False -> await_supervisor_exit(supervisor_pid, on_exit)
   }
 }
+
+/// 非ゼロ終了コードでプロセスを終了する（#189）。
+///
+/// `main` が値を返して正常 return すると OS からの終了コードは 0 になり、
+/// `restart_tolerance` 超過で supervisor が shutdown した致命的な状況が
+/// exit code に反映されない。systemd の `Restart=on-failure` 等、exit code
+/// を再起動判定に使う運用で自動検知できるようにするため、明示的に
+/// `erlang:halt(1)` を呼ぶ。
+fn halt_with_failure() -> Nil {
+  erlang_halt(1)
+}
+
+@external(erlang, "erlang", "halt")
+fn erlang_halt(code: Int) -> Nil
 
 /// スーパービジョンツリーを起動して返す（#34）。
 ///
