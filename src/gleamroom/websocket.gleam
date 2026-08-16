@@ -338,30 +338,21 @@ fn handle_join(
           // いるので、接続を落とすより「まだ誰も見えない」状態で続けるほうがよい。
           // ただし無警告だと「本当に room が空」なのか「取得だけタイムアウトした」
           // のか区別できなくなるため、フォールバック時は必ず warning を残す（#65）。
-          let snapshot = case room.get_snapshot(room_subject) {
-            Ok(participants) -> participants
+          // participants と buzzes は 1 回の `get_state` で取得する。2 回の
+          // 独立した call だと、その間に他接続の Join/Leave/Buzz/Reset が
+          // 割り込み、取得時点がずれたスナップショットの組み合わせになりうる
+          // （#121）。
+          let #(snapshot, buzz_snapshot) = case room.get_state(room_subject) {
+            Ok(state) -> state
             Error(Nil) -> {
               logging.log(
                 logging.Warning,
-                "get_snapshot timed out after join, returning empty participants: room="
+                "get_state timed out after join, returning empty participants/buzzes: room="
                   <> registry.room_id_to_string(room_id)
                   <> ", participant="
                   <> room.participant_id_to_string(participant.id),
               )
-              []
-            }
-          }
-          let buzz_snapshot = case room.get_buzz_snapshot(room_subject) {
-            Ok(buzzes) -> buzzes
-            Error(Nil) -> {
-              logging.log(
-                logging.Warning,
-                "get_buzz_snapshot timed out after join, returning empty buzzes: room="
-                  <> registry.room_id_to_string(room_id)
-                  <> ", participant="
-                  <> room.participant_id_to_string(participant.id),
-              )
-              []
+              #([], [])
             }
           }
           send_server_message(
