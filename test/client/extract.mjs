@@ -9,16 +9,32 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
-export function extractClientScript() {
+function extractIndexHtml() {
   const source = fs.readFileSync(path.join(repoRoot, "src/gleamroom/web.gleam"), "utf8");
   const literal = /pub fn index_html\(\) -> String \{\s*"([\s\S]*)"\s*\}\s*$/.exec(source);
   if (!literal) {
     throw new Error("index_html() の文字列リテラルを取り出せませんでした（web.gleam の形が変わった可能性）");
   }
-  const html = literal[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  return literal[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+export function extractClientScript() {
+  const html = extractIndexHtml();
   const script = /<script>([\s\S]*?)<\/script>/.exec(html);
   if (!script) {
     throw new Error("<script> ブロックが見つかりませんでした");
   }
   return script[1];
+}
+
+/// `index_html()` の HTML 内に実在する要素 id の集合を返す。
+/// harness.mjs の DOM スタブが、JS 側の getElementById 呼び出しと
+/// HTML 側の id 定義との不一致を検知するために使う。
+export function extractElementIds() {
+  const html = extractIndexHtml();
+  const ids = new Set();
+  for (const match of html.matchAll(/\sid="([^"]+)"/g)) {
+    ids.add(match[1]);
+  }
+  return ids;
 }
