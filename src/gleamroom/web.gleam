@@ -112,10 +112,15 @@ pub fn index_html() -> String {
     }, RECONNECT_DELAY_MS);
   }
 
+  const MAX_LOG_ENTRIES = 200;
+
   function log(line) {
     const entry = document.createElement(\"div\");
     entry.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
     logEl.append(entry);
+    while (logEl.children.length > MAX_LOG_ENTRIES) {
+      logEl.firstElementChild.remove();
+    }
     logEl.scrollTop = logEl.scrollHeight;
   }
 

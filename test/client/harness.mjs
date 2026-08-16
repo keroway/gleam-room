@@ -11,24 +11,37 @@ export function startClient() {
   const listeners = new Map();
   const logs = [];
 
-  const makeNode = (id) => ({
-    id,
-    value: "",
-    textContent: "",
-    innerHTML: "",
-    disabled: false,
-    dataset: {},
-    classList: { add() {}, remove() {}, toggle() {} },
-    appendChild() {},
-    append(child) {
-      if (child && typeof child.textContent === "string") logs.push(child.textContent);
-    },
-    remove() {},
-    replaceChildren() {},
-    addEventListener(type, fn) {
-      listeners.set(`${id}:${type}`, fn);
-    },
-  });
+  const makeNode = (id) => {
+    const children = [];
+    return {
+      id,
+      value: "",
+      textContent: "",
+      innerHTML: "",
+      disabled: false,
+      dataset: {},
+      children,
+      get firstElementChild() {
+        return children[0] ?? null;
+      },
+      classList: { add() {}, remove() {}, toggle() {} },
+      appendChild() {},
+      append(child) {
+        if (!child) return;
+        children.push(child);
+        child.remove = () => {
+          const index = children.indexOf(child);
+          if (index !== -1) children.splice(index, 1);
+        };
+        if (typeof child.textContent === "string") logs.push(child.textContent);
+      },
+      remove() {},
+      replaceChildren() {},
+      addEventListener(type, fn) {
+        listeners.set(`${id}:${type}`, fn);
+      },
+    };
+  };
 
   const sockets = [];
   let timers = [];
@@ -92,6 +105,10 @@ export function startClient() {
     /// status 要素の接続状態（"connected"/"disconnected"）を読む。
     connectionState() {
       return nodes.get("status")?.dataset.state;
+    },
+    /// #log 要素が保持している子要素（ログ行）の件数。
+    logEntryCount() {
+      return nodes.get("log")?.children.length ?? 0;
     },
     /// 保留中の setTimeout をすべて発火させる（再接続待ちを進める）。
     /// 実ブラウザの相対順序に合わせ、delay の昇順（同値は登録順）で発火する。
