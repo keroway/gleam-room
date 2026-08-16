@@ -26,8 +26,29 @@ import mist.{
 /// messages. It intentionally does not decide buzzer ordering or any other
 /// room-domain rule.
 type ConnectionState {
-  ConnectionState(registry: Subject(registry.Message), room: Option(RoomHandle))
+  ConnectionState(
+    registry: Subject(registry.Message),
+    room: Option(RoomHandle),
+    heartbeat_subject: Subject(ConnectionEvent),
+    // クライアントから何か受け取るたびに True へ戻す（#35）。ハートビート
+    // tick 到達時に False のままなら、この tick 区間まるごと無音だったと
+    // 判断して接続を閉じる。
+    active_since_heartbeat: Bool,
+  )
 }
+
+/// 接続プロセスが `Selector` 経由で受け取りうるメッセージ全体。room actor
+/// からのブロードキャストと、アイドルタイムアウト検知用の自己送信タイマー
+/// tick を同じ selector に載せるための wrapper（#35）。
+pub type ConnectionEvent {
+  RoomBroadcast(room.RoomEvent)
+  HeartbeatTick
+}
+
+/// tick の間隔であり、かつ検知できる最短のアイドル時間でもある。前回の
+/// tick 以降に一度もクライアントからフレームが届かなければ次の tick で
+/// 閉じるため、実際に閉じるまでの猶予は 1〜2 回分(30〜60秒)になる。
+const heartbeat_interval_ms = 30_000
 
 type RoomHandle {
   RoomHandle(
@@ -94,9 +115,20 @@ pub fn origin_header_allowed(
 
 fn on_init(
   registry_subject: Subject(registry.Message),
-) -> #(ConnectionState, Option(Selector(room.RoomEvent))) {
+) -> #(ConnectionState, Option(Selector(ConnectionEvent))) {
   logging.log(logging.Info, "websocket connection opened: " <> connection_tag())
-  #(ConnectionState(registry: registry_subject, room: None), None)
+  let heartbeat_subject = process.new_subject()
+  process.send_after(heartbeat_subject, heartbeat_interval_ms, HeartbeatTick)
+  let selector = process.new_selector() |> process.select(heartbeat_subject)
+  #(
+    ConnectionState(
+      registry: registry_subject,
+      room: None,
+      heartbeat_subject: heartbeat_subject,
+      active_since_heartbeat: True,
+    ),
+    Some(selector),
+  )
 }
 
 fn on_close(state: ConnectionState) -> Nil {
@@ -144,11 +176,11 @@ fn on_close(state: ConnectionState) -> Nil {
 
 fn handle_message(
   state: ConnectionState,
-  message: WebsocketMessage(room.RoomEvent),
+  message: WebsocketMessage(ConnectionEvent),
   connection: WebsocketConnection,
-) -> Next(ConnectionState, room.RoomEvent) {
+) -> Next(ConnectionState, ConnectionEvent) {
   case message {
-    mist.Text(text) -> handle_text(state, text, connection)
+    mist.Text(text) -> handle_text(mark_active(state), text, connection)
     // Binary frames carry no protocol meaning yet. Unlike a silent ignore,
     // this responds the same way other unrecognized input does (#47), so a
     // client sending binary frames by mistake can tell it was rejected
@@ -162,17 +194,63 @@ fn handle_message(
           "Binary frames are not supported.",
         ),
       )
-      mist.continue(state)
+      mist.continue(mark_active(state))
     }
-    mist.Custom(event) -> {
+    mist.Custom(RoomBroadcast(event)) -> {
       case room_event_to_server_message(event) {
         Some(server_message) -> send_server_message(connection, server_message)
         None -> Nil
       }
       mist.continue(state)
     }
+    mist.Custom(HeartbeatTick) -> handle_heartbeat_tick(state)
     mist.Closed -> mist.stop()
     mist.Shutdown -> mist.stop()
+  }
+}
+
+/// クライアントから届いたフレームを「生きている」印として記録する（#35）。
+fn mark_active(state: ConnectionState) -> ConnectionState {
+  ConnectionState(..state, active_since_heartbeat: True)
+}
+
+/// ハートビート tick 到達時の判定結果。
+pub type HeartbeatOutcome {
+  /// 前回の tick 以降、クライアントから何も届かなかった。接続を閉じる。
+  HeartbeatTimedOut
+  /// 生存を確認できた。次回判定に備えて `active_since_heartbeat` をリセットして続行する。
+  HeartbeatContinues
+}
+
+/// アイドルタイムアウトの判定本体（#35）。`ConnectionState`/`WebsocketConnection`
+/// に依存しない形へ切り出したのは、ライブな接続なしでユニットテストできる
+/// ようにするため（このモジュールの他の "Pure and ... testable" 関数と同様の方針）。
+pub fn heartbeat_outcome(active_since_heartbeat: Bool) -> HeartbeatOutcome {
+  case active_since_heartbeat {
+    False -> HeartbeatTimedOut
+    True -> HeartbeatContinues
+  }
+}
+
+/// `heartbeat_outcome` の判定を実行に反映する。`mist.stop()` は `on_close` を
+/// 経由するので、room に参加済みなら通常の切断経路（`room.Leave` の dispatch
+/// と registry への `Release`）がそのまま走る。
+fn handle_heartbeat_tick(
+  state: ConnectionState,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case heartbeat_outcome(state.active_since_heartbeat) {
+    HeartbeatTimedOut -> {
+      logging.log(logging.Info, "websocket idle timeout: " <> connection_tag())
+      mist.stop()
+    }
+    HeartbeatContinues -> {
+      process.send_after(
+        state.heartbeat_subject,
+        heartbeat_interval_ms,
+        HeartbeatTick,
+      )
+      mist.continue(ConnectionState(..state, active_since_heartbeat: False))
+    }
   }
 }
 
@@ -180,7 +258,7 @@ fn handle_text(
   state: ConnectionState,
   text: String,
   connection: WebsocketConnection,
-) -> Next(ConnectionState, room.RoomEvent) {
+) -> Next(ConnectionState, ConnectionEvent) {
   case protocol.decode_client_message(text) {
     Error(error) -> {
       logging.log(
@@ -205,7 +283,7 @@ fn handle_join(
   connection: WebsocketConnection,
   wire_room_id: protocol.RoomId,
   display_name: String,
-) -> Next(ConnectionState, room.RoomEvent) {
+) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     Some(handle) -> {
       logging.log(
@@ -303,7 +381,10 @@ fn handle_join(
                 room_id,
               )),
             )
-          let selector = process.new_selector() |> process.select(session)
+          let selector =
+            process.new_selector()
+            |> process.select(state.heartbeat_subject)
+            |> process.select_map(session, RoomBroadcast)
           mist.continue(next_state) |> mist.with_selector(selector)
         }
         room.JoinRejected(_, reason) -> {
@@ -338,7 +419,7 @@ fn handle_join(
 fn handle_buzz(
   state: ConnectionState,
   connection: WebsocketConnection,
-) -> Next(ConnectionState, room.RoomEvent) {
+) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
       send_not_joined_error(connection, "buzz")
@@ -415,7 +496,7 @@ fn handle_buzz(
 fn handle_reset(
   state: ConnectionState,
   connection: WebsocketConnection,
-) -> Next(ConnectionState, room.RoomEvent) {
+) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
       send_not_joined_error(connection, "reset")
@@ -483,8 +564,8 @@ fn with_room(
   state: ConnectionState,
   connection: WebsocketConnection,
   room_id: registry.RoomId,
-  next: fn(Subject(room.Message)) -> Next(ConnectionState, room.RoomEvent),
-) -> Next(ConnectionState, room.RoomEvent) {
+  next: fn(Subject(room.Message)) -> Next(ConnectionState, ConnectionEvent),
+) -> Next(ConnectionState, ConnectionEvent) {
   case registry.lookup(state.registry, room_id) {
     Ok(room_subject) -> next(room_subject)
     Error(Nil) -> {
@@ -525,8 +606,8 @@ fn with_join_reply(
   room_subject: Subject(room.Message),
   connection: WebsocketConnection,
   reply: Result(room.RoomEvent, Nil),
-  next: fn(room.RoomEvent) -> Next(ConnectionState, room.RoomEvent),
-) -> Next(ConnectionState, room.RoomEvent) {
+  next: fn(room.RoomEvent) -> Next(ConnectionState, ConnectionEvent),
+) -> Next(ConnectionState, ConnectionEvent) {
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
@@ -560,8 +641,8 @@ fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
   reply: Result(room.RoomEvent, Nil),
-  next: fn(room.RoomEvent) -> Next(ConnectionState, room.RoomEvent),
-) -> Next(ConnectionState, room.RoomEvent) {
+  next: fn(room.RoomEvent) -> Next(ConnectionState, ConnectionEvent),
+) -> Next(ConnectionState, ConnectionEvent) {
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
