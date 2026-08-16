@@ -254,27 +254,67 @@ fn handle_heartbeat_tick(
   }
 }
 
+/// The maximum accepted byte size for a single incoming text frame. `join`'s
+/// `room_id`/`display_name` are each capped at 64 bytes
+/// (`protocol.max_field_length`), so a well-formed message never approaches
+/// this; it exists to bound the memory/bandwidth a single malicious or
+/// misbehaving client can force onto `json.parse` and the subsequent
+/// broadcast (#126).
+const max_text_frame_bytes = 2048
+
+/// Whether an incoming text frame's byte size is within `max_text_frame_bytes`.
+pub type FrameSizeOutcome {
+  FrameSizeAccepted
+  FrameTooLarge
+}
+
+/// Pure and thus testable without a live `WebsocketConnection`, like
+/// `heartbeat_outcome` above.
+pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
+  case string.byte_size(text) > max_text_frame_bytes {
+    True -> FrameTooLarge
+    False -> FrameSizeAccepted
+  }
+}
+
 fn handle_text(
   state: ConnectionState,
   text: String,
   connection: WebsocketConnection,
 ) -> Next(ConnectionState, ConnectionEvent) {
-  case protocol.decode_client_message(text) {
-    Error(error) -> {
+  case frame_size_outcome(text) {
+    FrameTooLarge -> {
       logging.log(
         logging.Info,
-        "protocol message rejected: code=" <> error.code,
+        "protocol message rejected: code=frame_too_large",
       )
       send_server_message(
         connection,
-        protocol.ProtocolErrorMessage(error.code, error.message),
+        protocol.ProtocolErrorMessage(
+          "frame_too_large",
+          "Message exceeds the maximum allowed size.",
+        ),
       )
-      mist.continue(state)
+      mist.stop()
     }
-    Ok(protocol.Join(wire_room_id, display_name)) ->
-      handle_join(state, connection, wire_room_id, display_name)
-    Ok(protocol.Buzz) -> handle_buzz(state, connection)
-    Ok(protocol.Reset) -> handle_reset(state, connection)
+    FrameSizeAccepted ->
+      case protocol.decode_client_message(text) {
+        Error(error) -> {
+          logging.log(
+            logging.Info,
+            "protocol message rejected: code=" <> error.code,
+          )
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(error.code, error.message),
+          )
+          mist.continue(state)
+        }
+        Ok(protocol.Join(wire_room_id, display_name)) ->
+          handle_join(state, connection, wire_room_id, display_name)
+        Ok(protocol.Buzz) -> handle_buzz(state, connection)
+        Ok(protocol.Reset) -> handle_reset(state, connection)
+      }
   }
 }
 

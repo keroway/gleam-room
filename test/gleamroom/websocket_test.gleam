@@ -1,5 +1,6 @@
 import gleam/erlang/process
 import gleam/option.{None, Some}
+import gleam/string
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
@@ -160,4 +161,16 @@ pub fn heartbeat_outcome_idle_times_out_test() {
 /// 前回の tick 以降にクライアントから何か届いていれば続行と判定する（#35）。
 pub fn heartbeat_outcome_active_continues_test() {
   assert websocket.heartbeat_outcome(True) == websocket.HeartbeatContinues
+}
+
+/// 上限バイト数ちょうどなら受理する（#126）。
+pub fn frame_size_outcome_at_the_limit_is_accepted_test() {
+  let text = string.repeat("a", 2048)
+  assert websocket.frame_size_outcome(text) == websocket.FrameSizeAccepted
+}
+
+/// 上限を1バイトでも超えたら拒否する（#126）。
+pub fn frame_size_outcome_over_the_limit_is_rejected_test() {
+  let text = string.repeat("a", 2049)
+  assert websocket.frame_size_outcome(text) == websocket.FrameTooLarge
 }
