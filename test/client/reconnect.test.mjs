@@ -91,8 +91,14 @@ test("接続中は保留中の再接続タイマーが残らない", () => {
   try {
     client.submitJoin();
     const socket = client.latestSocket();
+    // close で再接続タイマーを予約させる。
     socket.handlers.open?.();
-    assert.equal(client.pendingTimers(), 0, "接続できているのに再接続待ちがある");
+    socket.handlers.close?.();
+    assert.equal(client.pendingTimers(), 1, "再接続タイマーが予約されていない");
+
+    // 利用者が自分で join し直すと cancelReconnect が呼ばれ、予約が消える。
+    client.submitJoin();
+    assert.equal(client.pendingTimers(), 0, "join し直しても再接続待ちが残っている");
   } finally {
     client.dispose();
   }
