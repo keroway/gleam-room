@@ -45,9 +45,18 @@ pub fn main() -> Nil {
   // trap_exits で受け止めて exit を明示的にログしてから終了させる。
   process.trap_exits(True)
 
-  let assert Ok(started) = start(read_port())
-
-  await_supervisor_exit(started.pid)
+  case start(read_port()) {
+    Ok(started) -> await_supervisor_exit(started.pid)
+    Error(reason) -> {
+      // #29 / #32 / #53 と同じ方針: 失敗を無警告でクラッシュさせず、
+      // 理由をログに残してから終了する（#136）。
+      logging.log(
+        logging.Error,
+        "gleamroom failed to start: reason=" <> string.inspect(reason),
+      )
+      panic as "gleamroom failed to start"
+    }
+  }
 }
 
 /// supervisor（または他の何らかの理由で main にリンクされたプロセス）の
