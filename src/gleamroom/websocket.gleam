@@ -318,6 +318,28 @@ fn handle_text(
   }
 }
 
+/// Maps a `room.JoinRejectReason` to the `code`/`message` pair sent to the
+/// client. Pure and thus testable without a live `WebsocketConnection`, like
+/// `frame_size_outcome` above.
+pub fn join_reject_code_and_message(
+  reason: room.JoinRejectReason,
+) -> #(String, String) {
+  case reason {
+    room.RoomFull -> #(
+      "room_full",
+      "This room has reached its maximum number of participants.",
+    )
+    room.InvalidDisplayName -> #(
+      "invalid_display_name",
+      "The provided display name is not valid.",
+    )
+    room.AlreadyJoined -> #(
+      "already_joined",
+      "This connection has already joined a room.",
+    )
+  }
+}
+
 fn handle_join(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -426,12 +448,10 @@ fn handle_join(
               <> ", reason="
               <> string.inspect(reason),
           )
+          let #(code, message) = join_reject_code_and_message(reason)
           send_server_message(
             connection,
-            protocol.ProtocolErrorMessage(
-              "join_rejected",
-              "Unable to join the requested room.",
-            ),
+            protocol.ProtocolErrorMessage(code, message),
           )
           mist.continue(state)
         }

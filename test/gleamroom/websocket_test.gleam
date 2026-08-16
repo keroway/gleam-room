@@ -47,6 +47,24 @@ pub fn room_event_to_server_message_round_reset_test() {
 // reaches the caller's direct `actor.call` reply channel, not the `session`
 // subject that feeds this function. This test exercises the exhaustive `case`
 // arm directly rather than a reachable code path (#153).
+pub fn join_reject_code_and_message_room_full_test() {
+  assert websocket.join_reject_code_and_message(room.RoomFull)
+    == #(
+      "room_full",
+      "This room has reached its maximum number of participants.",
+    )
+}
+
+pub fn join_reject_code_and_message_invalid_display_name_test() {
+  assert websocket.join_reject_code_and_message(room.InvalidDisplayName)
+    == #("invalid_display_name", "The provided display name is not valid.")
+}
+
+pub fn join_reject_code_and_message_already_joined_test() {
+  assert websocket.join_reject_code_and_message(room.AlreadyJoined)
+    == #("already_joined", "This connection has already joined a room.")
+}
+
 pub fn room_event_to_server_message_join_rejected_unreachable_branch_test() {
   assert websocket.room_event_to_server_message(room.JoinRejected(
       room.participant_id("p1"),

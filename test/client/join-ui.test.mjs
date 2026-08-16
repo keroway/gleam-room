@@ -2,9 +2,10 @@
 //
 // web.gleam のクライアントは WebSocket "open" と join の成立（サーバから
 // "state" が届く）を別のタイミングとして扱う必要がある。さらに
-// "room_unavailable"/"join_rejected" はソケットを閉じずに返るため
-// （websocket.gleam の with_room/JoinRejected 分岐）、クライアント側で
-// 明示的に "未接続・再度join可能" な状態へ戻さない限り UI が固まる。
+// "room_unavailable"/"room_full"/"invalid_display_name" はソケットを
+// 閉じずに返るため（websocket.gleam の with_room/JoinRejected 分岐）、
+// クライアント側で明示的に "未接続・再度join可能" な状態へ戻さない限り
+// UI が固まる。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
@@ -37,7 +38,7 @@ test("join成立（state受信）で初めて connected になる", () => {
   }
 });
 
-for (const code of ["join_rejected", "room_unavailable"]) {
+for (const code of ["room_full", "invalid_display_name", "room_unavailable"]) {
   test(`${code} エラーは connected に戻さず、再度 join できる状態にする`, () => {
     const client = startClient();
     try {
