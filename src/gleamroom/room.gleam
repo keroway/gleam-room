@@ -201,6 +201,13 @@ pub type Message {
   )
   GetSnapshot(reply_to: Subject(List(Participant)))
   GetBuzzSnapshot(reply_to: Subject(List(BuzzResult)))
+  /// `GetSnapshot` と `GetBuzzSnapshot` を合わせて 1 メッセージで返す（#121）。
+  ///
+  /// 呼び出し側が participants と buzzes を 2 回の独立した call で別々に
+  /// 取得すると、その間に他の接続の Join/Leave/Buzz/Reset が割り込み、
+  /// 互いに取得時点がずれたスナップショットの組み合わせになりうる。
+  /// 同一メッセージ処理内で両方を読めば、常に同じ `state.room` 由来になる。
+  GetState(reply_to: Subject(#(List(Participant), List(BuzzResult))))
   /// 自分が無人なら終了する（#26 / #36）。
   ///
   /// **判定と停止を 1 メッセージに閉じてある。** 呼び出し側が
@@ -307,6 +314,10 @@ fn handle_message(
     }
     GetBuzzSnapshot(reply_to) -> {
       process.send(reply_to, buzz_snapshot(state.room))
+      actor.continue(state)
+    }
+    GetState(reply_to) -> {
+      process.send(reply_to, #(snapshot(state.room), buzz_snapshot(state.room)))
       actor.continue(state)
     }
     SessionDown(pid) ->
@@ -518,6 +529,15 @@ pub fn get_buzz_snapshot(
     GetBuzzSnapshot,
     "room.get_buzz_snapshot",
   )
+}
+
+/// Reads the participant list and the current round's accepted buzzes from
+/// a running room actor in one call, so both reflect the same `RoomState`
+/// (#121).
+pub fn get_state(
+  subject: Subject(Message),
+) -> Result(#(List(Participant), List(BuzzResult)), Nil) {
+  call.try_call(subject, call.default_timeout, GetState, "room.get_state")
 }
 
 /// 無人なら room を停止させ、停止したかどうかを返す（#36）。
