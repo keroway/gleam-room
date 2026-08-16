@@ -1,4 +1,5 @@
 import gleam/bit_array
+import gleam/bytes_tree
 import gleam/crypto
 import gleam/erlang/process.{type Selector, type Subject}
 import gleam/http/request.{type Request}
@@ -7,6 +8,7 @@ import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
+import gleam/uri
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
@@ -42,12 +44,52 @@ pub fn upgrade(
   req: Request(Connection),
   registry_subject: Subject(registry.Message),
 ) -> Response(ResponseData) {
-  mist.websocket(
-    request: req,
-    handler: handle_message,
-    on_init: fn(_connection) { on_init(registry_subject) },
-    on_close: on_close,
-  )
+  case origin_allowed(req) {
+    True ->
+      mist.websocket(
+        request: req,
+        handler: handle_message,
+        on_init: fn(_connection) { on_init(registry_subject) },
+        on_close: on_close,
+      )
+    False -> {
+      logging.log(
+        logging.Warning,
+        "websocket upgrade rejected: origin not allowed, host=" <> req.host,
+      )
+      response.new(403)
+      |> response.set_body(mist.Bytes(bytes_tree.new()))
+    }
+  }
+}
+
+/// `Origin` ヘッダを検証する（#124）。Cross-Site WebSocket Hijacking を防ぐため、
+/// ブラウザが送る `Origin` はリクエストの `Host` と一致する場合のみ許可する。
+///
+/// `Origin` ヘッダが無いリクエストは許可する。ブラウザは常に `Origin` を送るが、
+/// CLI ツールや自作クライアントのような非ブラウザクライアントは送らないことが
+/// あり、MVP は認証を持たないためこれらを区別して弾く根拠が無い（#124 の
+/// 未確認事項として残した設計判断）。ここで防ぎたいのは「ブラウザ経由で、
+/// 訪問者の意図しないオリジンから接続される」ことに限定する。
+fn origin_allowed(req: Request(Connection)) -> Bool {
+  origin_header_allowed(request.get_header(req, "origin"), req.host)
+}
+
+/// `origin_allowed` の本体。`Request(Connection)` に依存しない形へ切り出した
+/// のは、ライブな接続なしでユニットテストできるようにするため（他の関数と
+/// 同様の方針、このモジュールの他の "Pure and ... testable" 関数を参照）。
+pub fn origin_header_allowed(
+  origin_header: Result(String, Nil),
+  host: String,
+) -> Bool {
+  case origin_header {
+    Error(Nil) -> True
+    Ok(origin) ->
+      case uri.parse(origin) {
+        Ok(parsed) -> parsed.host == Some(host)
+        Error(Nil) -> False
+      }
+  }
 }
 
 fn on_init(

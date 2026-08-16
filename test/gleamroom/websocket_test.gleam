@@ -105,3 +105,37 @@ pub fn release_room_does_not_panic_when_registry_is_unregistered_test() {
 
   websocket.release_room(registry_subject, room_id, room_subject)
 }
+
+/// Origin ヘッダが無い接続は許可する（非ブラウザクライアントを想定、#124）。
+pub fn origin_header_allowed_missing_origin_is_allowed_test() {
+  assert websocket.origin_header_allowed(Error(Nil), "example.com")
+}
+
+/// Origin が Host と一致する場合は許可する（同一オリジンのブラウザ接続）。
+pub fn origin_header_allowed_matching_origin_is_allowed_test() {
+  assert websocket.origin_header_allowed(
+    Ok("https://example.com"),
+    "example.com",
+  )
+}
+
+/// ポートが付いていても host 部分だけを比較する。
+pub fn origin_header_allowed_matching_origin_with_port_is_allowed_test() {
+  assert websocket.origin_header_allowed(
+    Ok("http://example.com:4000"),
+    "example.com",
+  )
+}
+
+/// Origin が Host と異なる場合は拒否する（Cross-Site WebSocket Hijacking、#124）。
+pub fn origin_header_allowed_mismatched_origin_is_rejected_test() {
+  assert !websocket.origin_header_allowed(
+    Ok("https://evil.example"),
+    "example.com",
+  )
+}
+
+/// Origin が URI として解釈できない場合も拒否する。
+pub fn origin_header_allowed_unparsable_origin_is_rejected_test() {
+  assert !websocket.origin_header_allowed(Ok("not a uri"), "example.com")
+}
