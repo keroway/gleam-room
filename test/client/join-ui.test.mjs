@@ -101,3 +101,31 @@ test("not_joined のような join 以外のエラーは接続状態を変えな
     client.dispose();
   }
 });
+
+// join直後の狭い時間窓で room 側の broadcast がメールボックスに滞留し、
+// selector 設定後に再配送されると同じ buzz_accepted が二重に届きうる（#43）。
+// 表示側で position をキーに冪等化して重複表示を防ぐ回帰テスト。
+test("同じ position の buzz_accepted が重複配信されても buzz order には1回しか積まれない", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+    });
+    const buzzAcceptedData = JSON.stringify({
+      type: "buzz_accepted",
+      participant_id: "p1",
+      display_name: "Alice",
+      position: 0,
+    });
+    socket.handlers.message?.({ data: buzzAcceptedData });
+    socket.handlers.message?.({ data: buzzAcceptedData });
+
+    const buzzLogs = client.logs.filter((line) => line.includes("buzz accepted"));
+    assert.equal(buzzLogs.length, 1, "重複配信された buzz_accepted が2回積まれている");
+  } finally {
+    client.dispose();
+  }
+});

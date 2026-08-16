@@ -176,9 +176,15 @@ pub fn index_html() -> String {
         log(`left: ${message.participant_id}`);
         break;
       case \"buzz_accepted\":
-        buzzes.push(message);
-        renderBuzzes();
-        log(`buzz accepted: ${message.participant_id} (#${message.position})`);
+        // join直後の狭い時間窓で、room 側の subscribers 登録と selector 設定の
+        // 間にメールボックスへ滞留したイベントが、state 受信後に再配送され
+        // 重複表示されうる（#43）。position は round 内で一意なので、
+        // それをキーに冪等化する。
+        if (!buzzes.some((b) => b.position === message.position)) {
+          buzzes.push(message);
+          renderBuzzes();
+          log(`buzz accepted: ${message.participant_id} (#${message.position})`);
+        }
         break;
       case \"round_reset\":
         buzzes = [];
