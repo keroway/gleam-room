@@ -57,6 +57,38 @@ pub fn join_with_display_name_at_the_length_limit_is_accepted_test() {
   assert event == room.ParticipantJoined(room.Participant(id, at_limit))
 }
 
+pub fn join_beyond_the_participant_limit_is_rejected_and_state_is_unchanged_test() {
+  let full_state =
+    int.range(from: 1, to: 65, with: room.new_state(), run: fn(state, n) {
+      let id = room.participant_id("p" <> int.to_string(n))
+      let #(next, _) = room.apply_command(state, room.Join(id, "Name"))
+      next
+    })
+  let overflow_id = room.participant_id("overflow")
+
+  let #(next, event) =
+    room.apply_command(full_state, room.Join(overflow_id, "Overflow"))
+
+  assert next == full_state
+  assert event == room.JoinRejected(overflow_id, room.RoomFull)
+}
+
+pub fn join_at_the_participant_limit_is_accepted_test() {
+  let almost_full_state =
+    int.range(from: 1, to: 64, with: room.new_state(), run: fn(state, n) {
+      let id = room.participant_id("p" <> int.to_string(n))
+      let #(next, _) = room.apply_command(state, room.Join(id, "Name"))
+      next
+    })
+  let last_id = room.participant_id("last")
+
+  let #(next, event) =
+    room.apply_command(almost_full_state, room.Join(last_id, "Last"))
+
+  assert list.length(room.snapshot(next)) == 64
+  assert event == room.ParticipantJoined(room.Participant(last_id, "Last"))
+}
+
 pub fn leave_removes_participant_and_emits_left_test() {
   let id = room.participant_id("p1")
   let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
