@@ -40,7 +40,13 @@ pub fn room_event_to_server_message_round_reset_test() {
     == Some(protocol.RoundReset)
 }
 
-pub fn room_event_to_server_message_join_rejected_is_not_broadcast_test() {
+// `JoinRejected` is never actually delivered to `room_event_to_server_message`:
+// `broadcast`/`broadcast_all` never emit it (see room.gleam's "Rejections are
+// not broadcast" comment), and `apply_join`'s `JoinRejected` result only ever
+// reaches the caller's direct `actor.call` reply channel, not the `session`
+// subject that feeds this function. This test exercises the exhaustive `case`
+// arm directly rather than a reachable code path (#153).
+pub fn room_event_to_server_message_join_rejected_unreachable_branch_test() {
   assert websocket.room_event_to_server_message(room.JoinRejected(
       room.participant_id("p1"),
       room.AlreadyJoined,
@@ -48,6 +54,9 @@ pub fn room_event_to_server_message_join_rejected_is_not_broadcast_test() {
     == None
 }
 
+// Unlike `JoinRejected`/`BuzzRejected`, `LeaveRejected` is reachable: it can
+// be produced by `apply_command(state.room, Leave(id))` inside the
+// `SessionDown` handler and delivered via `broadcast_all`.
 pub fn room_event_to_server_message_leave_rejected_is_not_broadcast_test() {
   assert websocket.room_event_to_server_message(room.LeaveRejected(
       room.participant_id("p1"),
@@ -56,7 +65,10 @@ pub fn room_event_to_server_message_leave_rejected_is_not_broadcast_test() {
     == None
 }
 
-pub fn room_event_to_server_message_buzz_rejected_is_not_broadcast_test() {
+// See the comment on the `JoinRejected` test above: `BuzzRejected` is
+// likewise never delivered to `room_event_to_server_message` in practice
+// (#153).
+pub fn room_event_to_server_message_buzz_rejected_unreachable_branch_test() {
   assert websocket.room_event_to_server_message(room.BuzzRejected(
       room.participant_id("p1"),
       room.BuzzerNotJoined,
