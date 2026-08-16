@@ -282,12 +282,20 @@ pub fn index_html() -> String {
     connect(roomId, displayName);
   });
 
+  function sendIfOpen(message) {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify(message));
+    } else {
+      log(\"not connected, ignoring \" + message.type);
+    }
+  }
+
   buzzButton.addEventListener(\"click\", () => {
-    if (socket) socket.send(JSON.stringify({ type: \"buzz\" }));
+    sendIfOpen({ type: \"buzz\" });
   });
 
   resetButton.addEventListener(\"click\", () => {
-    if (socket) socket.send(JSON.stringify({ type: \"reset\" }));
+    sendIfOpen({ type: \"reset\" });
   });
 })();
 </script>
