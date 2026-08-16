@@ -29,3 +29,23 @@ test("実在しない id は本物のブラウザと同様に null を返す", (
     client.dispose();
   }
 });
+
+// runTimers() が delay を無視して登録順に発火すると、実ブラウザの setTimeout の
+// 相対順序（delay の小さい方が先に発火する）と食い違う挙動を green のまま
+// 見逃してしまう（#150）。
+test("runTimers() は登録順ではなく delay の昇順で発火する", () => {
+  const client = startClient();
+  try {
+    const order = [];
+    globalThis.setTimeout(() => order.push("slow"), 100);
+    globalThis.setTimeout(() => order.push("fast"), 10);
+    globalThis.setTimeout(() => order.push("mid"), 50);
+
+    const fired = client.runTimers();
+
+    assert.equal(fired, 3);
+    assert.deepEqual(order, ["fast", "mid", "slow"]);
+  } finally {
+    client.dispose();
+  }
+});

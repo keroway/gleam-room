@@ -43,7 +43,7 @@ export function startClient() {
       createElement: () => makeNode("created"),
     },
     location: { protocol: "http:", host: "127.0.0.1:4000" },
-    setTimeout: (fn) => timers.push(fn),
+    setTimeout: (fn, delay) => timers.push({ fn, delay }),
     clearTimeout: () => {},
     WebSocket: class {
       constructor() {
@@ -86,10 +86,11 @@ export function startClient() {
       return nodes.get("status")?.dataset.state;
     },
     /// 保留中の setTimeout をすべて発火させる（再接続待ちを進める）。
+    /// 実ブラウザの相対順序に合わせ、delay の昇順（同値は登録順）で発火する。
     runTimers() {
-      const pending = timers;
+      const pending = [...timers].sort((a, b) => a.delay - b.delay);
       timers = [];
-      pending.forEach((fn) => fn());
+      pending.forEach(({ fn }) => fn());
       return pending.length;
     },
     pendingTimers() {
