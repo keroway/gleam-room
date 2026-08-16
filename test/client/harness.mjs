@@ -3,9 +3,10 @@
 // ブラウザ自動化（Playwright 等）は入れない。検証したいのは再接続の
 // **試行回数とタイマー解除**であって描画ではなく、そのためにブラウザを
 // 起動するのは割に合わない。DOM は「呼ばれても落ちない」程度に留める。
-import { extractClientScript } from "./extract.mjs";
+import { extractClientScript, extractElementIds } from "./extract.mjs";
 
 export function startClient() {
+  const knownIds = extractElementIds();
   const nodes = new Map();
   const listeners = new Map();
   const logs = [];
@@ -35,6 +36,7 @@ export function startClient() {
   const sandbox = {
     document: {
       getElementById(id) {
+        if (!knownIds.has(id)) return null;
         if (!nodes.has(id)) nodes.set(id, makeNode(id));
         return nodes.get(id);
       },
