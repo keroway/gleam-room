@@ -136,6 +136,6 @@ pub fn origin_header_allowed_mismatched_origin_is_rejected_test() {
 }
 
 /// Origin が URI として解釈できない場合も拒否する。
-pub fn origin_header_allowed_unparseable_origin_is_rejected_test() {
+pub fn origin_header_allowed_unparsable_origin_is_rejected_test() {
   assert !websocket.origin_header_allowed(Ok("not a uri"), "example.com")
 }
