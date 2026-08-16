@@ -53,6 +53,7 @@ pub type RoomCommand {
 pub type JoinRejectReason {
   AlreadyJoined
   InvalidDisplayName
+  RoomFull
 }
 
 pub type LeaveRejectReason {
@@ -97,15 +98,27 @@ pub fn apply_command(
 /// without going through the boundary's validation.
 const max_display_name_length = 64
 
+/// Ceiling on a single room's participant count. Without it, a client can
+/// open unbounded WebSocket connections against the same `room_id` (each
+/// gets a fresh `ParticipantId`) and grow `state.participants` without
+/// bound, which drives the O(N) per-event broadcast cost in `broadcast`/
+/// `broadcast_all` toward O(N^2) over the room's lifetime (#129).
+const max_participants = 64
+
 fn apply_join(
   state: RoomState,
   id: ParticipantId,
   display_name: String,
 ) -> #(RoomState, RoomEvent) {
-  case find_participant(state, id), is_valid_display_name(display_name) {
-    _, False -> #(state, JoinRejected(id, InvalidDisplayName))
-    Ok(_), True -> #(state, JoinRejected(id, AlreadyJoined))
-    Error(Nil), True -> {
+  case
+    find_participant(state, id),
+    is_valid_display_name(display_name),
+    list.length(state.participants) >= max_participants
+  {
+    _, False, _ -> #(state, JoinRejected(id, InvalidDisplayName))
+    Ok(_), True, _ -> #(state, JoinRejected(id, AlreadyJoined))
+    Error(Nil), True, True -> #(state, JoinRejected(id, RoomFull))
+    Error(Nil), True, False -> {
       let participant = Participant(id, display_name)
       let next =
         RoomState(..state, participants: [participant, ..state.participants])
