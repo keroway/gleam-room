@@ -36,7 +36,7 @@ jobs:
         run: gleam format --check src test
 
       - name: Build
-        run: gleam build
+        run: gleam build --warnings-as-errors
 
       - name: Test
         run: gleam test
