@@ -20,30 +20,28 @@ import gleamroom/wait
 /// mist の `Connection` は不透明でテストから作れないため、擬似リクエストでは
 /// なく**本物のサーバへ本物の HTTP を投げる**。gleam_httpc は
 /// この検証のためだけの dev-dependency。
-const test_port = 4173
-
-// HEAD テストは別プロセスとして並行に走りうるため、`routing_serves_the_expected_paths_test`
-// と同じポートを使うと Eaddrinuse で落ちる（#152 と同種の衝突）。専用ポートで分離する。
-const head_test_port = 4174
-
-// 以下2つも同じ理由で専用ポートに分離する（#142）。
-const health_actor_down_port = 4175
-
-const health_timeout_port = 4176
-
-fn start_server(port: Int) -> Nil {
-  let assert Ok(_) = gleamroom.start(port)
+///
+/// ポートは固定値ではなくOSに動的採番させる（`gleamroom.start_on_ephemeral_port`
+/// / `start_web_only_on_ephemeral_port`、#152）。固定ポートだと、CI・開発機で
+/// そのポートが既に他プロセスに専有されている場合や、このファイル内の複数テストが
+/// 並行に走った場合に Eaddrinuse で落ち、しかも `await_ready` の一律の panic
+/// メッセージからは「ルーティングの不具合」なのか「ポート衝突」なのか
+/// 切り分けられなかった。動的採番なら、この種の衝突自体が起こらない。
+fn start_server() -> Int {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   // 起動直後は listen が間に合わないことがある。固定 sleep で待たず、
   // 実際に応答するまで叩いて確かめる。
   await_ready(port, 50)
+  port
 }
 
 fn start_web_only_server(
-  port: Int,
   registry_subject: process.Subject(registry.Message),
-) -> Nil {
-  let assert Ok(_) = gleamroom.start_web_only(port, registry_subject)
+) -> Int {
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(registry_subject)
   await_ready(port, 50)
+  port
 }
 
 fn await_ready(port: Int, remaining: Int) -> Nil {
@@ -81,21 +79,21 @@ fn request_with_method(
 }
 
 pub fn routing_serves_the_expected_paths_test() {
-  start_server(test_port)
+  let port = start_server()
 
   // `/` はブラウザクライアントを返す。
-  let assert Ok(#(status, body)) = get(test_port, "/")
+  let assert Ok(#(status, body)) = get(port, "/")
   assert status == 200
   assert string.contains(body, "<script>")
 
   // `/health` は registry へ問い合わせた結果を返す（#93 / #92）。
   // room がまだ無いので 0 件。**配線が繋がっていなければここで気づける。**
-  let assert Ok(#(health_status, health_body)) = get(test_port, "/health")
+  let assert Ok(#(health_status, health_body)) = get(port, "/health")
   assert health_status == 200
   assert health_body == "ok rooms=0"
 
   // 未知のパスは 404。
-  let assert Ok(#(missing_status, _)) = get(test_port, "/nope")
+  let assert Ok(#(missing_status, _)) = get(port, "/nope")
   assert missing_status == 404
 
   // `/ws` は WebSocket upgrade を要求する。素の GET は mist が **400** を返す
@@ -105,19 +103,19 @@ pub fn routing_serves_the_expected_paths_test() {
   // **`!= 200` では駄目（#131）。** 404 でも 500 でも通ってしまうので、
   // `/ws` のルーティングが外れて catch-all に落ちる回帰を無言で見逃す。
   // このテストの目的は「配線が繋がっていること」の検証で、そこが抜けていた。
-  let assert Ok(#(ws_status, _)) = get(test_port, "/ws")
+  let assert Ok(#(ws_status, _)) = get(port, "/ws")
   assert ws_status == 400
 
   // パスは一致してもメソッドが対応外なら 405 を返す（#66）。
   //
   // 以前は `request.path_segments` のみでルーティングしており、
   // POST / や DELETE /health でも `/` `/health` と同じ 200 が返っていた。
-  let assert Ok(root_response) = request_with_method(test_port, "/", http.Post)
+  let assert Ok(root_response) = request_with_method(port, "/", http.Post)
   assert root_response.status == 405
   assert response.get_header(root_response, "allow") == Ok("GET, HEAD")
 
   let assert Ok(health_response) =
-    request_with_method(test_port, "/health", http.Delete)
+    request_with_method(port, "/health", http.Delete)
   assert health_response.status == 405
   assert response.get_header(health_response, "allow") == Ok("GET, HEAD")
 
@@ -125,29 +123,27 @@ pub fn routing_serves_the_expected_paths_test() {
   // メソッド検証なしで丸投げしており、必要なヘッダさえ揃えば POST/DELETE
   // でも WebSocket アップグレードが成立しうる状態だった（RFC 6455 §4.1
   // はハンドシェイクを GET に限定している）。
-  let assert Ok(ws_response) = request_with_method(test_port, "/ws", http.Post)
+  let assert Ok(ws_response) = request_with_method(port, "/ws", http.Post)
   assert ws_response.status == 405
   assert response.get_header(ws_response, "allow") == Ok("GET")
 }
 
 pub fn head_responses_have_an_empty_body_test() {
-  start_server(head_test_port)
+  let port = start_server()
 
   // RFC 9110 §9.3.2: HEAD は GET と同じステータス・ヘッダーを返すが、
   // ボディを送ってはならない。GET と比較して両方を確かめる。
-  let assert Ok(root_get_response) =
-    request_with_method(head_test_port, "/", http.Get)
-  let assert Ok(root_response) =
-    request_with_method(head_test_port, "/", http.Head)
+  let assert Ok(root_get_response) = request_with_method(port, "/", http.Get)
+  let assert Ok(root_response) = request_with_method(port, "/", http.Head)
   assert root_response.status == root_get_response.status
   assert response.get_header(root_response, "content-type")
     == response.get_header(root_get_response, "content-type")
   assert root_response.body == ""
 
   let assert Ok(health_get_response) =
-    request_with_method(head_test_port, "/health", http.Get)
+    request_with_method(port, "/health", http.Get)
   let assert Ok(health_response) =
-    request_with_method(head_test_port, "/health", http.Head)
+    request_with_method(port, "/health", http.Head)
   assert health_response.status == health_get_response.status
   assert health_response.body == ""
 }
@@ -184,9 +180,9 @@ pub fn health_returns_503_actor_down_via_http_test() {
   process.kill(pid)
   wait.until_dead(pid, "registry が終了する")
 
-  start_web_only_server(health_actor_down_port, subject)
+  let port = start_web_only_server(subject)
 
-  let assert Ok(#(status, body)) = get(health_actor_down_port, "/health")
+  let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
   assert body == "registry down"
 }
@@ -196,9 +192,9 @@ pub fn health_returns_503_actor_down_via_http_test() {
 pub fn health_returns_503_timeout_via_http_test() {
   let unresponsive: process.Subject(registry.Message) = process.new_subject()
 
-  start_web_only_server(health_timeout_port, unresponsive)
+  let port = start_web_only_server(unresponsive)
 
-  let assert Ok(#(status, body)) = get(health_timeout_port, "/health")
+  let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
   assert body == "registry not responding"
 }
