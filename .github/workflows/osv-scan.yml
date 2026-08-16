@@ -23,3 +23,13 @@ jobs:
     #
     # @main のままだと、共有側の変更が**レビューを経ずに全リポジトリへ即座に効く**。
     uses: keroway/.github/.github/workflows/reusable-osv-scan.yml@87813febcf248657d64f628f53f6c246969b6e7b # 2026-08-16 時点の main
+    with:
+      # osv-scanner は Gleam(hex) エコシステムに未対応で、実行すると常に
+      # `No package sources found`(exit 128)になる（このPRのCIで実測確認済み）。
+      # このリポジトリの実依存は gleam.toml/manifest.toml の hex パッケージのみで
+      # npm 等スキャン可能な他エコシステムの lockfile は存在しない
+      # （node --test の client JS テストは package.json を持たない）ため、
+      # opt-in してもスキャン対象の取りこぼしは発生しない。ADR-0028 の懸念
+      # （実 lockfile を持つリポジトリでの検知漏れの黙殺）は Gleam/hex 専用の
+      # このリポジトリには当てはまらない（keroway/beamsg と同じ位置づけ）。
+      allow-no-package-sources: true
