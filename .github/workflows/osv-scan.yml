@@ -1,0 +1,25 @@
+name: osv-scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 0 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv-scan:
+    # 更新手順: keroway/.github の該当ファイルの差分をレビューしたうえで、
+    # `gh api repos/keroway/.github/commits/main --jq .sha` で最新 SHA を取得し、
+    # 下記 SHA とコメントの日付を同時に更新する（自動更新 bot 非対応のため手動運用）。
+    #
+    # @main のままだと、共有側の変更が**レビューを経ずに全リポジトリへ即座に効く**。
+    uses: keroway/.github/.github/workflows/reusable-osv-scan.yml@87813febcf248657d64f628f53f6c246969b6e7b # 2026-08-16 時点の main
