@@ -71,8 +71,16 @@ type State {
     /// 削除しないようにする（#160）。
     monitored: Dict(process.Pid, MonitoredRoom),
     start_room: fn() -> actor.StartResult(Subject(room.Message)),
+    /// 新規 room actor（BEAMプロセス）を起動できる上限（#127）。
+    /// 未知の room_id へ join するたびに無条件で起動すると、単一クライアントが
+    /// room_id を変え続けるだけで無制限にプロセスを増やせてしまう。
+    max_rooms: Int,
   )
 }
+
+/// `max_rooms` の既定値。運用上の実測に基づく値ではなく、単一プロセスが
+/// 無制限に増えることを防ぐための保守的な上限（#127）。
+const default_max_rooms = 1000
 
 type MonitoredRoom {
   MonitoredRoom(key: String, subject: Subject(room.Message))
@@ -83,7 +91,12 @@ type MonitoredRoom {
 /// `RoomId` cannot race into starting two authoritative room actors (ADR
 /// 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  build(State(rooms: dict.new(), monitored: dict.new(), start_room: room.start))
+  build(State(
+    rooms: dict.new(),
+    monitored: dict.new(),
+    start_room: room.start,
+    max_rooms: default_max_rooms,
+  ))
   |> actor.start
 }
 
@@ -93,7 +106,28 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
 pub fn start_with_room_starter(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
 ) -> actor.StartResult(Subject(Message)) {
-  build(State(rooms: dict.new(), monitored: dict.new(), start_room:))
+  build(State(
+    rooms: dict.new(),
+    monitored: dict.new(),
+    start_room:,
+    max_rooms: default_max_rooms,
+  ))
+  |> actor.start
+}
+
+/// room数の上限を差し替えて開始する。**テスト専用**（#127）。
+///
+/// 既定値（1000）まで実際に room を起動して上限到達を確かめるのは非現実的な
+/// ため、テストから小さい上限を注入できるようにする。
+pub fn start_with_max_rooms(
+  max_rooms: Int,
+) -> actor.StartResult(Subject(Message)) {
+  build(State(
+    rooms: dict.new(),
+    monitored: dict.new(),
+    start_room: room.start,
+    max_rooms:,
+  ))
   |> actor.start
 }
 
@@ -132,7 +166,12 @@ fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  build(State(rooms: dict.new(), monitored: dict.new(), start_room: room.start))
+  build(State(
+    rooms: dict.new(),
+    monitored: dict.new(),
+    start_room: room.start,
+    max_rooms: default_max_rooms,
+  ))
   |> actor.named(name)
   |> actor.start
 }
@@ -144,9 +183,26 @@ fn handle_message(
   case message {
     Lookup(id, reply_to) -> {
       let key = room_id_to_string(id)
+      let room_count = dict.size(state.rooms)
       case dict.get(state.rooms, key) {
         Ok(subject) -> {
           process.send(reply_to, Ok(subject))
+          actor.continue(state)
+        }
+        Error(Nil) if room_count >= state.max_rooms -> {
+          // room 数の上限に達している（#127）。単一クライアントが room_id を
+          // 変え続けるだけで BEAM プロセスを無制限に起動できてしまうのを防ぐ。
+          // 既存 room の lookup はここを通らない（上の Ok 分岐で先に処理済み）。
+          logging.log(
+            logging.Warning,
+            "room capacity reached, rejecting lookup: id="
+              <> key
+              <> ", rooms="
+              <> string.inspect(room_count)
+              <> ", max_rooms="
+              <> string.inspect(state.max_rooms),
+          )
+          process.send(reply_to, Error(Nil))
           actor.continue(state)
         }
         Error(Nil) ->

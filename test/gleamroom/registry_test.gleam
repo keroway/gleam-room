@@ -310,6 +310,33 @@ pub fn a_room_emptied_by_a_dead_session_is_removed_from_the_registry_test() {
 /// 返していたため、registry が死んでいても詰まっていても緑になり、
 /// `gleamroom.main` のコメントが問題として挙げている
 /// 「HTTP は 200 を返すのに join だけが無反応」をまさに検出できなかった。
+/// room 数が上限に達したら新規 room の lookup が Error を返すこと（#127）。
+///
+/// 単一クライアントが room_id を変え続けるだけで BEAM プロセスを無制限に
+/// 起動できないよう、上限超過は既存の「room を起動できなかった」経路
+/// （#32）と同じ Error(Nil) で呼び出し側へ伝わる。
+pub fn lookup_rejects_new_rooms_once_max_rooms_is_reached_test() {
+  let assert Ok(started) = registry.start_with_max_rooms(1)
+  let reg = started.data
+
+  let assert Ok(_) = registry.lookup(reg, registry.room_id("room-a"))
+
+  assert registry.lookup(reg, registry.room_id("room-b")) == Error(Nil)
+}
+
+/// 上限に達していても、**既存** room の lookup は引き続き成功すること
+/// （#127）。上限は新規起動だけを止め、既に起動済みの room を巻き添えに
+/// しない。
+pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
+  let assert Ok(started) = registry.start_with_max_rooms(1)
+  let reg = started.data
+
+  let assert Ok(first) = registry.lookup(reg, registry.room_id("room-a"))
+  assert registry.lookup(reg, registry.room_id("room-b")) == Error(Nil)
+
+  assert registry.lookup(reg, registry.room_id("room-a")) == Ok(first)
+}
+
 pub fn health_reports_the_number_of_registered_rooms_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data
