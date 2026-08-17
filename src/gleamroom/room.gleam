@@ -297,9 +297,21 @@ fn handle_message(
       let next_subscribers =
         update_subscribers(state.subscribers, event, session)
       let next_sessions = update_sessions(state.sessions, event, session)
-      // The caller always gets the event synchronously through `reply_to`;
-      // other connected sessions learn about it asynchronously through
-      // their own subject so they observe consistent room state.
+      // The caller normally gets the event synchronously through `reply_to`,
+      // but `reply_to` is a throwaway subject created per call (`dispatch`'s
+      // `call.try_call`): if the caller already gave up on a timeout, this
+      // send is silently lost. For `BuzzAccepted`/`RoundReset`, the issuing
+      // session is therefore also included in `broadcast` (not excluded),
+      // so a late-arriving result still reaches the caller asynchronously
+      // through its own subject (#143). The transport layer already treats
+      // these two as idempotent (dedup by buzz position, unconditional
+      // clear), so a caller that *did* get the synchronous reply simply
+      // receives the same event twice. `ParticipantJoined` keeps excluding
+      // the issuer: unlike buzz/reset, a lost `Join` reply already leaves
+      // the connection without the selector needed to read a later
+      // broadcast (see `websocket.gleam`'s `with_join_reply`), so including
+      // it here would only add a spurious duplicate on the fast path
+      // without fixing the timeout case.
       process.send(reply_to, event)
       broadcast(next_subscribers, except: session, event: event)
       actor.continue(ActorState(
@@ -464,20 +476,25 @@ fn update_subscribers(
   }
 }
 
-/// Notifies every subscriber other than `except` (the session that issued
-/// the command, which already received the event synchronously through
-/// `dispatch`) about a state change. Rejections are not broadcast: they
-/// carry no state change and are only meaningful to the issuing session.
+/// Notifies subscribers about a state change. `BuzzAccepted`/`RoundReset`
+/// reach every subscriber, *including* the session that issued the command
+/// (#143: the issuing session's synchronous `reply_to` can be lost on a
+/// `dispatch` timeout, so it must also be reachable asynchronously).
+/// `ParticipantJoined`/`ParticipantLeft` still exclude/omit the issuer (see
+/// the call site in `handle_message` for why `Join` is not extended the
+/// same way; `Leave` never reaches its own issuer either, because
+/// `update_subscribers` already dropped their subject from `subscribers`
+/// before this runs). Rejections are not broadcast: they carry no state
+/// change and are only meaningful to the issuing session, which always
+/// gets them synchronously through `reply_to`.
 fn broadcast(
   subscribers: Dict(String, Subject(RoomEvent)),
   except except_session: Subject(RoomEvent),
   event event: RoomEvent,
 ) -> Nil {
   case event {
-    ParticipantJoined(_)
-    | ParticipantLeft(_)
-    | BuzzAccepted(_, _, _)
-    | RoundReset ->
+    BuzzAccepted(_, _, _) | RoundReset -> broadcast_all(subscribers, event)
+    ParticipantJoined(_) | ParticipantLeft(_) ->
       subscribers
       |> dict.to_list
       |> list.each(fn(entry) {
