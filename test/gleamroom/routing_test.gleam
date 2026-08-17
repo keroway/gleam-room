@@ -90,7 +90,7 @@ pub fn routing_serves_the_expected_paths_test() {
   // room がまだ無いので 0 件。**配線が繋がっていなければここで気づける。**
   let assert Ok(#(health_status, health_body)) = get(port, "/health")
   assert health_status == 200
-  assert health_body == "ok rooms=0"
+  assert health_body == "ok rooms=0 stuck=0"
 
   // 未知のパスは 404。
   let assert Ok(#(missing_status, _)) = get(port, "/nope")

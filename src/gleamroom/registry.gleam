@@ -4,6 +4,7 @@ import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/otp/actor
 import gleam/result
+import gleam/set.{type Set}
 import gleam/string
 import gleamroom/call
 import gleamroom/room
@@ -55,7 +56,21 @@ pub type Message {
   /// 登録中の room 数を返すが、**値より「返事が来ること」が本体**。
   /// `Lookup` を健全性確認に流用すると room を作ってしまうので、
   /// 副作用の無い読み取り専用の口を分けている。
-  Health(reply_to: Subject(Int))
+  ///
+  /// registry 自体の応答性だけでは、個々の room actor がハング/デッドロック
+  /// していても検知できない（#138）。`stuck` には**前回の probe の結果**を
+  /// 即座に返し、応答後に今の登録済み room 全件へ非同期の probe
+  /// （`room.get_snapshot`）を仕掛けて次回の `Health` 用に更新する。
+  /// registry のメールボックスを塞がないよう、probe 自体は
+  /// `spawn_unlinked` した別プロセスから行う（`Release` と同じ方針）。
+  Health(reply_to: Subject(HealthSnapshot))
+  /// room 1 件分の probe（`room.get_snapshot`）の結果（#138）。
+  ///
+  /// `ok` が `False` なのはタイムアウトまたは応答不能（詰まっている/死んで
+  /// いる）。死んだ room は別途 `RoomDown` で `rooms` から外れるので、
+  /// ここでの `stuck_rooms` への追加は一時的（次の probe で消えるか、
+  /// `RoomDown` で `rooms` ごと存在しなくなる）。
+  RoomProbed(key: String, ok: Bool)
   /// `trap_exits(True)` はリンクされた**全て**の相手からの exit を拾うため、
   /// registry を起動した supervisor が shutdown で子を畳もうとした exit
   /// （reason: `shutdown`）も room のクラッシュと区別なく届いてしまう（#117）。
@@ -72,6 +87,12 @@ pub type Message {
   /// room 1 つのせいで registry 全体が最大 1 秒ブロックされ、無関係な他の
   /// room への `Lookup`/`Release` まで巻き添えで遅延する。
   RoomEmptyChecked(id: RoomId, subject: Subject(room.Message), empty: Bool)
+}
+
+/// `Health` の返答（#138）。`rooms` は登録数、`stuck` は前回の probe で
+/// 応答が無かった room の数（前回 probe が無ければ 0）。
+pub type HealthSnapshot {
+  HealthSnapshot(rooms: Int, stuck: Int)
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -96,6 +117,10 @@ type State {
     /// registry 自身の subject（#71）。`Release` が空判定を別プロセスへ
     /// 投げるとき、結果（`RoomEmptyChecked`）の返送先として渡す。
     self: Subject(Message),
+    /// 直近の `Health` probe で応答が無かった room の key（#138）。
+    /// `Health` を受けるたびに全 room へ probe を再実行し置き換える
+    /// 「前回の結果」であり、リアルタイムの状態ではない。
+    stuck_rooms: Set(String),
   )
 }
 
@@ -183,6 +208,7 @@ fn build(
         // `subject` は初期化中の自分自身の subject（#71）。ここでしか
         // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
         self: subject,
+        stuck_rooms: set.new(),
       )
     actor.initialised(initial)
     |> actor.selecting(selector)
@@ -317,9 +343,36 @@ fn handle_message(
         Error(Nil) -> actor.continue(state)
       }
     Health(reply_to) -> {
-      // 副作用なし。返事が来ること自体が「registry が詰まっていない」証拠。
-      process.send(reply_to, dict.size(state.rooms))
+      // 返事が来ること自体が「registry が詰まっていない」証拠。
+      // `stuck` は前回の probe 結果を即座に返し、待たせない（#138）。
+      process.send(
+        reply_to,
+        HealthSnapshot(
+          rooms: dict.size(state.rooms),
+          stuck: set.size(state.stuck_rooms),
+        ),
+      )
+      // 次回の `Health` 用に、今の登録済み room 全件へ非同期で probe を
+      // 仕掛け直す。registry のメールボックスをブロックしないよう、probe
+      // 自体は `spawn_unlinked` した別プロセスで行い、結果だけ
+      // `RoomProbed` として返してもらう（`Release` と同じ方針）。
+      dict.each(state.rooms, fn(key, subject) {
+        process.spawn_unlinked(fn() {
+          let ok = case room.get_snapshot(subject) {
+            Ok(_) -> True
+            Error(Nil) -> False
+          }
+          process.send(state.self, RoomProbed(key, ok))
+        })
+      })
       actor.continue(state)
+    }
+    RoomProbed(key, ok) -> {
+      let stuck_rooms = case ok {
+        True -> set.delete(state.stuck_rooms, key)
+        False -> set.insert(state.stuck_rooms, key)
+      }
+      actor.continue(State(..state, stuck_rooms:))
     }
     ParentShutdown -> {
       // 親（supervisor）からの shutdown 要求。無視して生き続けると
@@ -390,14 +443,19 @@ fn handle_message(
   }
 }
 
-/// registry が応答することを確かめ、登録中の room 数を返す（#93）。
+/// registry が応答することを確かめ、登録中の room 数と、直近の probe で
+/// 応答が無かった room の数を返す（#93, #138）。
 ///
 /// 応答しない場合は失敗理由を返す。`/health` はこれを見て 503 の本文を
 /// 「落ちている」「詰まっている」で書き分ける（#92）。
 ///
 /// 運用上の対処が違うため区別する。死んでいるなら supervisor の再起動を
-/// 待つか調べる、詰まっているなら負荷やタイムアウト値を見る。
-pub fn health(subject: Subject(Message)) -> Result(Int, call.Failure) {
+/// 待つか調べる、詰まっているなら負荷やタイムアウト値を見る。`stuck` は
+/// 個々の room actor 側の詰まりを指し、registry 自体の生死とは別軸
+/// （#138）。
+pub fn health(
+  subject: Subject(Message),
+) -> Result(HealthSnapshot, call.Failure) {
   call.try_call_classified(
     subject,
     call.default_timeout,

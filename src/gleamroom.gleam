@@ -268,11 +268,14 @@ fn handle_request(
       case req.method {
         Get | Head ->
           case registry.health(registry_subject) {
-            Ok(rooms) ->
+            Ok(registry.HealthSnapshot(rooms:, stuck:)) ->
               response.new(200)
               |> response.set_body(
                 mist.Bytes(bytes_tree.from_string(
-                  "ok rooms=" <> int.to_string(rooms),
+                  "ok rooms="
+                  <> int.to_string(rooms)
+                  <> " stuck="
+                  <> int.to_string(stuck),
                 )),
               )
             // **理由を分けて伝える（#92）。** どちらも 503 だが、運用者が次に
