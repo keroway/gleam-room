@@ -80,7 +80,7 @@ whether it is responsive:
 
 | registry | response |
 |---|---|
-| answers | `200 ok rooms=<n>` |
+| answers | `200 ok rooms=<n> stuck=<n>` |
 | process is gone | `503 registry down` |
 | alive but not answering | `503 registry not responding` |
 | call failed for an unrecognized reason | `503 registry unavailable: <detail>` |
@@ -90,6 +90,13 @@ investigating) the supervisor restart, a wedged one means looking at load and
 timeouts, and the third body is what `gleamroom/call.classify` falls back to
 when the underlying exception doesn't match either known pattern — it carries
 the raw exception text so the operator isn't left guessing.
+
+`stuck` counts room actors that did not answer the registry's last
+lightweight probe (a `room.get_snapshot` call fired after each `/health`
+request). Registry responsiveness and individual room responsiveness are
+different failure modes with different remedies, so `stuck` is reported
+alongside a `200` rather than turning `/health` itself into a `503` — a
+wedged room doesn't mean the registry (and thus new joins) is unavailable.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
 `gleam test`, and the client tests on every pull request and push to `main`.
