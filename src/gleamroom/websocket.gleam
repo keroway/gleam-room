@@ -597,8 +597,8 @@ fn handle_reset(
 ///
 /// `process.send` は named subject が未登録だと `let assert` で panic する
 /// (`gleam_erlang` のドキュメントとは矛盾するが実装はそう)。registry は
-/// `RestForOne` の supervisor 配下にあり再起動中は一時的に名前が外れうるため、
-/// 無guardで呼ぶとその窓に閉じた接続が mist の接続プロセスごとクラッシュする。
+/// supervisor 配下にあり再起動中は一時的に名前が外れうるため、無guardで
+/// 呼ぶとその窓に閉じた接続が mist の接続プロセスごとクラッシュする。
 pub fn release_room(
   registry_subject: Subject(registry.Message),
   room_id: registry.RoomId,

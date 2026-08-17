@@ -1,6 +1,6 @@
 # ADR 0004: Supervise the registry and the web server as a rest-for-one tree
 
-- Status: Accepted
+- Status: Superseded by [ADR 0008](0008-supervise-registry-and-web-server-as-one-for-one.md)
 - Date: 2026-08-12
 - Recorded retroactively for the change made in #23. The decision was taken and
   implemented before this ADR was written; see #89 for why the gap existed.
@@ -44,3 +44,11 @@ Being supervised does not make the failure visible on its own. `/health`
 returned an unconditional `200` for some time after this change, so the very
 state this ADR set out to fix was still invisible to a health check. That was
 fixed separately (#93) and is recorded in ADR 0005.
+
+The "Positive" consequence above — `rest_for_one` restarts the web server
+alongside the registry "so no connection keeps a stale name resolution" — was
+never actually true. The registry is passed to the web server as a
+`process.named_subject`, whose name resolves on every send, not once at
+startup. Restarting the web server was unnecessary and, worse, dropped every
+live WebSocket connection across all rooms on every registry crash, not just
+the room that mattered. See ADR 0008 (#78).

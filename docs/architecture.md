@@ -126,16 +126,16 @@ The MVP does not promise geographically fair competitive timing. Network latency
 
 ## Supervision and lifecycle
 
-The actual BEAM model, matching `RestForOne` add order in `gleamroom.gleam`:
+The actual BEAM model, matching child add order in `gleamroom.gleam`:
 
 ```text
-Application supervisor (RestForOne)
+Application supervisor (OneForOne)
   |
   +-- Room registry
   +-- Web server
 ```
 
-Child order under `RestForOne` is the dependency order: the web server depends on the registry, not the reverse, so the registry is added first. If the registry crashes, the web server is restarted alongside it to avoid holding stale name resolution.
+The registry is registered under a name; the web server resolves it through `process.named_subject` on every send rather than capturing a subject at startup. This means a registry restart needs no cooperation from the web server: the next message sent through the named subject reaches the new registry process automatically. `OneForOne` lets the registry and the web server restart independently, so a registry crash does not force-close every live WebSocket connection across every room (see ADR 0008; this replaced an earlier `RestForOne` choice recorded in ADR 0004).
 
 Active room processes are not supervised children of the registry. The registry starts each room actor directly (linking to it) and traps its exit signal, then removes the dead entry from its own state; a new room actor is only started lazily on the next lookup. This means room crashes are not automatically restarted by the supervision tree — recovery is registry-driven and deferred.
 
