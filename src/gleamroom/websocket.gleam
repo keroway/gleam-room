@@ -717,6 +717,14 @@ fn with_join_reply(
 /// 応答が無いのは room actor が詰まっている（あるいは死んだ）とき。
 /// 以前は `actor.call` のタイムアウトで**この接続プロセスごとクラッシュ**し、
 /// クライアントには理由が届かなかった。
+///
+/// `state.room` を `None` へ戻す（#100）。room actor が本当に死んでいた場合、
+/// 戻さずにいると `handle_join` が生きているものと誤認して以後ずっと
+/// `already_joined` を返し、接続は再 join も buzz/reset の再試行もできず
+/// 永久にスタックする。room actor が単に詰まっているだけ（クラッシュして
+/// いない）場合は、この後の再 join で新しい room 状態に参加し直す形に
+/// なるが、応答不能を検知した時点でクライアントに再接続を促す方が、
+/// 詰まったままの handle を握り続けるより安全側に倒れる。
 fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -727,7 +735,7 @@ fn with_room_reply(
     Ok(event) -> next(event)
     Error(Nil) -> {
       send_room_unavailable(connection)
-      mist.continue(state)
+      mist.continue(ConnectionState(..state, room: None))
     }
   }
 }
