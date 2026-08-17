@@ -65,6 +65,13 @@ pub type Message {
   /// 使い切ってから brutal kill するしかなくなる。reason が `shutdown` の
   /// 場合だけこの別メッセージにして、即座に `actor.stop()` する。
   ParentShutdown
+  /// `Release` が投げた空判定（`room.shutdown_if_empty`）の結果（#71）。
+  ///
+  /// 判定自体は registry のメールボックスの外（別プロセス）で待ち、結果だけを
+  /// メッセージとして返す。`Release` ハンドラで同期的に待つと、詰まった
+  /// room 1 つのせいで registry 全体が最大 1 秒ブロックされ、無関係な他の
+  /// room への `Lookup`/`Release` まで巻き添えで遅延する。
+  RoomEmptyChecked(id: RoomId, subject: Subject(room.Message), empty: Bool)
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -86,6 +93,9 @@ type State {
     /// 未知の room_id へ join するたびに無条件で起動すると、単一クライアントが
     /// room_id を変え続けるだけで無制限にプロセスを増やせてしまう。
     max_rooms: Int,
+    /// registry 自身の subject（#71）。`Release` が空判定を別プロセスへ
+    /// 投げるとき、結果（`RoomEmptyChecked`）の返送先として渡す。
+    self: Subject(Message),
   )
 }
 
@@ -102,12 +112,7 @@ type MonitoredRoom {
 /// `RoomId` cannot race into starting two authoritative room actors (ADR
 /// 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  build(State(
-    rooms: dict.new(),
-    monitored: dict.new(),
-    start_room: room.start,
-    max_rooms: default_max_rooms,
-  ))
+  build(room.start, default_max_rooms)
   |> actor.start
 }
 
@@ -117,12 +122,7 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
 pub fn start_with_room_starter(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
 ) -> actor.StartResult(Subject(Message)) {
-  build(State(
-    rooms: dict.new(),
-    monitored: dict.new(),
-    start_room:,
-    max_rooms: default_max_rooms,
-  ))
+  build(start_room, default_max_rooms)
   |> actor.start
 }
 
@@ -133,12 +133,7 @@ pub fn start_with_room_starter(
 pub fn start_with_max_rooms(
   max_rooms: Int,
 ) -> actor.StartResult(Subject(Message)) {
-  build(State(
-    rooms: dict.new(),
-    monitored: dict.new(),
-    start_room: room.start,
-    max_rooms:,
-  ))
+  build(room.start, max_rooms)
   |> actor.start
 }
 
@@ -167,7 +162,10 @@ fn exit_to_message(exit: process.ExitMessage) -> Message {
 /// 既存の link（`actor.start`）をそのまま使って死を検知できるため。room が
 /// 増減するたびに個別の monitor を selector へ足し引きする必要がない
 /// （ADR 0007）。
-fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
+fn build(
+  start_room: fn() -> actor.StartResult(Subject(room.Message)),
+  max_rooms: Int,
+) -> actor.Builder(State, Message, Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     let selector =
       process.new_selector()
@@ -176,6 +174,16 @@ fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
     // link された room の死を signal ではなくメッセージとして受け取る。
     // これを外すと room のクラッシュが registry を道連れにする。
     process.trap_exits(True)
+    let initial =
+      State(
+        rooms: dict.new(),
+        monitored: dict.new(),
+        start_room:,
+        max_rooms:,
+        // `subject` は初期化中の自分自身の subject（#71）。ここでしか
+        // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
+        self: subject,
+      )
     actor.initialised(initial)
     |> actor.selecting(selector)
     |> actor.returning(subject)
@@ -196,12 +204,7 @@ fn build(initial: State) -> actor.Builder(State, Message, Subject(Message)) {
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  build(State(
-    rooms: dict.new(),
-    monitored: dict.new(),
-    start_room: room.start,
-    max_rooms: default_max_rooms,
-  ))
+  build(room.start, default_max_rooms)
   |> actor.named(name)
   |> actor.start
 }
@@ -335,34 +338,53 @@ fn handle_message(
           // join した参加者ごと停止させてしまう。room のメールボックスは
           // 直列なので、自分で見て自分で止めれば隙間が生まれない。
           //
-          // Dict から外すのは**実際に停止したときだけ**。停止しなかった room を
-          // 外すと、以降の lookup が別の actor を作って参加者が分断される。
-          case room.shutdown_if_empty(current) {
-            True -> {
-              logging.log(logging.Info, "room closed (empty): id=" <> key)
-              // subject_owner がまだ引ける場合だけ、その pid の記録を直接消す。
-              // subject も一致を確かめるので、pid が再利用されても別 room の監視を
-              // 消さない。既に終了して owner を引けない場合は、後続の RoomDown が
-              // 古い記録を消す。その際も subject 一致ガードが新しい room を守る
-              // （#160）。
-              let monitored = case process.subject_owner(current) {
-                Ok(pid) ->
-                  case dict.get(state.monitored, pid) {
-                    Ok(MonitoredRoom(subject: monitored_subject, ..))
-                      if monitored_subject == current
-                    -> dict.delete(state.monitored, pid)
-                    _ -> state.monitored
-                  }
-                Error(Nil) -> state.monitored
-              }
-              actor.continue(
-                State(..state, rooms: dict.delete(state.rooms, key), monitored:),
-              )
-            }
-            False -> actor.continue(state)
-          }
+          // 判定 (`room.shutdown_if_empty`) はここで同期的に待たない（#71）。
+          // registry のメールボックス内で待つと、詰まった room 1 つが
+          // 無関係な他 room への Lookup/Release まで最大 1 秒巻き込んで
+          // 止める。判定は使い捨ての別プロセスに投げ、結果だけを
+          // `RoomEmptyChecked` として非同期に受け取る。
+          //
+          // registry がこの結果を待つ間に他 room の Lookup を処理できる
+          // のがねらいだが、同じ room id への同時 Lookup がこの短い窓の間に
+          // 割り込むと、間もなく停止する room の subject を一瞬だけ
+          // 返しうる（その場合は再送で room_unavailable エラーになる程度の
+          // 影響に留まる）。
+          process.spawn_unlinked(fn() {
+            let empty = room.shutdown_if_empty(current)
+            process.send(state.self, RoomEmptyChecked(id, current, empty))
+          })
+          actor.continue(state)
         }
         _ -> actor.continue(state)
+      }
+    }
+    RoomEmptyChecked(id, subject, empty) -> {
+      let key = room_id_to_string(id)
+      case empty, dict.get(state.rooms, key) {
+        // 判定結果を待つ間に別の actor が同じ key で登録し直されていないか、
+        // `Release` と同じガードで確かめる（#160 と同じ ABA 対処）。
+        True, Ok(current) if current == subject -> {
+          logging.log(logging.Info, "room closed (empty): id=" <> key)
+          // subject_owner がまだ引ける場合だけ、その pid の記録を直接消す。
+          // subject も一致を確かめるので、pid が再利用されても別 room の監視を
+          // 消さない。既に終了して owner を引けない場合は、後続の RoomDown が
+          // 古い記録を消す。その際も subject 一致ガードが新しい room を守る
+          // （#160）。
+          let monitored = case process.subject_owner(subject) {
+            Ok(pid) ->
+              case dict.get(state.monitored, pid) {
+                Ok(MonitoredRoom(subject: monitored_subject, ..))
+                  if monitored_subject == subject
+                -> dict.delete(state.monitored, pid)
+                _ -> state.monitored
+              }
+            Error(Nil) -> state.monitored
+          }
+          actor.continue(
+            State(..state, rooms: dict.delete(state.rooms, key), monitored:),
+          )
+        }
+        _, _ -> actor.continue(state)
       }
     }
   }
@@ -389,9 +411,10 @@ pub fn health(subject: Subject(Message)) -> Result(Int, call.Failure) {
 ///
 /// registry が応答しない場合は `Error(Nil)`（#58）。ここだけ生の `actor.call`
 /// が残っており、**#33 で room 側を塞いだ穴が registry 側に開いたままだった**。
-/// registry の Lookup は room の起動と `shutdown_if_empty` の同期呼び出しを
-/// 挟むため詰まりやすく、詰まると WebSocket の接続プロセスが理由不明のまま
-/// 落ちる（クライアントには何も届かない）。
+/// registry の Lookup は room の起動を挟むため詰まりやすく（`Release` の
+/// 空判定はもう registry のメールボックスをブロックしない、#71）、詰まると
+/// WebSocket の接続プロセスが理由不明のまま落ちる（クライアントには何も
+/// 届かない）。
 ///
 /// 失敗は 2 段ある。**registry が応答しないこと**（ここで拾う）と、
 /// **registry が「room を起動できなかった」と返すこと**（#32 で導入）。
