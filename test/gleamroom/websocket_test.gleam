@@ -229,3 +229,13 @@ pub fn frame_size_outcome_over_the_limit_is_rejected_test() {
   let text = string.repeat("a", 2049)
   assert websocket.frame_size_outcome(text) == websocket.FrameTooLarge
 }
+
+/// ハートビート窓内のメッセージ数が上限ちょうどなら受理する（#156）。
+pub fn message_rate_outcome_at_the_limit_is_accepted_test() {
+  assert websocket.message_rate_outcome(30) == websocket.MessageRateAccepted
+}
+
+/// ハートビート窓内のメッセージ数が上限を1件でも超えたら拒否する（#156）。
+pub fn message_rate_outcome_over_the_limit_is_rejected_test() {
+  assert websocket.message_rate_outcome(31) == websocket.MessageRateLimited
+}

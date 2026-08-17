@@ -34,6 +34,11 @@ type ConnectionState {
     // tick 到達時に False のままなら、この tick 区間まるごと無音だったと
     // 判断して接続を閉じる。
     active_since_heartbeat: Bool,
+    // 直近のハートビート窓（`heartbeat_interval_ms`）で受理したテキスト
+    // フレームの数（#156）。tick ごとに 0 へ戻す。専用のタイマーやウォール
+    // クロック読み取りを新設せず、既存のハートビート窓をレート制限の
+    // 単位としてそのまま流用する。
+    messages_since_heartbeat: Int,
   )
 }
 
@@ -126,6 +131,7 @@ fn on_init(
       room: None,
       heartbeat_subject: heartbeat_subject,
       active_since_heartbeat: True,
+      messages_since_heartbeat: 0,
     ),
     Some(selector),
   )
@@ -214,6 +220,14 @@ fn mark_active(state: ConnectionState) -> ConnectionState {
   ConnectionState(..state, active_since_heartbeat: True)
 }
 
+/// 直近のハートビート窓で受理したテキストフレーム数を1増やす（#156）。
+fn record_message(state: ConnectionState) -> ConnectionState {
+  ConnectionState(
+    ..state,
+    messages_since_heartbeat: state.messages_since_heartbeat + 1,
+  )
+}
+
 /// ハートビート tick 到達時の判定結果。
 pub type HeartbeatOutcome {
   /// 前回の tick 以降、クライアントから何も届かなかった。接続を閉じる。
@@ -249,7 +263,13 @@ fn handle_heartbeat_tick(
         heartbeat_interval_ms,
         HeartbeatTick,
       )
-      mist.continue(ConnectionState(..state, active_since_heartbeat: False))
+      mist.continue(
+        ConnectionState(
+          ..state,
+          active_since_heartbeat: False,
+          messages_since_heartbeat: 0,
+        ),
+      )
     }
   }
 }
@@ -277,43 +297,86 @@ pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
   }
 }
 
+/// The maximum number of text frames accepted from a single connection
+/// within one heartbeat window (`heartbeat_interval_ms`, 30s). Bounds how
+/// often one connection can force `join`/`buzz`/`reset` dispatches (and thus
+/// mailbox turns) onto the shared room actor; without it a single connection
+/// looping frames could starve every other participant in the same room
+/// (#156). Reuses the existing heartbeat window as the rate-limit window
+/// instead of introducing a dedicated timer or wall-clock read.
+const max_messages_per_heartbeat_window = 30
+
+/// Whether a connection has exceeded `max_messages_per_heartbeat_window`
+/// text frames within the current heartbeat window.
+pub type MessageRateOutcome {
+  MessageRateAccepted
+  MessageRateLimited
+}
+
+/// Pure and thus testable without a live `WebsocketConnection`, like
+/// `frame_size_outcome` above. `count_after_this_message` is the message
+/// count including the frame currently being evaluated.
+pub fn message_rate_outcome(
+  count_after_this_message: Int,
+) -> MessageRateOutcome {
+  case count_after_this_message > max_messages_per_heartbeat_window {
+    True -> MessageRateLimited
+    False -> MessageRateAccepted
+  }
+}
+
 fn handle_text(
   state: ConnectionState,
   text: String,
   connection: WebsocketConnection,
 ) -> Next(ConnectionState, ConnectionEvent) {
-  case frame_size_outcome(text) {
-    FrameTooLarge -> {
-      logging.log(
-        logging.Info,
-        "protocol message rejected: code=frame_too_large",
-      )
+  let state = record_message(state)
+  case message_rate_outcome(state.messages_since_heartbeat) {
+    MessageRateLimited -> {
+      logging.log(logging.Info, "protocol message rejected: code=rate_limited")
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
-          "frame_too_large",
-          "Message exceeds the maximum allowed size.",
+          "rate_limited",
+          "Too many messages. Please slow down.",
         ),
       )
-      mist.stop()
+      mist.continue(state)
     }
-    FrameSizeAccepted ->
-      case protocol.decode_client_message(text) {
-        Error(error) -> {
+    MessageRateAccepted ->
+      case frame_size_outcome(text) {
+        FrameTooLarge -> {
           logging.log(
             logging.Info,
-            "protocol message rejected: code=" <> error.code,
+            "protocol message rejected: code=frame_too_large",
           )
           send_server_message(
             connection,
-            protocol.ProtocolErrorMessage(error.code, error.message),
+            protocol.ProtocolErrorMessage(
+              "frame_too_large",
+              "Message exceeds the maximum allowed size.",
+            ),
           )
-          mist.continue(state)
+          mist.stop()
         }
-        Ok(protocol.Join(wire_room_id, display_name)) ->
-          handle_join(state, connection, wire_room_id, display_name)
-        Ok(protocol.Buzz) -> handle_buzz(state, connection)
-        Ok(protocol.Reset) -> handle_reset(state, connection)
+        FrameSizeAccepted ->
+          case protocol.decode_client_message(text) {
+            Error(error) -> {
+              logging.log(
+                logging.Info,
+                "protocol message rejected: code=" <> error.code,
+              )
+              send_server_message(
+                connection,
+                protocol.ProtocolErrorMessage(error.code, error.message),
+              )
+              mist.continue(state)
+            }
+            Ok(protocol.Join(wire_room_id, display_name)) ->
+              handle_join(state, connection, wire_room_id, display_name)
+            Ok(protocol.Buzz) -> handle_buzz(state, connection)
+            Ok(protocol.Reset) -> handle_reset(state, connection)
+          }
       }
   }
 }
