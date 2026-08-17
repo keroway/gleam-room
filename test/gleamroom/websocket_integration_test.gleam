@@ -7,6 +7,7 @@ import gleam/json
 import gleam/option.{None, Some}
 import gleam/string
 import gleamroom
+import gleamroom/registry
 import gramps/websocket as ws
 
 /// `/ws` を実際に生ソケットでハンドシェイクし、join → buzz → reset を1往復
@@ -62,6 +63,58 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
   send_client_message(socket, json.object([#("type", json.string("reset"))]))
   let #(reset_reply, _buffer) = recv_text_message(socket, buffer)
   assert reset_reply == "{\"type\":\"round_reset\"}"
+
+  tcp_close(socket)
+}
+
+/// room actor が join 後に死ぬと、接続は再 join できるようになる（#100）。
+///
+/// 以前は `state.room` を死んだ handle に固定したまま更新せず、以後の
+/// buzz/reset は `room_unavailable` を返し続け、再 join も
+/// `already_joined` で拒否され続けて接続が永久にスタックしていた。
+/// 修正後は `room.dispatch` の失敗時に `state.room` を `None` へ戻すため、
+/// 同じ接続からの再 join が新しい room に参加できる。
+pub fn ws_rejoins_after_room_actor_dies_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(registry_subject)
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(join_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(join_reply, "\"type\":\"state\"")
+
+  let assert Ok(room_subject) =
+    registry.lookup(registry_subject, registry.room_id("ROOM1"))
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  process.kill(room_pid)
+  // room actor の死が registry/接続双方に伝播するのを待つ。
+  process.sleep(50)
+
+  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  let #(buzz_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(buzz_reply, "\"type\":\"error\"")
+  assert string.contains(buzz_reply, "\"code\":\"room_unavailable\"")
+
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(rejoin_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(rejoin_reply, "\"type\":\"state\"")
+  assert !string.contains(rejoin_reply, "already_joined")
 
   tcp_close(socket)
 }
