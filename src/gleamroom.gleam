@@ -28,11 +28,18 @@ const default_port = 4000
 /// 親子関係も再起動戦略も無かった。どちらかが落ちても他方は生き続け、
 /// **HTTP は 200 を返すのに join だけが無反応**という状態になりえた。
 ///
-/// `rest_for_one` を選ぶ理由: web server は registry に依存するが逆は依存しない。
-/// registry が落ちたら web server も作り直す必要がある（古い名前解決を握った
-/// 接続を残さないため）。逆に web server だけが落ちた場合は registry を巻き込まない。
-///
-/// 子の順序は依存の順序。registry を先に立ててから web server を立てる。
+/// `one_for_one` を選ぶ理由（#78）: 以前は `rest_for_one` を使っていたが、
+/// その根拠（「web server は registry に依存するので、registry が落ちたら
+/// 古い名前解決を握った web server も作り直す必要がある」）は誤りだった。
+/// web server に渡す `registry_subject` は `process.named_subject` で、
+/// 名前解決は送信のたびに引き直される。registry が再起動して新プロセスに
+/// 差し替わっても、mist 側は何も作り直さずに新しい registry へ届く。
+/// にもかかわらず `rest_for_one` は registry の後ろに追加した mist（と、
+/// その配下で稼働中の全 WebSocket 接続）を registry のクラッシュのたびに
+/// 巻き添えで再起動していた。room 単位の障害分離という設計原則
+/// （ADR 0002）に反して、registry の障害が無関係な全 room の接続断として
+/// 全体へ波及していたため、`one_for_one` へ変更し registry と web server を
+/// 独立して再起動できるようにする。
 pub fn main() -> Nil {
   logging.configure()
 
@@ -122,7 +129,7 @@ pub fn start(
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
 
-  supervisor.new(supervisor.RestForOne)
+  supervisor.new(supervisor.OneForOne)
   // `intensity`/`period` を明示する（#79）。値そのものは gleam_otp の既定
   // （5 秒間に 2 回）のままだが、無指定だと「意図して既定値を選んだ」のか
   // 「設定を忘れた」のか読み手が区別できない。MVP の規模で子は2つだけ
@@ -157,7 +164,7 @@ pub fn start_on_ephemeral_port() -> Result(
 
   let bound_port = process.new_subject()
 
-  supervisor.new(supervisor.RestForOne)
+  supervisor.new(supervisor.OneForOne)
   |> supervisor.restart_tolerance(intensity: 2, period: 5)
   |> supervisor.add(
     supervision.worker(fn() { registry.start_named(registry_name) }),

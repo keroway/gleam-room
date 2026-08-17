@@ -210,5 +210,41 @@ pub fn start_shuts_down_and_is_observable_via_await_supervisor_exit_after_exceed
   let assert Ok(Nil) = process.receive(done, 5000)
 }
 
+/// `gleamroom.start_on_ephemeral_port` が実際に組む supervisor 構成が
+/// `one_for_one` であり、registry のクラッシュが mist（web server）を
+/// 巻き添えにしないことを検証する（#78）。
+///
+/// 以前の `rest_for_one` 構成では、この後ろに追加された子（mist とその
+/// 配下の全 WebSocket 接続）が registry のクラッシュのたびに強制再起動
+/// されていた。`one_for_one` へ変更した後は、registry(1番目の子)が
+/// 再起動されても mist(2番目の子)の pid は変わらないはず。
+pub fn one_for_one_does_not_restart_the_web_server_when_registry_crashes_test() {
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  let assert Ok(registry_pid_before) = first_child_pid(supervisor_pid)
+  let assert Ok(mist_pid_before) = second_child_pid(supervisor_pid)
+
+  process.kill(registry_pid_before)
+
+  wait.until(
+    fn() {
+      case first_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != registry_pid_before
+        Error(Nil) -> False
+      }
+    },
+    "registry が再起動する",
+  )
+
+  // registry の再起動が観測できた時点で、mist 側は巻き添えを受けていれば
+  // 既に再起動が始まっているはず。one_for_one ならここで pid は不変。
+  let assert Ok(mist_pid_after) = second_child_pid(supervisor_pid)
+  assert mist_pid_before == mist_pid_after
+}
+
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")
 fn first_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
+
+@external(erlang, "gleamroom_supervisor_test_ffi", "second_child_pid")
+fn second_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
