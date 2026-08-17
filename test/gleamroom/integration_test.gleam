@@ -69,6 +69,10 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.RoundReset)
   assert process.receive(bob_session, 100) == Ok(room.RoundReset)
   assert process.receive(carol_session, 100) == Ok(room.RoundReset)
+  // The issuer also receives a broadcast copy of their own reset/buzz
+  // (#143); drain it so it does not shadow later assertions on the same
+  // session.
+  let _ = process.receive(alice_session, 100)
 
   // 4 & 5. Clients buzz in the accepted order B, A, C; all clients observe
   // the identical ordering.
@@ -78,6 +82,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.BuzzAccepted(bob, "Bob", 1))
   assert process.receive(carol_session, 100)
     == Ok(room.BuzzAccepted(bob, "Bob", 1))
+  let _ = process.receive(bob_session, 100)
 
   assert room.dispatch(room_subject, room.Buzz(alice), alice_session)
     == Ok(room.BuzzAccepted(alice, "Alice", 2))
@@ -85,6 +90,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.BuzzAccepted(alice, "Alice", 2))
   assert process.receive(carol_session, 100)
     == Ok(room.BuzzAccepted(alice, "Alice", 2))
+  let _ = process.receive(alice_session, 100)
 
   assert room.dispatch(room_subject, room.Buzz(carol), carol_session)
     == Ok(room.BuzzAccepted(carol, "Carol", 3))
@@ -92,6 +98,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.BuzzAccepted(carol, "Carol", 3))
   assert process.receive(bob_session, 100)
     == Ok(room.BuzzAccepted(carol, "Carol", 3))
+  let _ = process.receive(carol_session, 100)
 
   let expected_order = [
     room.BuzzResult(bob, "Bob", 1),
@@ -106,6 +113,8 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   assert process.receive(alice_session, 100) == Error(Nil)
   assert process.receive(carol_session, 100) == Error(Nil)
   assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
+  // Rejections are never broadcast, not even to the issuer, so bob_session
+  // has nothing queued here.
 
   // 7. Reset clears the results for all clients.
   assert room.dispatch(room_subject, room.ResetRound, alice_session)
@@ -113,6 +122,7 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   assert process.receive(bob_session, 100) == Ok(room.RoundReset)
   assert process.receive(carol_session, 100) == Ok(room.RoundReset)
   assert room.get_buzz_snapshot(room_subject) == Ok([])
+  let _ = process.receive(alice_session, 100)
 
   // 8. One client (Carol) disconnects and remaining clients observe the
   // leave.

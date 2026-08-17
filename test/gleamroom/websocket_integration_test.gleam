@@ -59,6 +59,14 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
   assert string.contains(buzz_reply, "\"type\":\"buzz_accepted\"")
   assert string.contains(buzz_reply, "\"display_name\":\"Alice\"")
   assert string.contains(buzz_reply, "\"position\":1")
+  // The room actor also broadcasts `buzz_accepted` back to the buzzer's own
+  // session (#143: this is what lets a late reply after a `dispatch`
+  // timeout still reach the client), so a second, identical copy of the
+  // frame above follows on the wire. The client already treats this as
+  // idempotent (dedup by buzz position); drain it here so it does not
+  // shadow the `round_reset` assertion below.
+  let #(buzz_echo, buffer) = recv_text_message(socket, buffer)
+  assert buzz_echo == buzz_reply
 
   send_client_message(socket, json.object([#("type", json.string("reset"))]))
   let #(reset_reply, _buffer) = recv_text_message(socket, buffer)

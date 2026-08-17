@@ -257,7 +257,10 @@ pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
   assert event == room.BuzzAccepted(bob, "Bob", 1)
   assert process.receive(alice_session, 100)
     == Ok(room.BuzzAccepted(bob, "Bob", 1))
-  assert process.receive(bob_session, 100) == Error(Nil)
+  // Bob also receives his own accepted buzz asynchronously (#143), on top
+  // of the synchronous `dispatch` return value already asserted above.
+  assert process.receive(bob_session, 100)
+    == Ok(room.BuzzAccepted(bob, "Bob", 1))
 }
 
 pub fn actor_reset_round_clears_buzz_snapshot_test() {
