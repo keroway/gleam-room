@@ -95,6 +95,43 @@ pub fn room_event_to_server_message_buzz_rejected_unreachable_branch_test() {
     == None
 }
 
+pub fn buzz_reject_code_and_message_already_buzzed_test() {
+  assert websocket.buzz_reject_code_and_message(room.AlreadyBuzzed)
+    == #(
+      "already_buzzed",
+      "This participant already buzzed for the current round.",
+    )
+}
+
+pub fn buzz_reject_code_and_message_buzzer_not_joined_test() {
+  assert websocket.buzz_reject_code_and_message(room.BuzzerNotJoined)
+    == #("buzzer_not_joined", "This connection has not joined the room yet.")
+}
+
+/// `registry.lookup` が room actor を引けなかった場合のメッセージ（#32）。
+pub fn room_unavailable_message_lookup_failed_test() {
+  assert websocket.room_unavailable_message(websocket.RoomLookupFailed)
+    == "The room could not be started. Please try again."
+}
+
+/// `Join` の応答がタイムアウトした場合のメッセージ。再試行ではなく再接続を
+/// 促す（#33 のコメント参照: 再試行は二重参加を招くため）。
+pub fn room_unavailable_message_join_timed_out_test() {
+  assert websocket.room_unavailable_message(websocket.JoinTimedOut)
+    == "The room did not respond in time. Reconnect to try again."
+}
+
+/// `Buzz`/`ResetRound` の応答がタイムアウトした場合のメッセージ（#33）。
+pub fn room_unavailable_message_reply_timed_out_test() {
+  assert websocket.room_unavailable_message(websocket.ReplyTimedOut)
+    == "The room did not respond in time. Please try again."
+}
+
+pub fn not_joined_message_test() {
+  assert websocket.not_joined_message
+    == "Join a room before sending this command."
+}
+
 pub fn to_wire_participant_test() {
   let participant = room.Participant(room.participant_id("p1"), "Alice")
 

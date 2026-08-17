@@ -355,12 +355,10 @@ fn handle_join(
           <> ", participant="
           <> room.participant_id_to_string(handle.participant_id),
       )
+      let #(code, message) = join_reject_code_and_message(room.AlreadyJoined)
       send_server_message(
         connection,
-        protocol.ProtocolErrorMessage(
-          "already_joined",
-          "This connection has already joined a room.",
-        ),
+        protocol.ProtocolErrorMessage(code, message),
       )
       mist.continue(state)
     }
@@ -467,6 +465,24 @@ fn handle_join(
   }
 }
 
+/// Maps a `room.BuzzRejectReason` to the `code`/`message` pair sent to the
+/// client. Pure and thus testable without a live `WebsocketConnection`, like
+/// `join_reject_code_and_message` above.
+pub fn buzz_reject_code_and_message(
+  reason: room.BuzzRejectReason,
+) -> #(String, String) {
+  case reason {
+    room.AlreadyBuzzed -> #(
+      "already_buzzed",
+      "This participant already buzzed for the current round.",
+    )
+    room.BuzzerNotJoined -> #(
+      "buzzer_not_joined",
+      "This connection has not joined the room yet.",
+    )
+  }
+}
+
 fn handle_buzz(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -516,16 +532,7 @@ fn handle_buzz(
               <> ", reason="
               <> string.inspect(reason),
           )
-          let #(code, message) = case reason {
-            room.AlreadyBuzzed -> #(
-              "already_buzzed",
-              "This participant already buzzed for the current round.",
-            )
-            room.BuzzerNotJoined -> #(
-              "buzzer_not_joined",
-              "This connection has not joined the room yet.",
-            )
-          }
+          let #(code, message) = buzz_reject_code_and_message(reason)
           send_server_message(
             connection,
             protocol.ProtocolErrorMessage(code, message),
@@ -609,6 +616,28 @@ pub fn release_room(
   }
 }
 
+/// Why a `room_unavailable` error is being sent. Each call site fails for a
+/// different reason and thus owes the client a different explanation.
+pub type RoomUnavailableReason {
+  /// `registry.lookup` could not resolve or start the room actor.
+  RoomLookupFailed
+  /// `Join` was dispatched but no reply arrived in time.
+  JoinTimedOut
+  /// `Buzz`/`ResetRound` was dispatched but no reply arrived in time.
+  ReplyTimedOut
+}
+
+/// Maps a `RoomUnavailableReason` to the message sent to the client. Pure
+/// and thus testable without a live `WebsocketConnection`, like
+/// `join_reject_code_and_message` above.
+pub fn room_unavailable_message(reason: RoomUnavailableReason) -> String {
+  case reason {
+    RoomLookupFailed -> "The room could not be started. Please try again."
+    JoinTimedOut -> "The room did not respond in time. Reconnect to try again."
+    ReplyTimedOut -> "The room did not respond in time. Please try again."
+  }
+}
+
 /// room を引けたときだけ `next` を実行する。引けなければクライアントへ
 /// `room_unavailable` を返し、接続はそのまま維持する（#32）。
 fn with_room(
@@ -628,7 +657,7 @@ fn with_room(
         connection,
         protocol.ProtocolErrorMessage(
           "room_unavailable",
-          "The room could not be started. Please try again.",
+          room_unavailable_message(RoomLookupFailed),
         ),
       )
       mist.continue(state)
@@ -671,7 +700,7 @@ fn with_join_reply(
         connection,
         protocol.ProtocolErrorMessage(
           "room_unavailable",
-          "The room did not respond in time. Reconnect to try again.",
+          room_unavailable_message(JoinTimedOut),
         ),
       )
       mist.stop()
@@ -708,10 +737,15 @@ fn send_room_unavailable(connection: WebsocketConnection) -> Nil {
     connection,
     protocol.ProtocolErrorMessage(
       "room_unavailable",
-      "The room did not respond in time. Please try again.",
+      room_unavailable_message(ReplyTimedOut),
     ),
   )
 }
+
+/// The message sent when a command arrives on a connection that has not
+/// joined a room yet. Pure and thus testable without a live
+/// `WebsocketConnection`, like `join_reject_code_and_message` above.
+pub const not_joined_message = "Join a room before sending this command."
 
 fn send_not_joined_error(
   connection: WebsocketConnection,
@@ -723,10 +757,7 @@ fn send_not_joined_error(
   )
   send_server_message(
     connection,
-    protocol.ProtocolErrorMessage(
-      "not_joined",
-      "Join a room before sending this command.",
-    ),
+    protocol.ProtocolErrorMessage("not_joined", not_joined_message),
   )
 }
 
