@@ -71,9 +71,14 @@ pub fn release_removes_an_unjoined_room_so_the_next_lookup_starts_a_fresh_actor_
   assert registry_subject_of(started.data, id) == first
 
   process.send(started.data, registry.Release(id, first))
-  // Release は非同期なので、次の同期呼び出しで処理済みを保証する。
-  let assert Ok(second) = registry.lookup(started.data, id)
+  // Release は非同期。空判定が別プロセスで完了し、registry へ結果が
+  // 返ってくるまで待つ（#71）。
+  wait.until(
+    fn() { registry_subject_of(started.data, id) != first },
+    "release が処理され新しい room に置き換わる",
+  )
 
+  let assert Ok(second) = registry.lookup(started.data, id)
   assert second != first
 }
 
@@ -88,6 +93,11 @@ pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
 
   let assert Ok(old) = registry.lookup(started.data, id)
   process.send(started.data, registry.Release(id, old))
+  // Release は非同期。新しい room に置き換わるまで待つ（#71）。
+  wait.until(
+    fn() { registry_subject_of(started.data, id) != old },
+    "最初の release が処理され新しい room に置き換わる",
+  )
   let assert Ok(current) = registry.lookup(started.data, id)
 
   // 遅れて届いた古い Release。current を消してはいけない。
@@ -109,9 +119,7 @@ pub fn release_stops_the_room_actor_process_test() {
   assert process.is_alive(pid)
 
   process.send(started.data, registry.Release(id, subject))
-  // Release は非同期。registry への同期呼び出しで処理済みを保証してから、
-  // room 側の停止が伝播するのを待つ。
-  let assert Ok(_) = registry.lookup(started.data, id)
+  // Release は非同期（#71）。room 側の停止が伝播するのを待つ。
   wait.until_dead(pid, "空の room が停止する")
 
   assert !process.is_alive(pid)
@@ -130,6 +138,11 @@ pub fn a_delayed_room_down_does_not_remove_a_recreated_room_test() {
   let assert Ok(old_pid) = process.subject_owner(old)
 
   process.send(started.data, registry.Release(id, old))
+  // Release は非同期。新しい room に置き換わるまで待つ（#71）。
+  wait.until(
+    fn() { registry_subject_of(started.data, id) != old },
+    "release が処理され新しい room に置き換わる",
+  )
   let assert Ok(current) = registry.lookup(started.data, id)
 
   // trap_exits から届くものと同じ、旧 actor の遅延した終了通知を再現する。
@@ -158,11 +171,12 @@ pub fn release_does_not_stop_a_room_that_gained_a_participant_test() {
   let assert Ok(_) = room.dispatch(subject, room.Join(joiner, "late"), session)
 
   process.send(started.data, registry.Release(id, subject))
-  // Release は非同期。registry への同期呼び出しで処理済みを保証する。
+  // Release は非同期（#71）。「起きないこと」の確認なので、待てる条件が
+  // 無く sleep で猶予を作るしかない。停止するならこの間に停止する。
+  // 空判定は別プロセス経由の往復が増えた分、以前より少し長めに待つ。
+  process.sleep(100)
+
   let assert Ok(after) = registry.lookup(started.data, id)
-  // 「起きないこと」の確認なので、ここだけは待つ以外にない。停止するなら
-  // この間に停止する（条件で待てる事象が無い）。
-  process.sleep(50)
 
   // 停止していない。
   assert process.is_alive(pid)
