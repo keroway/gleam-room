@@ -149,3 +149,66 @@ pub fn await_supervisor_exit_ignores_exit_of_other_pid_test() {
 
   let assert Ok(Nil) = process.receive(done, 1000)
 }
+
+/// `gleamroom.start` が組む実際の supervisor 構成
+/// (`intensity:2/period:5`、`main` の `trap_exits(True)` +
+/// `await_supervisor_exit`) を通しで検証する（#190）。
+///
+/// これまでの `await_supervisor_exit_*_test` は関数単体を自前で spawn した
+/// pid に対して直接呼んでおり、`start` が実際に組む supervisor 構成
+/// (`intensity`/`period`) は経由していなかった。ここでは registry 子を
+/// `restart_tolerance` の許容回数(2回)を超えて連続 kill し、(a) 供給元の
+/// supervisor 自身が shutdown すること、(b) その exit が
+/// `await_supervisor_exit` 経由で観測できることを検証する。
+///
+/// `gleam_otp` の `Supervisor` は opaque で子 pid を取得する API を公開して
+/// いないため、`supervisor:which_children/1` を直接叩く FFI
+/// (`test/gleamroom_supervisor_test_ffi.erl`)を使う。
+pub fn start_shuts_down_and_is_observable_via_await_supervisor_exit_after_exceeding_restart_tolerance_test() {
+  process.trap_exits(True)
+
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  // intensity:2/period:5 の許容回数(2回)までは再起動される。
+  let assert Ok(registry_pid_1) = first_child_pid(supervisor_pid)
+  process.kill(registry_pid_1)
+  wait.until(
+    fn() {
+      case first_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != registry_pid_1
+        Error(Nil) -> False
+      }
+    },
+    "registry が1回目の再起動をする",
+  )
+
+  let assert Ok(registry_pid_2) = first_child_pid(supervisor_pid)
+  process.kill(registry_pid_2)
+  wait.until(
+    fn() {
+      case first_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != registry_pid_2
+        Error(Nil) -> False
+      }
+    },
+    "registry が2回目の再起動をする",
+  )
+
+  // 3回目のクラッシュは intensity:2/period:5 を超える。supervisor は
+  // 子を再起動せず全子を terminate してから自身も shutdown するはず
+  // ——これが本 issue の主張そのもの: `main` の `trap_exits(True)` +
+  // `await_supervisor_exit` がこの実際の shutdown を検知できること。
+  let assert Ok(registry_pid_3) = first_child_pid(supervisor_pid)
+  process.kill(registry_pid_3)
+
+  let done = process.new_subject()
+  gleamroom.await_supervisor_exit(supervisor_pid, fn() {
+    process.send(done, Nil)
+  })
+
+  let assert Ok(Nil) = process.receive(done, 5000)
+}
+
+@external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")
+fn first_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
