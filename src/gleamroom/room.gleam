@@ -116,6 +116,11 @@ fn apply_join(
     list.length(state.participants) >= max_participants
   {
     _, False, _ -> #(state, JoinRejected(id, InvalidDisplayName))
+    // Unreachable from the current websocket layer: each connection gets a
+    // fresh ParticipantId and dispatches Join at most once, so no live
+    // connection can ever collide with an id already in `participants`.
+    // Kept as a defensive branch for a future multi-connection/reconnect
+    // model where a ParticipantId could be reused (#52).
     Ok(_), True, _ -> #(state, JoinRejected(id, AlreadyJoined))
     Error(Nil), True, True -> #(state, JoinRejected(id, RoomFull))
     Error(Nil), True, False -> {
@@ -135,6 +140,11 @@ fn is_valid_display_name(display_name: String) -> Bool {
 
 fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
+    // Unreachable from the current websocket layer: Leave is only sent from
+    // `on_close` when `state.room` holds the handle from a prior successful
+    // Join, so the id is always still a participant. Kept as a defensive
+    // branch for a future explicit "leave without disconnecting" protocol
+    // message, which does not exist yet (#52).
     Error(Nil) -> #(state, LeaveRejected(id, NotJoined))
     Ok(_) -> {
       let remaining = list.filter(state.participants, fn(p) { p.id != id })
@@ -149,6 +159,10 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
 /// was first.
 fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
+    // Unreachable from the current websocket layer: Buzz is only sent when
+    // `state.room` holds the handle from a prior successful Join, so the id
+    // is always still a participant. Kept as a defensive branch for the same
+    // reason as `apply_leave`'s NotJoined branch above (#52).
     Error(Nil) -> #(state, BuzzRejected(id, BuzzerNotJoined))
     Ok(participant) ->
       case has_buzzed(state, id) {
