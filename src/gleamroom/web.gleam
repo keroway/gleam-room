@@ -198,9 +198,9 @@ pub fn index_html() -> String {
         break;
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_display_name/room_unavailable はソケットを
-        // 閉じずに返る（websocket.gleam の with_room/JoinRejected 分岐）。
-        // 実接続の close イベントを待つと再joinまで時間差ができるため、
+        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
+        // ソケットを閉じずに返る（websocket.gleam の with_room/JoinRejected
+        // 分岐）。実接続の close イベントを待つと再joinまで時間差ができるため、
         // ここで即座に \"未接続・再度join可能\" な状態へ戻す。実ソケットも
         // 明示的に閉じ、以降そのソケットからのイベントは無視する
         // （close は自然発火してもここでの状態は既にリセット済み）。
@@ -209,6 +209,7 @@ pub fn index_html() -> String {
         // だけで join 失敗ではないため、ここには含めない。
         if (
           message.code === \"room_full\" ||
+          message.code === \"invalid_room_id\" ||
           message.code === \"invalid_display_name\" ||
           message.code === \"room_unavailable\"
         ) {
