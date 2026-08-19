@@ -134,3 +134,23 @@ test("room_unavailable エラーは接続状態を未接続にリセットする
     client.dispose();
   }
 });
+
+test("invalid_room_id エラーは接続状態を未接続にリセットする（#265: マルチバイトのバイト数超過で再join不能になる回帰防止）", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "error",
+        code: "invalid_room_id",
+        message: "room id is invalid",
+      }),
+    });
+
+    assert.equal(client.connectionState(), "disconnected");
+  } finally {
+    client.dispose();
+  }
+});
