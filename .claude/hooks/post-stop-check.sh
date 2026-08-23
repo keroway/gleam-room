@@ -73,7 +73,9 @@ while IFS= read -r file; do
     src/*.gleam|test/*.gleam|gleam.toml|manifest.toml) GLEAM_CHANGED=1 ;;
   esac
   case "$file" in
-    test/client/*.test.mjs) CLIENT_TEST_CHANGED=1 ;;
+    # web.gleam embeds the client JS as a string (see test/client/extract.mjs),
+    # so a web.gleam-only change can break it without touching *.test.mjs (#183).
+    test/client/*.test.mjs|src/gleamroom/web.gleam) CLIENT_TEST_CHANGED=1 ;;
   esac
 done <<EOF
 $CHANGED_FILES
