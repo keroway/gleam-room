@@ -75,7 +75,11 @@ while IFS= read -r file; do
   case "$file" in
     # web.gleam embeds the client JS as a string (see test/client/extract.mjs),
     # so a web.gleam-only change can break it without touching *.test.mjs (#183).
-    test/client/*.test.mjs|src/gleamroom/web.gleam) CLIENT_TEST_CHANGED=1 ;;
+    # harness.mjs/extract.mjs are the shared test harness the *.test.mjs files
+    # import, so changing either without touching a *.test.mjs file can also
+    # change what the tests actually verify (#186).
+    test/client/*.test.mjs|src/gleamroom/web.gleam|test/client/harness.mjs|test/client/extract.mjs)
+      CLIENT_TEST_CHANGED=1 ;;
   esac
 done <<EOF
 $CHANGED_FILES
