@@ -38,11 +38,14 @@
 
 - `src/*.gleam` / `test/*.gleam` / `gleam.toml` / `manifest.toml` が変わった場合:
   `gleam format --check src test` → `gleam build --warnings-as-errors` → `gleam test`
-- `test/client/*.test.mjs` / `src/gleamroom/web.gleam` が変わった場合:
+- `test/client/*.test.mjs` / `src/gleamroom/web.gleam` /
+  `test/client/harness.mjs` / `test/client/extract.mjs` が変わった場合:
   `node --test 'test/client/*.test.mjs'`
   （web.gleam に埋め込まれたクライアント JS の回帰テスト。Gleam 側からは検証できない。
   テスト自体を触らなくても web.gleam の変更でテスト対象は変わるため、
-  web.gleam もトリガーに含める（#183））
+  web.gleam もトリガーに含める（#183）。harness.mjs / extract.mjs はテストが
+  import する共有ハーネスで、単独変更でもテストの検証内容が変わりうるため
+  同様にトリガーに含める（#186））
 
 Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が両方 CLOSED になり
 検証できない状態を成功扱いする心配が無くなったため導入した。
