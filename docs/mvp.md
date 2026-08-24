@@ -100,10 +100,10 @@ Illustrative client messages:
 Illustrative server messages:
 
 ```json
-{"type":"state","participants":[],"buzzes":[]}
+{"type":"state","participants":[],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}]}
 {"type":"participant_joined","participant":{}}
 {"type":"participant_left","participant_id":"..."}
-{"type":"buzz_accepted","participant_id":"...","position":1}
+{"type":"buzz_accepted","participant_id":"...","display_name":"Alice","position":1}
 {"type":"round_reset"}
 {"type":"error","code":"...","message":"..."}
 ```
@@ -124,6 +124,9 @@ may vary for the same code.
 | `buzzer_not_joined` | This connection has not joined the room yet, so the buzz was rejected. |
 | `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; buzz/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
+| `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
+| `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window. |
+| `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size. The connection is closed afterward. |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.
 

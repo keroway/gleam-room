@@ -132,6 +132,21 @@ pub fn not_joined_message_test() {
     == "Join a room before sending this command."
 }
 
+pub fn binary_frame_code_and_message_test() {
+  assert websocket.binary_frame_code_and_message
+    == #("binary_frame", "Binary frames are not supported.")
+}
+
+pub fn rate_limited_code_and_message_test() {
+  assert websocket.rate_limited_code_and_message
+    == #("rate_limited", "Too many messages. Please slow down.")
+}
+
+pub fn frame_too_large_code_and_message_test() {
+  assert websocket.frame_too_large_code_and_message
+    == #("frame_too_large", "Message exceeds the maximum allowed size.")
+}
+
 pub fn to_wire_participant_test() {
   let participant = room.Participant(room.participant_id("p1"), "Alice")
 
