@@ -2,7 +2,18 @@
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
   extends: ["github>keroway/.github"],
   packageRules: [
-    // Add repository-specific Gleam/Hex rules only after the dependency graph
-    // exists and the package manager behavior has been verified.
+    // gleam.toml/manifest.toml は bootstrap 時点から実依存(gleam_stdlib 等10件)を
+    // 持ち、Renovate の gleam manager は既定で対応済み(公式ドキュメントで確認済み、
+    // https://docs.renovatebot.com/modules/manager/gleam/)。PR/Dependency
+    // Dashboard が一件も無いのは manager 非対応ではなく、keroway ワークスペースの
+    // Renovate(Mend App) が "mode": "silent" で運用されているため(組織側の設定
+    // であり本リポジトリの renovate.json5 からは変更できない)。npm/github-actions
+    // と同じ方針でグルーピングだけ先に用意しておく。
+    {
+      description: "gleam(hex): マイナー / パッチはまとめて 1 PR にしてノイズを抑える（major は個別 PR）",
+      matchManagers: ["gleam"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "gleam-minor-patch",
+    },
   ],
 }
