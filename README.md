@@ -151,12 +151,24 @@ what `gleam_httpc` is a dev-dependency for.
 
 ## Roadmap
 
-1. Multiplayer buzzer prototype.
-2. Complete buzzer quiz MVP.
-3. Build a second application such as Planning Poker.
+1. Multiplayer buzzer prototype. ✅ Done.
+2. Complete buzzer quiz MVP. ✅ Done — every requirement in
+   [`docs/mvp.md`](docs/mvp.md) (room create/join, multiple WebSocket
+   clients, join/leave notifications, buzzer input with server-side
+   ordering, round reset, basic reconnect) is implemented and covered by
+   `gleam test` (`test/gleamroom/integration_test.gleam` automates the
+   [acceptance scenario](docs/mvp.md#acceptance-scenario) end to end) plus
+   `test/client/*.test.mjs`.
+3. Build a second application such as Planning Poker. Not started — filing
+   the first vertical-slice issue for this step is tracked separately; see
+   the CLAUDE.md Generalization rule below before starting it.
 4. Extract reusable room/presence/lifecycle primitives.
 5. Build a high-frequency crowd-controlled game.
 6. Re-evaluate whether the extracted primitives deserve a standalone library/API.
+
+Per CLAUDE.md's Generalization rule, do not begin step 4 from the buzzer
+application alone — reusable abstractions are extracted only after step 3
+demonstrates the same requirements in a second concrete application.
 
 ## Development workflow
 
