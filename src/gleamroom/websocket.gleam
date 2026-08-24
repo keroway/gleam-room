@@ -180,6 +180,14 @@ fn on_close(state: ConnectionState) -> Nil {
   }
 }
 
+/// The `code`/`message` pair sent when a binary frame arrives. Pure and thus
+/// testable without a live `WebsocketConnection`, like
+/// `join_reject_code_and_message` above.
+pub const binary_frame_code_and_message = #(
+  "binary_frame",
+  "Binary frames are not supported.",
+)
+
 fn handle_message(
   state: ConnectionState,
   message: WebsocketMessage(ConnectionEvent),
@@ -193,12 +201,10 @@ fn handle_message(
     // rather than swallowed.
     mist.Binary(_data) -> {
       logging.log(logging.Info, "protocol message rejected: code=binary_frame")
+      let #(code, message) = binary_frame_code_and_message
       send_server_message(
         connection,
-        protocol.ProtocolErrorMessage(
-          "binary_frame",
-          "Binary frames are not supported.",
-        ),
+        protocol.ProtocolErrorMessage(code, message),
       )
       mist.continue(mark_active(state))
     }
@@ -297,6 +303,14 @@ pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
   }
 }
 
+/// The `code`/`message` pair sent when `frame_size_outcome` returns
+/// `FrameTooLarge`. Pure and thus testable without a live
+/// `WebsocketConnection`, like `join_reject_code_and_message` above.
+pub const frame_too_large_code_and_message = #(
+  "frame_too_large",
+  "Message exceeds the maximum allowed size.",
+)
+
 /// The maximum number of text frames accepted from a single connection
 /// within one heartbeat window (`heartbeat_interval_ms`, 30s). Bounds how
 /// often one connection can force `join`/`buzz`/`reset` dispatches (and thus
@@ -312,6 +326,14 @@ pub type MessageRateOutcome {
   MessageRateAccepted
   MessageRateLimited
 }
+
+/// The `code`/`message` pair sent when `message_rate_outcome` returns
+/// `MessageRateLimited`. Pure and thus testable without a live
+/// `WebsocketConnection`, like `join_reject_code_and_message` above.
+pub const rate_limited_code_and_message = #(
+  "rate_limited",
+  "Too many messages. Please slow down.",
+)
 
 /// Pure and thus testable without a live `WebsocketConnection`, like
 /// `frame_size_outcome` above. `count_after_this_message` is the message
@@ -334,12 +356,10 @@ fn handle_text(
   case message_rate_outcome(state.messages_since_heartbeat) {
     MessageRateLimited -> {
       logging.log(logging.Info, "protocol message rejected: code=rate_limited")
+      let #(code, message) = rate_limited_code_and_message
       send_server_message(
         connection,
-        protocol.ProtocolErrorMessage(
-          "rate_limited",
-          "Too many messages. Please slow down.",
-        ),
+        protocol.ProtocolErrorMessage(code, message),
       )
       mist.continue(state)
     }
@@ -350,12 +370,10 @@ fn handle_text(
             logging.Info,
             "protocol message rejected: code=frame_too_large",
           )
+          let #(code, message) = frame_too_large_code_and_message
           send_server_message(
             connection,
-            protocol.ProtocolErrorMessage(
-              "frame_too_large",
-              "Message exceeds the maximum allowed size.",
-            ),
+            protocol.ProtocolErrorMessage(code, message),
           )
           mist.stop()
         }
