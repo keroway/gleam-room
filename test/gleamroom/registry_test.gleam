@@ -394,6 +394,40 @@ pub fn health_reports_a_room_that_does_not_respond_to_a_probe_test() {
   )
 }
 
+/// 前回発火した probe がまだ全件返り終えていなければ、`Health` を連打しても
+/// probe を重ねて発火しないこと（#269）。
+///
+/// 認証の無い `/health` を高頻度で叩くだけで、登録済み room 全件へ
+/// probe（`GetSnapshot`）が際限なく積み上がる事故を防ぐガード。
+/// 所有者はテストプロセス自身の subject を room として登録し、実際に届いた
+/// `GetSnapshot` の件数を数えることで、2回目の `Health` が新たな probe を
+/// 発火しなかったことを確かめる。
+pub fn health_does_not_refire_probes_while_previous_ones_are_in_flight_test() {
+  let probe_subject: process.Subject(room.Message) = process.new_subject()
+  let assert Ok(started) =
+    registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: probe_subject))
+    })
+  let reg = started.data
+
+  let assert Ok(_) = registry.lookup(reg, registry.room_id("room-1"))
+
+  // 最初の Health で probe が1件発火する。
+  let assert Ok(_) = registry.health(reg)
+  // 前回の probe がまだ in-flight のうちに Health を連打しても、
+  // 新たな probe 群は発火しないはず。
+  let assert Ok(_) = registry.health(reg)
+  let assert Ok(_) = registry.health(reg)
+
+  // 発火した唯一の probe を受け取り、応答する。
+  let assert Ok(room.GetSnapshot(reply_to)) =
+    process.receive(probe_subject, 200)
+  process.send(reply_to, [])
+
+  // 再発火していれば追加の GetSnapshot が届くはずだが、届かないことを確認する。
+  assert process.receive(probe_subject, 100) == Error(Nil)
+}
+
 /// **応答しない registry では失敗する**こと。ここが本体で、件数は付随情報。
 ///
 /// 「詰まっている」を再現するため、誰も処理しない subject を渡す
