@@ -2,6 +2,7 @@ import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/otp/actor
 import gleam/result
 import gleam/set.{type Set}
@@ -121,6 +122,13 @@ type State {
     /// `Health` を受けるたびに全 room へ probe を再実行し置き換える
     /// 「前回の結果」であり、リアルタイムの状態ではない。
     stuck_rooms: Set(String),
+    /// 前回発火した probe のうち、まだ `RoomProbed` が返っていない件数
+    /// （#269）。`/health` は認証なしで公開されており、連打されるたびに
+    /// 登録 room 全件へ probe を仕掛け直すと、直前の probe 群が結果を
+    /// 返し終える前に次の probe 群が重ねて発火し、room actor のメールボックスが
+    /// 際限なく積み上がる。0 のときだけ新しい probe 群を発火し、全件の
+    /// `RoomProbed` が揃うまで次の `Health` では発火を見送るガードに使う。
+    probe_in_flight: Int,
   )
 }
 
@@ -209,6 +217,7 @@ fn build(
         // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
         self: subject,
         stuck_rooms: set.new(),
+        probe_in_flight: 0,
       )
     actor.initialised(initial)
     |> actor.selecting(selector)
@@ -356,23 +365,37 @@ fn handle_message(
       // 仕掛け直す。registry のメールボックスをブロックしないよう、probe
       // 自体は `spawn_unlinked` した別プロセスで行い、結果だけ
       // `RoomProbed` として返してもらう（`Release` と同じ方針）。
-      dict.each(state.rooms, fn(key, subject) {
-        process.spawn_unlinked(fn() {
-          let ok = case room.get_snapshot(subject) {
-            Ok(_) -> True
-            Error(Nil) -> False
-          }
-          process.send(state.self, RoomProbed(key, ok))
-        })
-      })
-      actor.continue(state)
+      //
+      // 前回の probe 群がまだ全件返り終えていなければ発火を見送る（#269）。
+      // `/health` の連打で room actor のメールボックスへ probe が
+      // 際限なく積み上がるのを防ぐ。
+      case state.probe_in_flight {
+        0 -> {
+          dict.each(state.rooms, fn(key, subject) {
+            process.spawn_unlinked(fn() {
+              let ok = case room.get_snapshot(subject) {
+                Ok(_) -> True
+                Error(Nil) -> False
+              }
+              process.send(state.self, RoomProbed(key, ok))
+            })
+          })
+          actor.continue(
+            State(..state, probe_in_flight: dict.size(state.rooms)),
+          )
+        }
+        _ -> actor.continue(state)
+      }
     }
     RoomProbed(key, ok) -> {
       let stuck_rooms = case ok {
         True -> set.delete(state.stuck_rooms, key)
         False -> set.insert(state.stuck_rooms, key)
       }
-      actor.continue(State(..state, stuck_rooms:))
+      // 0 未満にはならない: probe_in_flight は発火時に room 数で設定され、
+      // 各発火につき `RoomProbed` はちょうど1回だけ返る。
+      let probe_in_flight = int.max(0, state.probe_in_flight - 1)
+      actor.continue(State(..state, stuck_rooms:, probe_in_flight:))
     }
     ParentShutdown -> {
       // 親（supervisor）からの shutdown 要求。無視して生き続けると
