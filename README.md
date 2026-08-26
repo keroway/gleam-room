@@ -216,6 +216,10 @@ Per CLAUDE.md's Generalization rule, do not begin step 4 from the buzzer
 application alone — reusable abstractions are extracted only after step 3
 demonstrates the same requirements in a second concrete application.
 
+Start step 4 from [`docs/duplication-inventory.md`](docs/duplication-inventory.md),
+which records what actually turned out to be shared vs. different between
+the buzzer and Planning Poker implementations.
+
 ## Development workflow
 
 Development is intentionally issue-driven:
