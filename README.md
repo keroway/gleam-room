@@ -155,6 +155,39 @@ real supervision tree with `gleamroom.start/1` and sends real HTTP requests to
 fabricated request cannot exercise the router — only a real server can. This is
 what `gleam_httpc` is a dev-dependency for.
 
+### Manual Planning Poker acceptance procedure
+
+`ws://localhost:4000/poker/ws` accepts WebSocket connections speaking the
+typed join/vote/reveal/reset protocol described in
+[`docs/planning-poker.md`](docs/planning-poker.md#suggested-wire-protocol);
+see `src/gleamroom/poker_protocol.gleam` and
+`src/gleamroom/poker_websocket.gleam`. Opening `http://localhost:4000/poker`
+serves the browser client (`src/gleamroom/web_poker.gleam`), the easiest way
+to exercise it manually. To validate the full acceptance scenario from
+[`docs/planning-poker.md`](docs/planning-poker.md#acceptance-scenario) with
+the server running:
+
+1. Open `http://localhost:4000/poker` in three browser tabs/windows.
+2. Join room `PLAN` in each with a different display name (e.g. Alice, Bob,
+   Carol). All three should show the same participant presence, none marked
+   as having voted.
+3. Cast votes from Alice and Bob. All three clients should mark Alice and Bob
+   as having voted, without showing either value; Carol should not be marked
+   as having voted.
+4. Change Bob's vote before reveal. The marked-as-voted state is unaffected
+   and no client observes the intermediate value.
+5. Trigger reveal from any client. All three should display the same
+   revealed votes: Alice's and Bob's final values, and Carol's explicit "no
+   vote".
+6. Trigger reveal again. The result should not change.
+7. Reset the round; all three clients should return to `Voting` with no
+   participant marked as having voted.
+8. Close one tab. The remaining two should reflect that participant leaving.
+
+`test/gleamroom/poker_integration_test.gleam` automates this same scenario
+against the poker Registry + Room actor boundary (without opening real
+sockets); run it with `gleam test`.
+
 ## Roadmap
 
 1. Multiplayer buzzer prototype. ✅ Done.
@@ -165,11 +198,16 @@ what `gleam_httpc` is a dev-dependency for.
    `gleam test` (`test/gleamroom/integration_test.gleam` automates the
    [acceptance scenario](docs/mvp.md#acceptance-scenario) end to end) plus
    `test/client/*.test.mjs`.
-3. Build a second application, Planning Poker. Requirements and ADR filed —
-   see [`docs/planning-poker.md`](docs/planning-poker.md) and
-   [ADR 0009](docs/adr/0009-duplicate-before-extracting.md). Vertical-slice
-   implementation issues are open; see the CLAUDE.md Generalization rule
-   below before starting step 4.
+3. Build a second application, Planning Poker. ✅ Done — every requirement in
+   [`docs/planning-poker.md`](docs/planning-poker.md) (room join, per-round
+   voting with the values hidden until reveal, reveal, reset, presence,
+   reconnect) is implemented and covered by `gleam test`
+   (`test/gleamroom/poker_integration_test.gleam` automates the
+   [acceptance scenario](docs/planning-poker.md#acceptance-scenario) end to
+   end) plus `test/client/*.test.mjs`. See
+   [ADR 0009](docs/adr/0009-duplicate-before-extracting.md) for why it
+   duplicates rather than shares the buzzer's domain code; see the CLAUDE.md
+   Generalization rule below before starting step 4.
 4. Extract reusable room/presence/lifecycle primitives.
 5. Build a high-frequency crowd-controlled game.
 6. Re-evaluate whether the extracted primitives deserve a standalone library/API.
