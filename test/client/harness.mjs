@@ -5,8 +5,8 @@
 // 起動するのは割に合わない。DOM は「呼ばれても落ちない」程度に留める。
 import { extractClientScript, extractElementIds } from "./extract.mjs";
 
-export function startClient() {
-  const knownIds = extractElementIds();
+export function startClient({ modulePath, functionName } = {}) {
+  const knownIds = extractElementIds(modulePath, functionName);
   const nodes = new Map();
   const listeners = new Map();
   const logs = [];
@@ -20,6 +20,13 @@ export function startClient() {
       innerHTML: "",
       disabled: false,
       dataset: {},
+      attributes: {},
+      setAttribute(name, value) {
+        this.attributes[name] = String(value);
+      },
+      getAttribute(name) {
+        return this.attributes[name] ?? null;
+      },
       children,
       get firstElementChild() {
         return children[0] ?? null;
@@ -113,7 +120,7 @@ export function startClient() {
     globalThis[key] = sandbox[key];
   }
   // eslint-disable-next-line no-eval
-  (0, eval)(extractClientScript());
+  (0, eval)(extractClientScript(modulePath, functionName));
 
   return {
     logs,

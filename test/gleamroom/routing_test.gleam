@@ -93,10 +93,15 @@ fn request_with_method(
 pub fn routing_serves_the_expected_paths_test() {
   let port = start_server()
 
-  // `/` はブラウザクライアントを返す。
+  // `/` はブザークイズのブラウザクライアントを返す。
   let assert Ok(#(status, body)) = get(port, "/")
   assert status == 200
   assert string.contains(body, "<script>")
+
+  // `/poker` は Planning Poker のブラウザクライアントを返す（#282）。
+  let assert Ok(#(poker_status, poker_body)) = get(port, "/poker")
+  assert poker_status == 200
+  assert string.contains(poker_body, "<script>")
 
   // `/health` は buzzer / poker 両方の registry へ問い合わせた結果を返す
   // （#93 / #92 / #285）。room がまだ無いので 0 件。
@@ -127,6 +132,10 @@ pub fn routing_serves_the_expected_paths_test() {
   let assert Ok(root_response) = request_with_method(port, "/", http.Post)
   assert root_response.status == 405
   assert response.get_header(root_response, "allow") == Ok("GET, HEAD")
+
+  let assert Ok(poker_response) = request_with_method(port, "/poker", http.Post)
+  assert poker_response.status == 405
+  assert response.get_header(poker_response, "allow") == Ok("GET, HEAD")
 
   let assert Ok(health_response) =
     request_with_method(port, "/health", http.Delete)
