@@ -75,28 +75,34 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
 node --test 'test/client/*.test.mjs'  # browser client reconnect tests
 ```
 
-Once running, `GET http://localhost:4000/health` asks the room registry
-whether it is responsive:
+Once running, `GET http://localhost:4000/health` asks **both** the buzzer and
+poker room registries whether they are responsive:
 
-| registry | response |
+| registries | response |
 |---|---|
-| answers | `200 ok rooms=<n> stuck=<n>` |
-| process is gone | `503 registry down` |
-| alive but not answering | `503 registry not responding` |
-| call failed for an unrecognized reason | `503 registry unavailable: <detail>` |
+| both answer | `200 ok buzzer_rooms=<n> buzzer_stuck=<n> poker_rooms=<n> poker_stuck=<n>` |
+| one or both fail | `503 <label>: <reason>` (`;`-joined if both fail) |
+
+Each `<reason>` is one of: `registry down` (process is gone), `registry not
+responding` (alive but not answering), or `registry unavailable: <detail>`
+(call failed for an unrecognized reason). `<label>` is `buzzer` or `poker`,
+naming which registry produced that reason.
 
 The failure bodies differ on purpose: a dead registry means waiting on (or
 investigating) the supervisor restart, a wedged one means looking at load and
 timeouts, and the third body is what `gleamroom/call.classify` falls back to
 when the underlying exception doesn't match either known pattern — it carries
-the raw exception text so the operator isn't left guessing.
+the raw exception text so the operator isn't left guessing. Labeling by
+registry matters because buzzer and poker rooms are independent supervised
+children — one being unhealthy says nothing about the other.
 
-`stuck` counts room actors that did not answer the registry's last
-lightweight probe (a `room.get_snapshot` call fired after each `/health`
-request). Registry responsiveness and individual room responsiveness are
-different failure modes with different remedies, so `stuck` is reported
-alongside a `200` rather than turning `/health` itself into a `503` — a
-wedged room doesn't mean the registry (and thus new joins) is unavailable.
+`stuck` counts room actors that did not answer their registry's last
+lightweight probe (a `room.get_snapshot`/`poker.get_state` call fired after
+each `/health` request). Registry responsiveness and individual room
+responsiveness are different failure modes with different remedies, so
+`stuck` is reported alongside a `200` rather than turning `/health` itself
+into a `503` — a wedged room doesn't mean its registry (and thus new joins)
+is unavailable.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
 `gleam test`, and the client tests on every pull request and push to `main`.

@@ -7,6 +7,7 @@ import gleam/int
 import gleam/string
 import gleamroom
 import gleamroom/call
+import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/wait
 
@@ -37,11 +38,22 @@ fn start_server() -> Int {
 
 fn start_web_only_server(
   registry_subject: process.Subject(registry.Message),
+  poker_registry_subject: process.Subject(poker_registry.Message),
 ) -> Int {
   let assert Ok(#(port, _)) =
-    gleamroom.start_web_only_on_ephemeral_port(registry_subject)
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_subject,
+    )
   await_ready(port, 50)
   port
+}
+
+/// `start_web_only_server` に渡す、健全な poker registry の subject
+/// （buzzer 側だけを故障させるテスト用）。
+fn healthy_poker_registry_subject() -> process.Subject(poker_registry.Message) {
+  let assert Ok(started) = poker_registry.start()
+  started.data
 }
 
 fn await_ready(port: Int, remaining: Int) -> Nil {
@@ -86,11 +98,13 @@ pub fn routing_serves_the_expected_paths_test() {
   assert status == 200
   assert string.contains(body, "<script>")
 
-  // `/health` は registry へ問い合わせた結果を返す（#93 / #92）。
-  // room がまだ無いので 0 件。**配線が繋がっていなければここで気づける。**
+  // `/health` は buzzer / poker 両方の registry へ問い合わせた結果を返す
+  // （#93 / #92 / #285）。room がまだ無いので 0 件。
+  // **配線が繋がっていなければここで気づける。**
   let assert Ok(#(health_status, health_body)) = get(port, "/health")
   assert health_status == 200
-  assert health_body == "ok rooms=0 stuck=0"
+  assert health_body
+    == "ok buzzer_rooms=0 buzzer_stuck=0 poker_rooms=0 poker_stuck=0"
 
   // 未知のパスは 404。
   let assert Ok(#(missing_status, _)) = get(port, "/nope")
@@ -159,6 +173,20 @@ pub fn health_failure_body_distinguishes_all_three_reasons_test() {
     == "registry unavailable: boom"
 }
 
+/// `/health` は buzzer / poker のどちらが失敗したか本文で書き分ける
+/// （#285）。片方だけの失敗と、両方の失敗を区別する。
+pub fn combined_health_failure_body_labels_the_failing_registry_test() {
+  assert gleamroom.combined_health_failure_body(Error(call.ActorDown), Ok(Nil))
+    == "buzzer: registry down"
+  assert gleamroom.combined_health_failure_body(Ok(Nil), Error(call.Timeout))
+    == "poker: registry not responding"
+  assert gleamroom.combined_health_failure_body(
+      Error(call.ActorDown),
+      Error(call.Timeout),
+    )
+    == "buzzer: registry down; poker: registry not responding"
+}
+
 /// `/health` の503分岐は純粋関数のテストしか無く、実際にHTTP経由で叩いた
 /// ときに `handle_request` の配線が正しくステータス・本文を返すことは
 /// 一度も検証されていなかった（#142）。ここでは registry actor を意図的に
@@ -180,11 +208,11 @@ pub fn health_returns_503_actor_down_via_http_test() {
   process.kill(pid)
   wait.until_dead(pid, "registry が終了する")
 
-  let port = start_web_only_server(subject)
+  let port = start_web_only_server(subject, healthy_poker_registry_subject())
 
   let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
-  assert body == "registry down"
+  assert body == "buzzer: registry down"
 }
 
 /// `Timeout` 分岐の実サーバ越し確認（#142）。誰も処理しない subject を渡し、
@@ -192,32 +220,41 @@ pub fn health_returns_503_actor_down_via_http_test() {
 pub fn health_returns_503_timeout_via_http_test() {
   let unresponsive: process.Subject(registry.Message) = process.new_subject()
 
-  let port = start_web_only_server(unresponsive)
+  let port =
+    start_web_only_server(unresponsive, healthy_poker_registry_subject())
 
   let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
-  assert body == "registry not responding"
+  assert body == "buzzer: registry not responding"
 }
 
-/// **既知の穴**: `/health` は buzzer registry しか見ておらず、poker registry
-/// （#279）が停止していても検知できない。黙って壊れた状態を作らないよう、
-/// ここに明示的に固定する。この穴を塞ぐのは次issue（`/health` の2registry
-/// 対応）の責務であり、このテストはそのissueが着手されて `/health` が poker
-/// registry も問い合わせるようになったら、200 のままではいられなくなるはずの
-/// 箇所として書き換える／削除する。
-pub fn health_does_not_detect_a_dead_poker_registry_test() {
-  let assert Ok(#(port, poker_registry_subject, _)) =
-    gleamroom.start_on_ephemeral_port_with_poker_registry()
-  await_ready(port, 50)
-
+/// #279 で判明した穴（poker registry が停止していても `/health` が 200 を
+/// 返し続ける）を塞いだことを固定する（#285）。`/health` は poker registry
+/// にも問い合わせ、死んでいれば 503 を返す。
+///
+/// `health_returns_503_actor_down_via_http_test` と同じ手法: 別プロセスで
+/// poker registry を起動して kill する（テストプロセス自身が起動すると
+/// link で巻き添えになる）。`start_web_only_on_ephemeral_port` で起動する
+/// ため supervisor の自動再起動が無く、kill した状態がそのまま観測できる。
+pub fn health_returns_503_when_the_poker_registry_is_dead_test() {
+  let ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(started) = poker_registry.start()
+    process.send(ready, started.data)
+    process.sleep(3000)
+  })
+  let assert Ok(poker_registry_subject) = process.receive(ready, 1000)
   let assert Ok(poker_registry_pid) =
     process.subject_owner(poker_registry_subject)
+
   process.kill(poker_registry_pid)
   wait.until_dead(poker_registry_pid, "poker registry が終了する")
 
-  // poker registry は死んでいるのに、buzzer registry だけを見ている
-  // `/health` は 200 を返し続ける。
+  let assert Ok(healthy_registry_started) = registry.start()
+  let port =
+    start_web_only_server(healthy_registry_started.data, poker_registry_subject)
+
   let assert Ok(#(status, body)) = get(port, "/health")
-  assert status == 200
-  assert body == "ok rooms=0 stuck=0"
+  assert status == 503
+  assert body == "poker: registry down"
 }
