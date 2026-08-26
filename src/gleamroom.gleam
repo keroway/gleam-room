@@ -11,6 +11,7 @@ import gleam/otp/supervision
 import gleam/string
 import gleamroom/call
 import gleamroom/poker_registry
+import gleamroom/poker_websocket
 import gleamroom/registry
 import gleamroom/web
 import gleamroom/websocket
@@ -329,6 +330,12 @@ fn handle_request(
     ["ws"] ->
       case req.method {
         Get -> websocket.upgrade(req, registry_subject)
+        _ -> method_not_allowed(["GET"])
+      }
+
+    ["poker", "ws"] ->
+      case req.method {
+        Get -> poker_websocket.upgrade(req, poker_registry_subject)
         _ -> method_not_allowed(["GET"])
       }
 
