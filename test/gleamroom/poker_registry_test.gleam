@@ -2,6 +2,7 @@ import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/otp/actor
+import gleamroom/call
 import gleamroom/poker
 import gleamroom/poker_registry
 import gleamroom/wait
@@ -280,4 +281,81 @@ pub fn parent_shutdown_stops_the_registry_promptly_test() {
   process.send_abnormal_exit(pid, atom.create("shutdown"))
 
   wait.until_dead(pid, "shutdown要求を受けたpoker registryが即座に終了する")
+}
+
+/// `registry_test.gleam`'s `health_reports_the_number_of_registered_rooms_test`
+/// と同じ理由（#93, #285）: `/health` の poker 側応答を配線するにはまず
+/// 登録数を正しく返す必要がある。
+pub fn health_reports_the_number_of_registered_rooms_test() {
+  let assert Ok(started) = poker_registry.start()
+  let reg = started.data
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 0, stuck: 0))
+
+  let assert Ok(_) = poker_registry.lookup(reg, poker_registry.room_id("a"))
+  let assert Ok(_) = poker_registry.lookup(reg, poker_registry.room_id("b"))
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 2, stuck: 0))
+}
+
+/// registry 自体は応答していても、個々の room actor がハング/デッドロック
+/// していれば `Health` の `stuck` に反映されること。`registry_test.gleam`'s
+/// `health_reports_a_room_that_does_not_respond_to_a_probe_test` と同じ理由
+/// （#138, #285）。
+pub fn health_reports_a_room_that_does_not_respond_to_a_probe_test() {
+  let stuck_subject: process.Subject(poker.Message) = process.new_subject()
+  let assert Ok(started) =
+    poker_registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: stuck_subject))
+    })
+  let reg = started.data
+
+  let assert Ok(_) =
+    poker_registry.lookup(reg, poker_registry.room_id("stuck-room"))
+
+  // 最初の Health は probe 前なので stuck=0（前回の probe 結果が無い）。
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 0))
+
+  wait.until_within(
+    fn() {
+      poker_registry.health(reg)
+      == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 1))
+    },
+    "詰まっている poker room が probe で検知される",
+    200,
+  )
+}
+
+/// **応答しない registry では失敗する**こと。`registry_test.gleam`'s
+/// `health_fails_when_the_registry_does_not_answer_test` と同じ理由。
+pub fn health_fails_when_the_registry_does_not_answer_test() {
+  let unresponsive: process.Subject(poker_registry.Message) =
+    process.new_subject()
+
+  assert poker_registry.health(unresponsive) == Error(call.Timeout)
+}
+
+/// 死んだ registry でも失敗する（クラッシュではなく Error になる）。
+/// `registry_test.gleam`'s `health_fails_when_the_registry_is_dead_test` と
+/// 同じ理由。
+pub fn health_fails_when_the_registry_is_dead_test() {
+  let ready = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(started) = poker_registry.start()
+    process.send(ready, started.data)
+    process.sleep(3000)
+  })
+  let assert Ok(reg) = process.receive(ready, 1000)
+  let assert Ok(pid) = process.subject_owner(reg)
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 0, stuck: 0))
+
+  process.kill(pid)
+  wait.until_dead(pid, "poker registry が終了する")
+
+  assert poker_registry.health(reg) == Error(call.ActorDown)
 }

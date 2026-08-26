@@ -8,7 +8,6 @@ import gleam/int
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
-import gleam/result
 import gleam/string
 import gleamroom/call
 import gleamroom/poker_registry
@@ -131,6 +130,7 @@ pub fn start(
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
   let poker_registry_name = process.new_name("gleamroom_poker_registry")
+  let poker_registry_subject = process.named_subject(poker_registry_name)
 
   supervisor.new(supervisor.OneForOne)
   // `intensity`/`period` を明示する（#79）。値そのものは gleam_otp の既定
@@ -143,15 +143,14 @@ pub fn start(
   |> supervisor.add(
     supervision.worker(fn() { registry.start_named(registry_name) }),
   )
-  // buzzer と隔離された poker room actor 用の registry（#279）。まだ
-  // `handle_request` からは参照されない（wire protocol は後続 issue）が、
+  // buzzer と隔離された poker room actor 用の registry（#279）。
   // `one_for_one` の下で buzzer registry / web server とは独立して起動・
-  // 再起動できることをここで保証する。
+  // 再起動できる。`/health` も両方の registry を問い合わせる（#285）。
   |> supervisor.add(
     supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
   )
   |> supervisor.add(mist.supervised(
-    handle_request(_, registry_subject)
+    handle_request(_, registry_subject, poker_registry_subject)
     |> mist.new
     |> mist.port(port),
   ))
@@ -172,38 +171,6 @@ pub fn start_on_ephemeral_port() -> Result(
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
   let poker_registry_name = process.new_name("gleamroom_poker_registry")
-
-  let bound_port = process.new_subject()
-
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.restart_tolerance(intensity: 2, period: 5)
-  |> supervisor.add(
-    supervision.worker(fn() { registry.start_named(registry_name) }),
-  )
-  |> supervisor.add(
-    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
-  )
-  |> supervisor.add(mist.supervised(
-    handle_request(_, registry_subject)
-    |> mist.new
-    |> with_ephemeral_port(bound_port),
-  ))
-  |> supervisor.start
-  |> with_bound_port(bound_port)
-}
-
-/// `start_on_ephemeral_port` と同じだが、**poker registry の subject も
-/// 返す**（#279）。`/health` が buzzer registry しか見ておらず poker
-/// registry の詰まり/停止を検知できないことを、テストから poker registry を
-/// 直接落として確かめるために使う（次issue「`/health` の2registry対応」まで
-/// のつなぎのテスト専用エントリポイント）。
-pub fn start_on_ephemeral_port_with_poker_registry() -> Result(
-  #(Int, Subject(poker_registry.Message), actor.Started(supervisor.Supervisor)),
-  actor.StartError,
-) {
-  let registry_name = process.new_name("gleamroom_registry")
-  let registry_subject = process.named_subject(registry_name)
-  let poker_registry_name = process.new_name("gleamroom_poker_registry")
   let poker_registry_subject = process.named_subject(poker_registry_name)
 
   let bound_port = process.new_subject()
@@ -217,16 +184,12 @@ pub fn start_on_ephemeral_port_with_poker_registry() -> Result(
     supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
   )
   |> supervisor.add(mist.supervised(
-    handle_request(_, registry_subject)
+    handle_request(_, registry_subject, poker_registry_subject)
     |> mist.new
     |> with_ephemeral_port(bound_port),
   ))
   |> supervisor.start
   |> with_bound_port(bound_port)
-  |> result.map(fn(started) {
-    let #(port, supervisor_started) = started
-    #(port, poker_registry_subject, supervisor_started)
-  })
 }
 
 /// registry を外部から注入して web server だけを起動する（#142）。
@@ -238,8 +201,9 @@ pub fn start_on_ephemeral_port_with_poker_registry() -> Result(
 pub fn start_web_only(
   port: Int,
   registry_subject: Subject(registry.Message),
+  poker_registry_subject: Subject(poker_registry.Message),
 ) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
-  handle_request(_, registry_subject)
+  handle_request(_, registry_subject, poker_registry_subject)
   |> mist.new
   |> mist.port(port)
   |> mist.start
@@ -248,10 +212,11 @@ pub fn start_web_only(
 /// `start_web_only` の、ポートをOSに動的採番させる版（#152）。
 pub fn start_web_only_on_ephemeral_port(
   registry_subject: Subject(registry.Message),
+  poker_registry_subject: Subject(poker_registry.Message),
 ) -> Result(#(Int, actor.Started(supervisor.Supervisor)), actor.StartError) {
   let bound_port = process.new_subject()
 
-  handle_request(_, registry_subject)
+  handle_request(_, registry_subject, poker_registry_subject)
   |> mist.new
   |> with_ephemeral_port(bound_port)
   |> mist.start
@@ -292,6 +257,7 @@ fn with_bound_port(
 fn handle_request(
   req: Request(Connection),
   registry_subject: Subject(registry.Message),
+  poker_registry_subject: Subject(poker_registry.Message),
 ) -> Response(ResponseData) {
   case request.path_segments(req) {
     [] ->
@@ -317,28 +283,46 @@ fn handle_request(
     // ロードバランサやヘルスチェックに「まだ受けられない」と伝えるべき。
     ["health"] ->
       case req.method {
-        Get | Head ->
-          case registry.health(registry_subject) {
-            Ok(registry.HealthSnapshot(rooms:, stuck:)) ->
+        Get | Head -> {
+          let buzzer_health = registry.health(registry_subject)
+          let poker_health = poker_registry.health(poker_registry_subject)
+          case buzzer_health, poker_health {
+            Ok(registry.HealthSnapshot(rooms: buzzer_rooms, stuck: buzzer_stuck)),
+              Ok(poker_registry.HealthSnapshot(
+                rooms: poker_rooms,
+                stuck: poker_stuck,
+              ))
+            ->
               response.new(200)
               |> response.set_body(
                 mist.Bytes(bytes_tree.from_string(
-                  "ok rooms="
-                  <> int.to_string(rooms)
-                  <> " stuck="
-                  <> int.to_string(stuck),
+                  "ok buzzer_rooms="
+                  <> int.to_string(buzzer_rooms)
+                  <> " buzzer_stuck="
+                  <> int.to_string(buzzer_stuck)
+                  <> " poker_rooms="
+                  <> int.to_string(poker_rooms)
+                  <> " poker_stuck="
+                  <> int.to_string(poker_stuck),
                 )),
               )
-            // **理由を分けて伝える（#92）。** どちらも 503 だが、運用者が次に
-            // 見る場所が違う。落ちているなら supervisor の再起動状況、
-            // 詰まっているなら負荷やタイムアウト値。
-            Error(reason) ->
+            // **理由を分けて伝える（#92）。** どちらの registry が失敗したか
+            // 本文に書き分ける。運用者が次に見る場所が registry ごとに
+            // 違うため（落ちているなら supervisor の再起動状況、詰まっている
+            // なら負荷やタイムアウト値）、両方失敗していれば両方載せる（#285）。
+            _, _ ->
               response.new(503)
               |> response.set_body(
-                mist.Bytes(bytes_tree.from_string(health_failure_body(reason))),
+                mist.Bytes(
+                  bytes_tree.from_string(combined_health_failure_body(
+                    buzzer_health,
+                    poker_health,
+                  )),
+                ),
               )
           }
           |> empty_body_for_head(req.method)
+        }
         _ -> method_not_allowed(["GET", "HEAD"])
       }
 
@@ -365,6 +349,30 @@ pub fn health_failure_body(reason: call.Failure) -> String {
     call.ActorDown -> "registry down"
     call.Timeout -> "registry not responding"
     call.Unknown(detail) -> "registry unavailable: " <> detail
+  }
+}
+
+/// buzzer / poker どちらの registry が失敗したかを本文に書き分ける（#285）。
+///
+/// `/health` は2つの registry を独立に問い合わせる。片方だけが失敗した
+/// 場合はその registry の理由だけを、両方失敗していれば両方を載せる。
+/// 呼び出し元（`handle_request`）は少なくとも一方が `Error` のときだけ
+/// これを呼ぶため、両方 `Ok` の分岐は到達しない。
+pub fn combined_health_failure_body(
+  buzzer: Result(a, call.Failure),
+  poker: Result(b, call.Failure),
+) -> String {
+  case buzzer, poker {
+    Error(buzzer_reason), Error(poker_reason) ->
+      "buzzer: "
+      <> health_failure_body(buzzer_reason)
+      <> "; poker: "
+      <> health_failure_body(poker_reason)
+    Error(buzzer_reason), Ok(_) ->
+      "buzzer: " <> health_failure_body(buzzer_reason)
+    Ok(_), Error(poker_reason) -> "poker: " <> health_failure_body(poker_reason)
+    Ok(_), Ok(_) ->
+      panic as "combined_health_failure_body called with two successes"
   }
 }
 

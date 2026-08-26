@@ -7,6 +7,7 @@ import gleam/json
 import gleam/option.{None, Some}
 import gleam/string
 import gleamroom
+import gleamroom/poker_registry
 import gleamroom/registry
 import gramps/websocket as ws
 
@@ -85,8 +86,12 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
 pub fn ws_rejoins_after_room_actor_dies_test() {
   let assert Ok(registry_started) = registry.start()
   let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
   let assert Ok(#(port, _)) =
-    gleamroom.start_web_only_on_ephemeral_port(registry_subject)
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
   let #(socket, buffer) = handshake(port, 50)
 
   send_client_message(

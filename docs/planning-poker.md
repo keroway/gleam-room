@@ -163,6 +163,15 @@ different second application, not a relabeled buzzer:
   explicitly and reject/allow commands based on it (`vote` only in `Voting`;
   `reveal` is idempotent in `Revealed`).
 
+## Health check
+
+`GET /health` queries the poker room registry alongside the buzzer one and
+reports `200 ok buzzer_rooms=<n> buzzer_stuck=<n> poker_rooms=<n>
+poker_stuck=<n>` when both answer, or `503` with a per-registry reason
+(`buzzer: ...` / `poker: ...`, `;`-joined if both fail) otherwise. This keeps
+the poker registry's health from being silently invisible to whatever is
+polling `/health` (see `docs/mvp.md` and README.md for the full format).
+
 ## Non-functional requirements
 
 Same as the buzzer's non-functional requirements in `docs/mvp.md`:

@@ -2,8 +2,10 @@ import gleam/dict.{type Dict}
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/otp/actor
 import gleam/result
+import gleam/set.{type Set}
 import gleam/string
 import gleamroom/call
 import gleamroom/poker
@@ -43,6 +45,19 @@ pub type Message {
   /// メールボックスを詰まった room 1つでブロックしないよう、判定は別プロセスへ
   /// 投げて結果だけを受け取る。
   RoomEmptyChecked(id: RoomId, subject: Subject(poker.Message), empty: Bool)
+  /// registry が生きていて応答することを確かめる。`registry.gleam`'s
+  /// `Health` と同じ理由（#93, #138, #285）: `/health` が poker registry
+  /// の停止・詰まりを検知できていなかった穴を塞ぐ。
+  Health(reply_to: Subject(HealthSnapshot))
+  /// room 1 件分の probe（`poker.get_state`）の結果。`registry.gleam`'s
+  /// `RoomProbed` と同じ理由（#138）。
+  RoomProbed(key: String, ok: Bool)
+}
+
+/// `Health` の返答。`registry.gleam`'s `HealthSnapshot` と同じ理由（#138）:
+/// `rooms` は登録数、`stuck` は前回の probe で応答が無かった room の数。
+pub type HealthSnapshot {
+  HealthSnapshot(rooms: Int, stuck: Int)
 }
 
 /// room を起動する関数と、起動済み room の対応表。
@@ -59,6 +74,11 @@ type State {
     max_rooms: Int,
     /// registry 自身の subject（#71 と同じ理由）。
     self: Subject(Message),
+    /// 直近の `Health` probe で応答が無かった room の key（#138 と同じ理由）。
+    stuck_rooms: Set(String),
+    /// 前回発火した probe のうち、まだ `RoomProbed` が返っていない件数
+    /// （#269 と同じ理由）。
+    probe_in_flight: Int,
   )
 }
 
@@ -128,6 +148,8 @@ fn build(
         start_room:,
         max_rooms:,
         self: subject,
+        stuck_rooms: set.new(),
+        probe_in_flight: 0,
       )
     actor.initialised(initial)
     |> actor.selecting(selector)
@@ -268,7 +290,62 @@ fn handle_message(
         _, _ -> actor.continue(state)
       }
     }
+    Health(reply_to) -> {
+      // `registry.gleam`'s `Health` と同じ理由（#138）: 返事が来ること自体が
+      // 「registry が詰まっていない」証拠。`stuck` は前回の probe 結果を
+      // 即座に返し、待たせない。
+      process.send(
+        reply_to,
+        HealthSnapshot(
+          rooms: dict.size(state.rooms),
+          stuck: set.size(state.stuck_rooms),
+        ),
+      )
+      // 前回の probe 群がまだ全件返り終えていなければ発火を見送る
+      // （#269 と同じガード）。
+      case state.probe_in_flight {
+        0 -> {
+          dict.each(state.rooms, fn(key, subject) {
+            process.spawn_unlinked(fn() {
+              let ok = case poker.get_state(subject) {
+                Ok(_) -> True
+                Error(Nil) -> False
+              }
+              process.send(state.self, RoomProbed(key, ok))
+            })
+          })
+          actor.continue(
+            State(..state, probe_in_flight: dict.size(state.rooms)),
+          )
+        }
+        _ -> actor.continue(state)
+      }
+    }
+    RoomProbed(key, ok) -> {
+      let stuck_rooms = case ok {
+        True -> set.delete(state.stuck_rooms, key)
+        False -> set.insert(state.stuck_rooms, key)
+      }
+      // 0 未満にはならない: `registry.gleam`'s `RoomProbed` と同じ理由。
+      let probe_in_flight = int.max(0, state.probe_in_flight - 1)
+      actor.continue(State(..state, stuck_rooms:, probe_in_flight:))
+    }
   }
+}
+
+/// registry が応答することを確かめ、登録中の room 数と、直近の probe で
+/// 応答が無かった room の数を返す。`registry.gleam`'s `health` と同じ理由
+/// （#93, #138, #285）: `/health` はこれを見て poker 側の 503 本文を
+/// 「落ちている」「詰まっている」で書き分ける。
+pub fn health(
+  subject: Subject(Message),
+) -> Result(HealthSnapshot, call.Failure) {
+  call.try_call_classified(
+    subject,
+    call.default_timeout,
+    Health,
+    "poker_registry.health",
+  )
 }
 
 /// Resolves `id` to its active poker room actor, lazily starting one if
