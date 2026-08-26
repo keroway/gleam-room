@@ -159,9 +159,11 @@ what `gleam_httpc` is a dev-dependency for.
    `gleam test` (`test/gleamroom/integration_test.gleam` automates the
    [acceptance scenario](docs/mvp.md#acceptance-scenario) end to end) plus
    `test/client/*.test.mjs`.
-3. Build a second application such as Planning Poker. Not started — filing
-   the first vertical-slice issue for this step is tracked separately; see
-   the CLAUDE.md Generalization rule below before starting it.
+3. Build a second application, Planning Poker. Requirements and ADR filed —
+   see [`docs/planning-poker.md`](docs/planning-poker.md) and
+   [ADR 0009](docs/adr/0009-duplicate-before-extracting.md). Vertical-slice
+   implementation issues are open; see the CLAUDE.md Generalization rule
+   below before starting step 4.
 4. Extract reusable room/presence/lifecycle primitives.
 5. Build a high-frequency crowd-controlled game.
 6. Re-evaluate whether the extracted primitives deserve a standalone library/API.
