@@ -94,7 +94,7 @@ The exact JSON shape can evolve during implementation. As with the buzzer,
 wire messages must be decoded into typed domain commands/events immediately,
 not passed through as untyped maps.
 
-Illustrative client messages:
+Client messages:
 
 ```json
 {"type":"join","room_id":"ABCD","display_name":"Alice"}
@@ -103,27 +103,26 @@ Illustrative client messages:
 {"type":"reset"}
 ```
 
-The vote card set for the MVP is a fixed enumeration, illustratively
+The vote card set for the MVP is a fixed enumeration:
 `"0"`, `"1"`, `"2"`, `"3"`, `"5"`, `"8"`, `"13"`, `"21"`, `"?"`, `"coffee"`.
-The exact set is an implementation detail of the domain layer, not a wire
-contract fixed by this document.
 
-Illustrative server messages:
+Server messages:
 
 ```json
 {"type":"state","phase":"voting","participants":[{"participant_id":"...","display_name":"Alice","has_voted":true}]}
-{"type":"participant_joined","participant":{}}
+{"type":"participant_joined","participant":{"participant_id":"...","display_name":"Alice","has_voted":false}}
 {"type":"participant_left","participant_id":"..."}
-{"type":"vote_cast","participant_id":"..."}
-{"type":"round_revealed","votes":[{"participant_id":"...","display_name":"Alice","value":"5"}]}
+{"type":"vote_registered","participant_id":"..."}
+{"type":"revealed","votes":[{"participant_id":"...","display_name":"Alice","value":"5"}]}
 {"type":"round_reset"}
 {"type":"error","code":"...","message":"..."}
 ```
 
-Note the deliberate asymmetry: `vote_cast` carries only `participant_id`
-(presence of a vote, not its value); `round_revealed` carries every
-participant's `value`, including participants who never voted (represented
-with an explicit "no vote" value rather than omitted from the list).
+Note the deliberate asymmetry: `vote_registered` carries only
+`participant_id` (presence of a vote, not its value); `revealed` carries
+every participant's `value`, including participants who never voted
+(represented with an explicit `null` value rather than omitted from the
+list).
 
 Error codes reuse the buzzer's shared codes where the underlying condition is
 identical, and add phase-specific ones:
@@ -137,8 +136,9 @@ identical, and add phase-specific ones:
 | `already_joined` | This connection sent `join` after already joining, or the domain layer rejected a `join` for a `ParticipantId` already present. |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants. |
 | `not_joined` | This connection sent `vote`, `reveal`, or `reset` before joining a room. |
-| `invalid_vote` | The `vote` value is not a member of the fixed card set. |
-| `round_already_revealed` | A `vote` was rejected because the round is `Revealed`; the client must wait for `reset`. |
+| `invalid_card` | The `vote` message's `value` is not a member of the fixed card set. |
+| `already_revealed` | A `vote` was rejected because the round is `Revealed`; the client must wait for `reset`. |
+| `not_voting_phase` | Reserved for a command restricted to the `Voting` phase; unused until a phase-gated command beyond `vote` exists. |
 | `room_unavailable` | The requested room could not be started or did not respond in time. |
 | `binary_frame` | The connection sent a binary WebSocket frame. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window. |
