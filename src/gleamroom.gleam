@@ -14,6 +14,7 @@ import gleamroom/poker_registry
 import gleamroom/poker_websocket
 import gleamroom/registry
 import gleamroom/web
+import gleamroom/web_poker
 import gleamroom/websocket
 import logging
 import mist.{type Connection, type ResponseData}
@@ -337,6 +338,18 @@ fn handle_request(
       case req.method {
         Get -> poker_websocket.upgrade(req, poker_registry_subject)
         _ -> method_not_allowed(["GET"])
+      }
+
+    ["poker"] ->
+      case req.method {
+        Get | Head ->
+          response.new(200)
+          |> response.set_header("content-type", "text/html; charset=utf-8")
+          |> response.set_body(
+            mist.Bytes(bytes_tree.from_string(web_poker.poker_html())),
+          )
+          |> empty_body_for_head(req.method)
+        _ -> method_not_allowed(["GET", "HEAD"])
       }
 
     _ ->
