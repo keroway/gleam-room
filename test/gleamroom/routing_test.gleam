@@ -198,3 +198,26 @@ pub fn health_returns_503_timeout_via_http_test() {
   assert status == 503
   assert body == "registry not responding"
 }
+
+/// **既知の穴**: `/health` は buzzer registry しか見ておらず、poker registry
+/// （#279）が停止していても検知できない。黙って壊れた状態を作らないよう、
+/// ここに明示的に固定する。この穴を塞ぐのは次issue（`/health` の2registry
+/// 対応）の責務であり、このテストはそのissueが着手されて `/health` が poker
+/// registry も問い合わせるようになったら、200 のままではいられなくなるはずの
+/// 箇所として書き換える／削除する。
+pub fn health_does_not_detect_a_dead_poker_registry_test() {
+  let assert Ok(#(port, poker_registry_subject, _)) =
+    gleamroom.start_on_ephemeral_port_with_poker_registry()
+  await_ready(port, 50)
+
+  let assert Ok(poker_registry_pid) =
+    process.subject_owner(poker_registry_subject)
+  process.kill(poker_registry_pid)
+  wait.until_dead(poker_registry_pid, "poker registry が終了する")
+
+  // poker registry は死んでいるのに、buzzer registry だけを見ている
+  // `/health` は 200 を返し続ける。
+  let assert Ok(#(status, body)) = get(port, "/health")
+  assert status == 200
+  assert body == "ok rooms=0 stuck=0"
+}

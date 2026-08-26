@@ -8,8 +8,10 @@ import gleam/int
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
+import gleam/result
 import gleam/string
 import gleamroom/call
+import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/web
 import gleamroom/websocket
@@ -128,17 +130,25 @@ pub fn start(
   // 現行のプロセスへ届く（起動時の subject を握らない）。
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
+  let poker_registry_name = process.new_name("gleamroom_poker_registry")
 
   supervisor.new(supervisor.OneForOne)
   // `intensity`/`period` を明示する（#79）。値そのものは gleam_otp の既定
   // （5 秒間に 2 回）のままだが、無指定だと「意図して既定値を選んだ」のか
-  // 「設定を忘れた」のか読み手が区別できない。MVP の規模で子は2つだけ
-  // （registry, web server）で、どちらも `let assert` によるクラッシュ経路を
-  // 持たないため、この既定値で十分という判断をここに残す。将来クラッシュ
-  // 経路が増えて頻繁な再起動が正常系になるなら、そのときに見直す。
+  // 「設定を忘れた」のか読み手が区別できない。子は3つ（buzzer registry,
+  // poker registry, web server）で、どれも `let assert` によるクラッシュ
+  // 経路を持たないため、この既定値で十分という判断をここに残す。将来
+  // クラッシュ経路が増えて頻繁な再起動が正常系になるなら、そのときに見直す。
   |> supervisor.restart_tolerance(intensity: 2, period: 5)
   |> supervisor.add(
     supervision.worker(fn() { registry.start_named(registry_name) }),
+  )
+  // buzzer と隔離された poker room actor 用の registry（#279）。まだ
+  // `handle_request` からは参照されない（wire protocol は後続 issue）が、
+  // `one_for_one` の下で buzzer registry / web server とは独立して起動・
+  // 再起動できることをここで保証する。
+  |> supervisor.add(
+    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
   )
   |> supervisor.add(mist.supervised(
     handle_request(_, registry_subject)
@@ -161,6 +171,7 @@ pub fn start_on_ephemeral_port() -> Result(
 ) {
   let registry_name = process.new_name("gleamroom_registry")
   let registry_subject = process.named_subject(registry_name)
+  let poker_registry_name = process.new_name("gleamroom_poker_registry")
 
   let bound_port = process.new_subject()
 
@@ -169,6 +180,9 @@ pub fn start_on_ephemeral_port() -> Result(
   |> supervisor.add(
     supervision.worker(fn() { registry.start_named(registry_name) }),
   )
+  |> supervisor.add(
+    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
+  )
   |> supervisor.add(mist.supervised(
     handle_request(_, registry_subject)
     |> mist.new
@@ -176,6 +190,43 @@ pub fn start_on_ephemeral_port() -> Result(
   ))
   |> supervisor.start
   |> with_bound_port(bound_port)
+}
+
+/// `start_on_ephemeral_port` と同じだが、**poker registry の subject も
+/// 返す**（#279）。`/health` が buzzer registry しか見ておらず poker
+/// registry の詰まり/停止を検知できないことを、テストから poker registry を
+/// 直接落として確かめるために使う（次issue「`/health` の2registry対応」まで
+/// のつなぎのテスト専用エントリポイント）。
+pub fn start_on_ephemeral_port_with_poker_registry() -> Result(
+  #(Int, Subject(poker_registry.Message), actor.Started(supervisor.Supervisor)),
+  actor.StartError,
+) {
+  let registry_name = process.new_name("gleamroom_registry")
+  let registry_subject = process.named_subject(registry_name)
+  let poker_registry_name = process.new_name("gleamroom_poker_registry")
+  let poker_registry_subject = process.named_subject(poker_registry_name)
+
+  let bound_port = process.new_subject()
+
+  supervisor.new(supervisor.OneForOne)
+  |> supervisor.restart_tolerance(intensity: 2, period: 5)
+  |> supervisor.add(
+    supervision.worker(fn() { registry.start_named(registry_name) }),
+  )
+  |> supervisor.add(
+    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
+  )
+  |> supervisor.add(mist.supervised(
+    handle_request(_, registry_subject)
+    |> mist.new
+    |> with_ephemeral_port(bound_port),
+  ))
+  |> supervisor.start
+  |> with_bound_port(bound_port)
+  |> result.map(fn(started) {
+    let #(port, supervisor_started) = started
+    #(port, poker_registry_subject, supervisor_started)
+  })
 }
 
 /// registry を外部から注入して web server だけを起動する（#142）。

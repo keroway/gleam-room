@@ -131,11 +131,14 @@ The actual BEAM model, matching child add order in `gleamroom.gleam`:
 ```text
 Application supervisor (OneForOne)
   |
-  +-- Room registry
+  +-- Room registry (buzzer)
+  +-- Poker room registry
   +-- Web server
 ```
 
-The registry is registered under a name; the web server resolves it through `process.named_subject` on every send rather than capturing a subject at startup. This means a registry restart needs no cooperation from the web server: the next message sent through the named subject reaches the new registry process automatically. `OneForOne` lets the registry and the web server restart independently, so a registry crash does not force-close every live WebSocket connection across every room (see ADR 0008; this replaced an earlier `RestForOne` choice recorded in ADR 0004).
+Both registries are registered under a name; the web server resolves the buzzer registry through `process.named_subject` on every send rather than capturing a subject at startup. This means a registry restart needs no cooperation from the web server: the next message sent through the named subject reaches the new registry process automatically. `OneForOne` lets each registry and the web server restart independently, so a crash in one does not force-close every live WebSocket connection across every room (see ADR 0008; this replaced an earlier `RestForOne` choice recorded in ADR 0004).
+
+The poker registry is a separate module (`poker_registry.gleam`) duplicating the buzzer registry's structure rather than sharing it, per ADR 0009 — Planning Poker demonstrates whether the shared shape is real before step 4 extracts it. As of the poker room actor's introduction, the poker registry is supervised but not yet reachable from `handle_request`: no wire protocol or WebSocket transport exists for it yet, and `/health` only queries the buzzer registry (a known gap tracked for a follow-up issue).
 
 Active room processes are not supervised children of the registry. The registry starts each room actor directly (linking to it) and traps its exit signal, then removes the dead entry from its own state; a new room actor is only started lazily on the next lookup. This means room crashes are not automatically restarted by the supervision tree — recovery is registry-driven and deferred.
 
