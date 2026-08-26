@@ -184,3 +184,4 @@ Development is intentionally issue-driven:
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+# ruleset verification 2026-08-26T02:01:08Z
