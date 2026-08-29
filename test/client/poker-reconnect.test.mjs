@@ -3,22 +3,10 @@
 // 対して行う。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startClient } from "./harness.mjs";
+import { startClient, flapWithoutJoining } from "./harness.mjs";
 
 const POKER_MODULE = { modulePath: "src/gleamroom/web_poker.gleam", functionName: "poker_html" };
 const MAX_RECONNECT_ATTEMPTS = 5;
-
-function flapWithoutJoining(client, rounds) {
-  for (let i = 0; i < rounds; i += 1) {
-    const before = client.sockets.length;
-    const socket = client.latestSocket();
-    socket.handlers.open?.();
-    socket.handlers.close?.();
-    client.runTimers();
-    if (client.sockets.length === before) return i + 1;
-  }
-  return null;
-}
 
 test("再接続は MAX_RECONNECT_ATTEMPTS で打ち切られる", () => {
   const client = startClient(POKER_MODULE);
