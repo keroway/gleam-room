@@ -75,3 +75,40 @@ test("利用者が自分で join し直すと試行回数が戻る", () => {
     client.dispose();
   }
 });
+
+test("error イベントはログに残るだけで例外を投げない", () => {
+  // #110 の回帰テスト。error ハンドラは close 側の再接続処理に影響しない
+  // no-op ログだが、これまでテストから一度も呼び出されていなかった。
+  const client = startClient(POKER_MODULE);
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+
+    assert.doesNotThrow(() => socket.handlers.error?.());
+    assert.ok(
+      client.logs.some((line) => line.includes("connection error")),
+      "error イベントがログに残っていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("接続中は保留中の再接続タイマーが残らない", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    // close で再接続タイマーを予約させる。
+    socket.handlers.open?.();
+    socket.handlers.close?.();
+    assert.equal(client.pendingTimers(), 1, "再接続タイマーが予約されていない");
+
+    // 利用者が自分で join し直すと cancelReconnect が呼ばれ、予約が消える。
+    client.submitJoin();
+    assert.equal(client.pendingTimers(), 0, "join し直しても再接続待ちが残っている");
+  } finally {
+    client.dispose();
+  }
+});
