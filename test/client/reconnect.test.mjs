@@ -5,23 +5,9 @@
 // 最小のスタブだけで済ませている（新しい依存を増やさない）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { startClient } from "./harness.mjs";
+import { startClient, flapWithoutJoining } from "./harness.mjs";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
-
-/// join が成立しないまま open→close を繰り返す状況を作る。
-/// サーバが接続直後に切る場合がこれにあたる。
-function flapWithoutJoining(client, rounds) {
-  for (let i = 0; i < rounds; i += 1) {
-    const before = client.sockets.length;
-    const socket = client.latestSocket();
-    socket.handlers.open?.();
-    socket.handlers.close?.();
-    client.runTimers();
-    if (client.sockets.length === before) return i + 1; // 再接続を諦めた回
-  }
-  return null;
-}
 
 test("再接続は MAX_RECONNECT_ATTEMPTS で打ち切られる", () => {
   const client = startClient();

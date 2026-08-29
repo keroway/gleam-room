@@ -5,6 +5,20 @@
 // 起動するのは割に合わない。DOM は「呼ばれても落ちない」程度に留める。
 import { extractClientScript, extractElementIds } from "./extract.mjs";
 
+/// join が成立しないまま open→close を繰り返す状況を作る。
+/// サーバが接続直後に切る場合がこれにあたる。
+export function flapWithoutJoining(client, rounds) {
+  for (let i = 0; i < rounds; i += 1) {
+    const before = client.sockets.length;
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.close?.();
+    client.runTimers();
+    if (client.sockets.length === before) return i + 1; // 再接続を諦めた回
+  }
+  return null;
+}
+
 export function startClient({ modulePath, functionName } = {}) {
   const knownIds = extractElementIds(modulePath, functionName);
   const nodes = new Map();
