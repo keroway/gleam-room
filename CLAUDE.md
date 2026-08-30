@@ -90,7 +90,8 @@ Before implementing an issue:
 4. Implement the smallest coherent change satisfying the issue.
 5. Add or update tests.
 6. Run formatter and tests before completion (`gleam format`, `gleam test`, and
-   `node --test 'test/client/*.test.mjs'` when `src/gleamroom/web.gleam` changes).
+   `node --test 'test/client/*.test.mjs'` when `src/gleamroom/web.gleam` or
+   `src/gleamroom/web_poker.gleam` changes).
 7. Update documentation only if behavior or architecture changed.
 8. Summarize design decisions, validation, and known limitations in the PR.
 
