@@ -1,5 +1,6 @@
 import gleam/erlang/process
 import gleam/string
+import gleamroom/poker
 import gleamroom/poker_registry
 import gleamroom/poker_websocket
 
@@ -94,4 +95,18 @@ pub fn message_rate_outcome_at_the_limit_is_accepted_test() {
 pub fn message_rate_outcome_over_the_limit_is_rejected_test() {
   assert poker_websocket.message_rate_outcome(31)
     == poker_websocket.MessageRateLimited
+}
+
+/// ワイヤーコード文字列が docs/planning-poker.md のエラーコード表と一致することを
+/// 保証する回帰テスト（#303）。
+pub fn vote_reject_code_and_message_voter_not_joined_test() {
+  assert poker_websocket.vote_reject_code_and_message(poker.VoterNotJoined)
+    == #("voter_not_joined", "This connection has not joined the room yet.")
+}
+
+pub fn vote_reject_code_and_message_round_already_revealed_test() {
+  assert poker_websocket.vote_reject_code_and_message(
+      poker.RoundAlreadyRevealed,
+    )
+    == #("round_already_revealed", "Voting is closed until the round is reset.")
 }
