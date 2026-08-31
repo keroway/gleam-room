@@ -236,17 +236,16 @@ parameterized via `{modulePath, functionName}` and reused from both
 `poker-reconnect.test.mjs:8`'s `POKER_MODULE`). This is a second existing
 precedent for how a shared boundary should look.
 
-**抽出すべき**: the `flapWithoutJoining` helper is byte-identical between
-`reconnect.test.mjs:14-24` and `poker-reconnect.test.mjs:11-21` — low-risk,
-move to a shared test helper.
+**解消済み**: the `flapWithoutJoining` helper was byte-identical between
+`reconnect.test.mjs:14-24` and `poker-reconnect.test.mjs:11-21`. It has been
+extracted to `test/client/harness.mjs`, and both test files now import it
+from there (#298, `0323a93`).
 
-**判断保留, and possibly a separate issue rather than an extraction**:
-`reconnect.test.mjs` (124 lines) has two test cases not present in
-`poker-reconnect.test.mjs` (77 lines) — "error events don't throw" and "no
-pending reconnect timer while connected". This is a coverage gap on the
-poker side, discovered as a side effect of this inventory, not a duplication
-question. Worth deciding separately whether to backfill the poker tests
-before or independently of step 4.
+**解消済み**: `reconnect.test.mjs` (124 lines) had two test cases not
+present in `poker-reconnect.test.mjs` (77 lines) — "error events don't
+throw" and "no pending reconnect timer while connected". This coverage gap
+has been backfilled; `poker-reconnect.test.mjs` now has matching test cases
+for both (#295).
 
 ## 2. Actually not duplicated
 
@@ -286,8 +285,8 @@ before or independently of step 4.
 | Embedded JS: reconnect/log/`sendIfOpen`/error handling | 抽出すべき（別カテゴリとして扱う） |
 | Embedded JS: card/vote UI | 抽出すべきでない |
 | `test/client/extract.mjs`/`harness.mjs` | 対象外（既に共有） |
-| `test/client`: `flapWithoutJoining` helper | 抽出すべき |
-| `test/client`: reconnect test coverage asymmetry | 判断保留（別issue化候補） |
+| `test/client`: `flapWithoutJoining` helper | 解消済み（#298） |
+| `test/client`: reconnect test coverage asymmetry | 解消済み（#295） |
 
 Whoever starts step 4 should read this table alongside the cited line
 ranges in section 1 before deciding what to extract first. The lowest-risk,
