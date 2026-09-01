@@ -149,6 +149,17 @@ pub fn routing_serves_the_expected_paths_test() {
   let assert Ok(ws_response) = request_with_method(port, "/ws", http.Post)
   assert ws_response.status == 405
   assert response.get_header(ws_response, "allow") == Ok("GET")
+
+  // `/poker/ws` も buzzer 側 `/ws` と同じ独立したルート分岐であり、同種の
+  // 回帰保護が無かった（#312）。upgrade ヘッダなしの素の GET は 400、
+  // GET 以外は 405 + `Allow: GET` を固定する。
+  let assert Ok(#(poker_ws_status, _)) = get(port, "/poker/ws")
+  assert poker_ws_status == 400
+
+  let assert Ok(poker_ws_response) =
+    request_with_method(port, "/poker/ws", http.Post)
+  assert poker_ws_response.status == 405
+  assert response.get_header(poker_ws_response, "allow") == Ok("GET")
 }
 
 pub fn head_responses_have_an_empty_body_test() {
