@@ -150,3 +150,23 @@ test("拒否以外のサーバー error はログに残るが接続は維持さ�
     client.dispose();
   }
 });
+
+// join 拒否コード（#314）: サーバーが接続を閉じずに error を返す場合でも
+// UI を即座に未接続へ戻し、フォームを再送信可能にする必要がある。
+for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "room_unavailable"]) {
+  test(`${code} エラーは接続状態を未接続にリセットする（#314）`, () => {
+    const client = startClient(POKER_MODULE);
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "error", code, message: "rejected" }),
+      });
+
+      assert.equal(client.connectionState(), "disconnected");
+    } finally {
+      client.dispose();
+    }
+  });
+}
