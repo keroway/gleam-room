@@ -316,3 +316,18 @@ pub fn room_event_to_server_message_vote_rejected_is_not_broadcast_test() {
     ))
     == None
 }
+
+pub fn binary_frame_code_and_message_test() {
+  assert poker_websocket.binary_frame_code_and_message
+    == #("binary_frame", "Binary frames are not supported.")
+}
+
+pub fn rate_limited_code_and_message_test() {
+  assert poker_websocket.rate_limited_code_and_message
+    == #("rate_limited", "Too many messages. Please slow down.")
+}
+
+pub fn frame_too_large_code_and_message_test() {
+  assert poker_websocket.frame_too_large_code_and_message
+    == #("frame_too_large", "Message exceeds the maximum allowed size.")
+}
