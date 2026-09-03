@@ -134,7 +134,7 @@ identical, and add phase-specific ones:
 | `invalid_room_id` | A `join` request's `room_id` was empty/whitespace-only after trimming, or exceeded 64 characters/bytes. |
 | `invalid_display_name` | A `join` request's `display_name` was empty/whitespace-only after trimming, or exceeded 64 characters/bytes. |
 | `already_joined` | This connection sent `join` after already joining, or the domain layer rejected a `join` for a `ParticipantId` already present. |
-| `room_full` | The room rejected a `join` because it already holds the maximum number of participants. |
+| `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `not_joined` | This connection sent `vote`, `reveal`, or `reset` before joining a room. |
 | `invalid_card` | The `vote` message's `value` is not a member of the fixed card set. |
 | `voter_not_joined` | A `vote` was rejected because the domain layer could not find this connection's `ParticipantId` in the room, e.g. a vote arriving just after this session left. |
