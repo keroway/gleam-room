@@ -125,8 +125,8 @@ may vary for the same code.
 | `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; buzz/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
-| `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window. |
-| `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size. The connection is closed afterward. |
+| `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
+| `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward. |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.
 
