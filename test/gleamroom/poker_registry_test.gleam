@@ -359,3 +359,67 @@ pub fn health_fails_when_the_registry_is_dead_test() {
 
   assert poker_registry.health(reg) == Error(call.ActorDown)
 }
+
+/// 前回発火した probe がまだ全件返り終えていなければ、`Health` を連打しても
+/// probe を重ねて発火しないこと。`registry_test.gleam`'s
+/// `health_does_not_refire_probes_while_previous_ones_are_in_flight_test` と
+/// 同じ理由（#269）。
+pub fn health_does_not_refire_probes_while_previous_ones_are_in_flight_test() {
+  let probe_subject: process.Subject(poker.Message) = process.new_subject()
+  let assert Ok(started) =
+    poker_registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: probe_subject))
+    })
+  let reg = started.data
+
+  let assert Ok(_) =
+    poker_registry.lookup(reg, poker_registry.room_id("room-1"))
+
+  // 最初の Health で probe が1件発火する。
+  let assert Ok(_) = poker_registry.health(reg)
+  // 前回の probe がまだ in-flight のうちに Health を連打しても、
+  // 新たな probe 群は発火しないはず。
+  let assert Ok(_) = poker_registry.health(reg)
+  let assert Ok(_) = poker_registry.health(reg)
+
+  // 発火した唯一の probe を受け取り、応答する。
+  let assert Ok(poker.GetState(reply_to)) = process.receive(probe_subject, 200)
+  process.send(reply_to, poker.new_state())
+
+  // 再発火していれば追加の GetState が届くはずだが、届かないことを確認する。
+  assert process.receive(probe_subject, 100) == Error(Nil)
+}
+
+/// named subject 経由で死んだ registry でも `ActorDown` になること。
+/// `registry_test.gleam`'s
+/// `health_fails_when_the_registry_is_dead_via_named_subject_test` と同じ理由
+/// （#115）。本番経路（`gleamroom.start`）が渡す `poker_registry_subject` は
+/// `process.named_subject` 由来で、pid ベースの `Subject`（
+/// `health_fails_when_the_registry_is_dead_test` が使う `poker_registry.start()`）
+/// とは失敗時の分類経路が異なる。
+pub fn health_fails_when_the_registry_is_dead_via_named_subject_test() {
+  let name = process.new_name("poker_registry_test_named")
+  let ready = process.new_subject()
+  // `poker_registry.start` は起動元プロセスへ link する。テストプロセスで
+  // 直接起動して kill すると、テストプロセス自身も巻き添えで落ちる
+  // （上の `health_fails_when_the_registry_is_dead_test` と同じ理由）。
+  process.spawn_unlinked(fn() {
+    let assert Ok(_) = poker_registry.start_named(name)
+    process.send(ready, Nil)
+    process.sleep(3000)
+  })
+  let assert Ok(Nil) = process.receive(ready, 1000)
+
+  let reg = process.named_subject(name)
+  let assert Ok(pid) = process.subject_owner(reg)
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 0, stuck: 0))
+
+  process.kill(pid)
+  wait.until_dead(pid, "named poker registry が終了する")
+
+  // **ActorDown と分類される**こと。名前解決テーブルへの再登録前でも
+  // 「詰まっている」ではなく「落ちている」として伝わる必要がある。
+  assert poker_registry.health(reg) == Error(call.ActorDown)
+}
