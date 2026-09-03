@@ -4,11 +4,14 @@ import gleam/http/request
 import gleam/http/response
 import gleam/httpc
 import gleam/int
+import gleam/otp/actor
 import gleam/string
 import gleamroom
 import gleamroom/call
+import gleamroom/poker
 import gleamroom/poker_registry
 import gleamroom/registry
+import gleamroom/room
 import gleamroom/wait
 
 /// HTTP ルーティングを**実際にサーバを起動して**確かめる（#34）。
@@ -277,4 +280,61 @@ pub fn health_returns_503_when_the_poker_registry_is_dead_test() {
   let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
   assert body == "poker: registry down"
+}
+
+/// `/health` の200成功時本文（`buzzer_rooms=`/`buzzer_stuck=`/`poker_rooms=`/
+/// `poker_stuck=`の文字列連結）は、これまで実HTTP経由では全部ゼロの場合しか
+/// 検証されていなかった（#332）。非ゼロ値の検証は `registry.health` /
+/// `poker_registry.health` を直接呼ぶ単体テストにしか無く、`handle_request`
+/// が正しい変数を正しい位置へ差し込んでいるか（例えば `buzzer_stuck` の
+/// 位置に `poker_stuck` を取り違えるようなコピペミス）は一度も確認されて
+/// いなかった。
+///
+/// `health_reports_a_room_that_does_not_respond_to_a_probe_test`
+/// （registry_test.gleam / poker_registry_test.gleam）と同じ手法で、
+/// buzzer/poker それぞれに応答しない room を1つずつ登録し、実HTTP経由で
+/// `rooms=1` と、probe 後の `stuck=1` が正しい side に反映されることを
+/// 確かめる。
+pub fn health_reports_nonzero_rooms_and_stuck_via_http_test() {
+  let stuck_room_subject: process.Subject(room.Message) = process.new_subject()
+  let assert Ok(registry_started) =
+    registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: stuck_room_subject))
+    })
+  let assert Ok(_) =
+    registry.lookup(registry_started.data, registry.room_id("stuck-room"))
+
+  let stuck_poker_room_subject: process.Subject(poker.Message) =
+    process.new_subject()
+  let assert Ok(poker_registry_started) =
+    poker_registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: stuck_poker_room_subject))
+    })
+  let assert Ok(_) =
+    poker_registry.lookup(
+      poker_registry_started.data,
+      poker_registry.room_id("stuck-poker-room"),
+    )
+
+  let port =
+    start_web_only_server(registry_started.data, poker_registry_started.data)
+
+  // 最初の GET は probe 前なので stuck=0 のまま。この GET 自体が
+  // `registry.health` 経由で非同期 probe を仕掛ける。
+  let assert Ok(#(status, body)) = get(port, "/health")
+  assert status == 200
+  assert body == "ok buzzer_rooms=1 buzzer_stuck=0 poker_rooms=1 poker_stuck=0"
+
+  // probe が完了して stuck が反映されるまで、実HTTP経由でポーリングする。
+  wait.until_within(
+    fn() {
+      get(port, "/health")
+      == Ok(#(
+        200,
+        "ok buzzer_rooms=1 buzzer_stuck=1 poker_rooms=1 poker_stuck=1",
+      ))
+    },
+    "buzzer/poker 双方の詰まった room が実HTTP経由で検知される",
+    200,
+  )
 }
