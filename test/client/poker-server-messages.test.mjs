@@ -151,6 +151,40 @@ test("拒否以外のサーバー error はログに残るが接続は維持さ�
   }
 });
 
+test("壊れた JSON の message イベントは例外を漏らさずログに残り、直前の participants 状態を保つ（#324）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    const logsBeforeMalformed = client.logs.length;
+
+    socket.handlers.message?.({ data: "not valid json" });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("could not parse server message")),
+      "パース失敗ログが残っていない",
+    );
+    assert.equal(
+      client.logs.length,
+      logsBeforeMalformed + 1,
+      "パース失敗以外のログが増えている（状態が変化した疑い）",
+    );
+
+    // 直前の participants 状態が壊れていなければ、既存参加者の退出は
+    // 通常どおり処理されるはず。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", participant_id: "p1" }),
+    });
+    assert.ok(
+      client.logs.some((line) => line.includes("left: p1")),
+      "壊れた JSON の後で participants 状態が失われている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 // join 拒否コード（#314）: サーバーが接続を閉じずに error を返す場合でも
 // UI を即座に未接続へ戻し、フォームを再送信可能にする必要がある。
 for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "room_unavailable"]) {
