@@ -135,6 +135,38 @@ test("room_unavailable エラーは接続状態を未接続にリセットする
   }
 });
 
+test("壊れた JSON の message イベントは例外を漏らさずログに残り、直前の participants 状態を保つ（#324）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const logsBeforeMalformed = client.logs.length;
+
+    socket.handlers.message?.({ data: "not valid json" });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("could not parse server message")),
+      "パース失敗ログが残っていない",
+    );
+    assert.equal(
+      client.logs.length,
+      logsBeforeMalformed + 1,
+      "パース失敗以外のログが増えている（状態が変化した疑い）",
+    );
+
+    // 直前の participants 状態が壊れていなければ、既存参加者の退出は
+    // 通常どおり処理されるはず。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", participant_id: "p1" }),
+    });
+    assert.ok(
+      client.logs.some((line) => line.includes("left: p1")),
+      "壊れた JSON の後で participants 状態が失われている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("invalid_room_id エラーは接続状態を未接続にリセットする（#265: マルチバイトのバイト数超過で再join不能になる回帰防止）", () => {
   const client = startClient();
   try {
