@@ -7,6 +7,7 @@ import { startClient, flapWithoutJoining } from "./harness.mjs";
 
 const POKER_MODULE = { modulePath: "src/gleamroom/web_poker.gleam", functionName: "poker_html" };
 const MAX_RECONNECT_ATTEMPTS = 5;
+const RECONNECT_DELAY_MS = 1500;
 
 test("再接続は MAX_RECONNECT_ATTEMPTS で打ち切られる", () => {
   const client = startClient(POKER_MODULE);
@@ -92,6 +93,11 @@ test("接続中は保留中の再接続タイマーが残らない", () => {
     socket.handlers.open?.();
     socket.handlers.close?.();
     assert.equal(client.pendingTimers(), 1, "再接続タイマーが予約されていない");
+    assert.deepEqual(
+      client.timerDelays(),
+      [RECONNECT_DELAY_MS],
+      "再接続タイマーの delay が RECONNECT_DELAY_MS と一致していない",
+    );
 
     // 利用者が自分で join し直すと cancelReconnect が呼ばれ、予約が消える。
     client.submitJoin();
