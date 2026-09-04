@@ -257,8 +257,11 @@ pub fn poker_html() -> String {
         break;
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
-        // ソケットを閉じずに返る（poker_websocket.gleam の同種の分岐）。
+        // room_full/invalid_room_id/invalid_display_name はソケットを閉じずに
+        // 返る（poker_websocket.gleam の同種の分岐）。room_unavailable は理由
+        // により挙動が異なり、join タイムアウトでは接続が閉じられるが、
+        // buzz/reset タイムアウトでは維持される（README.md/docs/mvp.md の
+        // error code 表参照。code だけでは区別できない）。
         // web.gleam と同じ理由でここで即座に未接続・再join可能な状態へ戻す。
         if (
           message.code === \"room_full\" ||
