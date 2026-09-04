@@ -171,6 +171,12 @@ export function startClient({ modulePath, functionName } = {}) {
     pendingTimers() {
       return timers.length;
     },
+    /// 発火前の pending timer の delay 値一覧（登録順）。
+    /// 特定の delay 値（例: RECONNECT_DELAY_MS）そのものをテストから
+    /// アサートするためのアクセサ。
+    timerDelays() {
+      return timers.map((timer) => timer.delay);
+    },
     /// 差し替えたグローバルを元に戻す。テストごとに必ず呼ぶ。
     dispose() {
       for (const key of Object.keys(sandbox)) globalThis[key] = saved[key];
