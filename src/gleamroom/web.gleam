@@ -198,12 +198,15 @@ pub fn index_html() -> String {
         break;
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
-        // ソケットを閉じずに返る（websocket.gleam の with_room/JoinRejected
-        // 分岐）。実接続の close イベントを待つと再joinまで時間差ができるため、
-        // ここで即座に \"未接続・再度join可能\" な状態へ戻す。実ソケットも
-        // 明示的に閉じ、以降そのソケットからのイベントは無視する
-        // （close は自然発火してもここでの状態は既にリセット済み）。
+        // room_full/invalid_room_id/invalid_display_name はソケットを閉じずに
+        // 返る（websocket.gleam の with_room/JoinRejected 分岐）。room_unavailable
+        // は理由により挙動が異なり、join タイムアウトでは接続が閉じられるが、
+        // buzz/reset タイムアウトでは維持される（README.md/docs/mvp.md の
+        // error code 表参照。code だけでは区別できない）。実接続の close
+        // イベントを待つと再joinまで時間差ができるため、ここで即座に
+        // \"未接続・再度join可能\" な状態へ戻す。実ソケットも明示的に閉じ、
+        // 以降そのソケットからのイベントは無視する（close は自然発火しても
+        // ここでの状態は既にリセット済み）。
         // 明示的な拒否なので自動再接続はしない（lastJoin をクリア）。
         // already_joined はこの接続が既にroomへ参加済みであることを示す
         // だけで join 失敗ではないため、ここには含めない。
