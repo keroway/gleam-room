@@ -105,14 +105,16 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     room.BuzzResult(alice, "Alice", 2),
     room.BuzzResult(carol, "Carol", 3),
   ]
-  assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
+  let assert Ok(#(_, buzzes)) = room.get_state(room_subject)
+  assert buzzes == expected_order
 
   // 6. A second buzz from B does not alter or duplicate the ordering.
   assert room.dispatch(room_subject, room.Buzz(bob), bob_session)
     == Ok(room.BuzzRejected(bob, room.AlreadyBuzzed))
   assert process.receive(alice_session, 100) == Error(Nil)
   assert process.receive(carol_session, 100) == Error(Nil)
-  assert room.get_buzz_snapshot(room_subject) == Ok(expected_order)
+  let assert Ok(#(_, buzzes)) = room.get_state(room_subject)
+  assert buzzes == expected_order
   // Rejections are never broadcast, not even to the issuer, so bob_session
   // has nothing queued here.
 
@@ -121,7 +123,8 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
     == Ok(room.RoundReset)
   assert process.receive(bob_session, 100) == Ok(room.RoundReset)
   assert process.receive(carol_session, 100) == Ok(room.RoundReset)
-  assert room.get_buzz_snapshot(room_subject) == Ok([])
+  let assert Ok(#(_, buzzes)) = room.get_state(room_subject)
+  assert buzzes == []
   let _ = process.receive(alice_session, 100)
 
   // 8. One client (Carol) disconnects and remaining clients observe the

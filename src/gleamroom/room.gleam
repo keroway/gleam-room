@@ -214,8 +214,7 @@ pub type Message {
     reply_to: Subject(RoomEvent),
   )
   GetSnapshot(reply_to: Subject(List(Participant)))
-  GetBuzzSnapshot(reply_to: Subject(List(BuzzResult)))
-  /// `GetSnapshot` と `GetBuzzSnapshot` を合わせて 1 メッセージで返す（#121）。
+  /// `GetSnapshot` と buzz のスナップショットを合わせて 1 メッセージで返す（#121）。
   ///
   /// 呼び出し側が participants と buzzes を 2 回の独立した call で別々に
   /// 取得すると、その間に他の接続の Join/Leave/Buzz/Reset が割り込み、
@@ -336,10 +335,6 @@ fn handle_message(
     }
     GetSnapshot(reply_to) -> {
       process.send(reply_to, snapshot(state.room))
-      actor.continue(state)
-    }
-    GetBuzzSnapshot(reply_to) -> {
-      process.send(reply_to, buzz_snapshot(state.room))
       actor.continue(state)
     }
     GetState(reply_to) -> {
@@ -548,18 +543,6 @@ pub fn get_snapshot(
   subject: Subject(Message),
 ) -> Result(List(Participant), Nil) {
   call.try_call(subject, call.default_timeout, GetSnapshot, "room.get_snapshot")
-}
-
-/// Reads the current round's accepted buzzes from a running room actor.
-pub fn get_buzz_snapshot(
-  subject: Subject(Message),
-) -> Result(List(BuzzResult), Nil) {
-  call.try_call(
-    subject,
-    call.default_timeout,
-    GetBuzzSnapshot,
-    "room.get_buzz_snapshot",
-  )
 }
 
 /// Reads the participant list and the current round's accepted buzzes from
