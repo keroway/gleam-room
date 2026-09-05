@@ -331,3 +331,15 @@ pub fn frame_too_large_code_and_message_test() {
   assert poker_websocket.frame_too_large_code_and_message
     == #("frame_too_large", "Message exceeds the maximum allowed size.")
 }
+
+/// `get_state` タイムアウト後のフォールバック状態は空の participants/votes
+/// と `phase: Voting` を返す(#357)。この phase 固定は「不明な phase を
+/// 安全に表せない」という既知の制約であって偶然の実装詳細ではないので、
+/// リグレッションとして固定しておく。
+pub fn fallback_state_after_get_state_timeout_has_empty_voting_state_test() {
+  let state = poker_websocket.fallback_state_after_get_state_timeout()
+
+  assert poker.snapshot(state) == []
+  assert poker_websocket.to_wire_round_phase(state.phase)
+    == poker_protocol.Voting
+}
