@@ -183,6 +183,14 @@ pub fn head_responses_have_an_empty_body_test() {
     request_with_method(port, "/health", http.Head)
   assert health_response.status == health_get_response.status
   assert health_response.body == ""
+
+  let assert Ok(poker_get_response) =
+    request_with_method(port, "/poker", http.Get)
+  let assert Ok(poker_response) = request_with_method(port, "/poker", http.Head)
+  assert poker_response.status == poker_get_response.status
+  assert response.get_header(poker_response, "content-type")
+    == response.get_header(poker_get_response, "content-type")
+  assert poker_response.body == ""
 }
 
 /// `/health` の 503 本文は `call.Failure` の3バリアントすべてを区別する
