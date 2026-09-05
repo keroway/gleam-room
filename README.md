@@ -131,6 +131,10 @@ see `src/gleamroom/web.gleam`.
 join/buzz/reset protocol described in
 [`docs/mvp.md`](docs/mvp.md#suggested-wire-protocol); see
 `src/gleamroom/protocol.gleam` and `src/gleamroom/websocket.gleam`. The
+handshake itself is rejected with `403` when the `Origin` header does not
+match `Host` (CSWSH protection, see
+[`docs/architecture.md`](docs/architecture.md#websocket-handshake-origin-check));
+this matters when deploying behind a reverse proxy that rewrites `Host`. The
 browser client above is the easiest way to exercise it manually. To validate
 the full MVP acceptance scenario from
 [`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running:

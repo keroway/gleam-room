@@ -58,6 +58,23 @@ Not responsible for:
 - Owning room state.
 - Implementing game rules.
 
+#### WebSocket handshake origin check
+
+Before upgrading a connection, the transport layer rejects the handshake with
+`403` unless the request's `Origin` header matches its `Host` header. This
+guards against Cross-Site WebSocket Hijacking (CSWSH); see ADR/issue #124 and
+`origin_allowed` in `src/gleamroom/websocket.gleam` and
+`src/gleamroom/poker_websocket.gleam`.
+
+This means a deployment behind a reverse proxy must ensure the `Host` header
+the Gleam process sees still matches the browser's `Origin` (for example by
+having the proxy forward the original `Host` rather than rewriting it to an
+internal upstream address). If it does not, every WebSocket upgrade is
+rejected with `403` and no further protocol-level error code applies — the
+connection never reaches the wire protocol described in
+[`docs/mvp.md`](mvp.md#suggested-wire-protocol) or
+[`docs/planning-poker.md`](planning-poker.md#suggested-wire-protocol).
+
 ### Room registry
 
 Responsible for:
