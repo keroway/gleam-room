@@ -159,7 +159,9 @@ with `gleam test`.
 
 `test/gleamroom/routing_test.gleam` goes one layer further out: it starts the
 real supervision tree with `gleamroom.start/1` and sends real HTTP requests to
-`/`, `/health`, `/ws`, and an unknown path. mist's `Connection` is opaque, so a
+`/`, `/poker`, `/health`, `/ws`, `/poker/ws`, and an unknown path — including
+poker-registry health branches (registry down, timeout, stuck rooms) that get
+as much coverage as the buzzer path. mist's `Connection` is opaque, so a
 fabricated request cannot exercise the router — only a real server can. This is
 what `gleam_httpc` is a dev-dependency for.
 
