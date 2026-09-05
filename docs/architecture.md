@@ -75,6 +75,24 @@ connection never reaches the wire protocol described in
 [`docs/mvp.md`](mvp.md#suggested-wire-protocol) or
 [`docs/planning-poker.md`](planning-poker.md#suggested-wire-protocol).
 
+#### Abuse controls
+
+Beyond the origin check above, the transport and room layers already enforce
+basic abuse limits (see the error code table in
+[`docs/mvp.md`](mvp.md#suggested-wire-protocol)):
+
+- A per-connection text frame size cap (`max_text_frame_bytes` in
+  `src/gleamroom/websocket.gleam`), returning `frame_too_large`.
+- A per-connection message rate limit within a heartbeat window
+  (`max_messages_per_heartbeat_window` in `src/gleamroom/websocket.gleam`),
+  returning `rate_limited`.
+- A per-room participant cap (`max_participants` in `src/gleamroom/room.gleam`
+  and `src/gleamroom/poker.gleam`).
+
+These are deliberately simple, in-process limits, not the broader compliance
+features (e.g. audit logging, IP-based blocking, regulatory certifications)
+listed as deferred below.
+
 ### Room registry
 
 Responsible for:
@@ -200,6 +218,8 @@ The following are explicitly deferred:
 - End-to-end encryption.
 - Authentication/authorization.
 - Durable event logs.
-- Production abuse controls and compliance features.
+- Compliance features (e.g. audit logging, IP-based blocking, regulatory
+  certifications). See "Abuse controls" above for the basic limits that are
+  already implemented.
 
 Each should be introduced through a separate design decision when a concrete product requirement justifies it.
