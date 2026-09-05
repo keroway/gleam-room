@@ -436,7 +436,7 @@ fn handle_join(
                   <> ", participant="
                   <> poker.participant_id_to_string(participant.id),
               )
-              poker.new_state()
+              fallback_state_after_get_state_timeout()
             }
           }
           send_server_message(
@@ -863,6 +863,20 @@ pub fn to_wire_participant_id(
   id: poker.ParticipantId,
 ) -> poker_protocol.ParticipantId {
   poker_protocol.participant_id(poker.participant_id_to_string(id))
+}
+
+/// The state sent to a joining client when `poker.get_state` times out right
+/// after join. Distinct from `poker.new_state()` (which is "an empty room's
+/// initial state") because the two mean different things here: this fallback
+/// runs against a room that already exists and may already hold votes or a
+/// `Revealed` round, so `phase: Voting` is not a neutral default — it is a
+/// deliberately accepted lie about a phase we failed to observe (#357). The
+/// wire protocol has no "unknown" phase, and this path only triggers on a
+/// rare `get_state` timeout immediately after join, so extending the wire
+/// protocol for it is not justified yet; revisit if this fallback is
+/// observed in production logs.
+pub fn fallback_state_after_get_state_timeout() -> poker.PokerState {
+  poker.new_state()
 }
 
 /// Converts a domain `RoundPhase` to its wire representation.
