@@ -56,7 +56,7 @@ pub fn main() -> Nil {
   // trap_exits で受け止めて exit を明示的にログしてから終了させる。
   process.trap_exits(True)
 
-  case start(read_port()) {
+  case start(read_port(), read_max_rooms()) {
     Ok(started) -> await_supervisor_exit(started.pid, halt_with_failure)
     Error(reason) -> {
       // #29 / #32 / #53 と同じ方針: 失敗を無警告でクラッシュさせず、
@@ -127,6 +127,7 @@ fn erlang_halt(code: Int) -> Nil
 /// 名前が衝突しない（テストが本番と同じ経路を通れる）。
 pub fn start(
   port: Int,
+  max_rooms: Int,
 ) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
   // 名前を経由することで、registry が再起動しても HTTP ハンドラは
   // 現行のプロセスへ届く（起動時の subject を握らない）。
@@ -144,13 +145,17 @@ pub fn start(
   // クラッシュ経路が増えて頻繁な再起動が正常系になるなら、そのときに見直す。
   |> supervisor.restart_tolerance(intensity: 2, period: 5)
   |> supervisor.add(
-    supervision.worker(fn() { registry.start_named(registry_name) }),
+    supervision.worker(fn() {
+      registry.start_named_with_max_rooms(registry_name, max_rooms)
+    }),
   )
   // buzzer と隔離された poker room actor 用の registry（#279）。
   // `one_for_one` の下で buzzer registry / web server とは独立して起動・
   // 再起動できる。`/health` も両方の registry を問い合わせる（#285）。
   |> supervisor.add(
-    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
+    supervision.worker(fn() {
+      poker_registry.start_named_with_max_rooms(poker_registry_name, max_rooms)
+    }),
   )
   |> supervisor.add(mist.supervised(
     handle_request(_, registry_subject, poker_registry_subject)
@@ -451,6 +456,53 @@ pub fn read_port() -> Int {
               <> " 番で起動します。",
           )
           default_port
+        }
+      }
+  }
+}
+
+/// `MAX_ROOMS` 環境変数から room 数上限を読む（#352）。
+///
+/// `read_port`（#29）と同じ方針: **未設定と「設定されているが不正」を区別
+/// する**。`start_with_max_rooms` / `poker_registry.start_with_max_rooms` は
+/// 公開されていたが本番の起動経路からは到達不能で、上限を変えるには
+/// コード変更＋再デプロイが必須だった。
+///
+/// - 未設定: 意図された既定動作。静かに `registry.default_max_rooms()`
+///   （buzzer/poker 共通、`poker_registry.gleam` も同じ値）を使う
+/// - 不正値(数値として解釈できない、または 1 未満): 設定ミス。
+///   **警告を出してから** 既定値を使う
+///
+/// 起動自体は続ける。`read_port` と同じ理由で、ここで落とすと
+/// 「動くはずのものが上がらない」ほうの害が大きい。
+pub fn read_max_rooms() -> Int {
+  let default_max_rooms = registry.get_default_max_rooms()
+  case envoy.get("MAX_ROOMS") {
+    Error(Nil) -> default_max_rooms
+    Ok(raw) ->
+      case int.parse(raw) {
+        Ok(max_rooms) if max_rooms >= 1 -> max_rooms
+        Ok(_) -> {
+          logging.log(
+            logging.Warning,
+            "MAX_ROOMS="
+              <> raw
+              <> " は1以上の整数ではありません。既定の "
+              <> int.to_string(default_max_rooms)
+              <> " 件で起動します。",
+          )
+          default_max_rooms
+        }
+        Error(Nil) -> {
+          logging.log(
+            logging.Warning,
+            "MAX_ROOMS="
+              <> raw
+              <> " は整数として解釈できません。既定の "
+              <> int.to_string(default_max_rooms)
+              <> " 件で起動します。",
+          )
+          default_max_rooms
         }
       }
   }
