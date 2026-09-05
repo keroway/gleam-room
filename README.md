@@ -98,11 +98,15 @@ children — one being unhealthy says nothing about the other.
 
 `stuck` counts room actors that did not answer their registry's last
 lightweight probe (a `room.get_snapshot`/`poker.get_state` call fired after
-each `/health` request). Registry responsiveness and individual room
-responsiveness are different failure modes with different remedies, so
-`stuck` is reported alongside a `200` rather than turning `/health` itself
-into a `503` — a wedged room doesn't mean its registry (and thus new joins)
-is unavailable.
+each `/health` request). This probe does not fire on every single `/health`
+request, though: if the previous probe round hasn't fully returned yet
+(`probe_in_flight` is non-zero), the registry skips firing a new round and
+`/health` returns the last completed round's `stuck` count instead (#269 — this
+keeps a burst of `/health` polling from piling up unbounded probes in a room
+actor's mailbox). Registry responsiveness and individual room responsiveness
+are different failure modes with different remedies, so `stuck` is reported
+alongside a `200` rather than turning `/health` itself into a `503` — a
+wedged room doesn't mean its registry (and thus new joins) is unavailable.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
 `gleam test`, and the client tests on every pull request and push to `main`.
