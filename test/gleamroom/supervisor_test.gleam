@@ -244,8 +244,78 @@ pub fn one_for_one_does_not_restart_the_web_server_when_registry_crashes_test() 
   assert mist_pid_before == mist_pid_after
 }
 
+/// `gleamroom.start_on_ephemeral_port` が組む `one_for_one` 構成が、
+/// buzzer registry(1番目)⇄poker_registry(2番目)の間でも独立していることを
+/// 検証する（#373、#350 修正で範囲外のまま残っていたペア）。
+///
+/// 既存の `one_for_one_does_not_restart_the_web_server_when_registry_crashes_test`
+/// は buzzer registry(1番目)⇄mist(3番目)のペアしか検証しておらず、
+/// poker_registry(2番目)が関わる隔離は無検証だった。`docs/architecture.md` と
+/// ADR-0008 は3子とも独立して再起動できることを設計原則としているため、
+/// 残るペアの一方（buzzer registry を kill しても poker_registry の pid が
+/// 不変であること）をここで裏付ける。
+pub fn one_for_one_does_not_restart_poker_registry_when_buzzer_registry_crashes_test() {
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  let assert Ok(registry_pid_before) = first_child_pid(supervisor_pid)
+  let assert Ok(poker_registry_pid_before) = second_child_pid(supervisor_pid)
+
+  process.kill(registry_pid_before)
+
+  wait.until(
+    fn() {
+      case first_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != registry_pid_before
+        Error(Nil) -> False
+      }
+    },
+    "buzzer registry が再起動する",
+  )
+
+  // buzzer registry の再起動が観測できた時点で、poker_registry 側が
+  // 巻き添えを受けていれば既に再起動が始まっているはず。one_for_one なら
+  // ここで pid は不変。
+  let assert Ok(poker_registry_pid_after) = second_child_pid(supervisor_pid)
+  assert poker_registry_pid_before == poker_registry_pid_after
+}
+
+/// `gleamroom.start_on_ephemeral_port` が組む `one_for_one` 構成が、
+/// poker_registry(2番目)⇄mist(3番目)の間でも独立していることを検証する
+/// （#373、#350 修正で範囲外のまま残っていたペア）。
+///
+/// poker_registry がクラッシュしても、後ろに追加された mist（と配下の
+/// WebSocket 接続）が巻き添えで再起動されないことを確認する。
+pub fn one_for_one_does_not_restart_the_web_server_when_poker_registry_crashes_test() {
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  let assert Ok(poker_registry_pid_before) = second_child_pid(supervisor_pid)
+  let assert Ok(mist_pid_before) = third_child_pid(supervisor_pid)
+
+  process.kill(poker_registry_pid_before)
+
+  wait.until(
+    fn() {
+      case second_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != poker_registry_pid_before
+        Error(Nil) -> False
+      }
+    },
+    "poker_registry が再起動する",
+  )
+
+  // poker_registry の再起動が観測できた時点で、mist 側が巻き添えを受けて
+  // いれば既に再起動が始まっているはず。one_for_one ならここで pid は不変。
+  let assert Ok(mist_pid_after) = third_child_pid(supervisor_pid)
+  assert mist_pid_before == mist_pid_after
+}
+
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")
 fn first_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
+
+@external(erlang, "gleamroom_supervisor_test_ffi", "second_child_pid")
+fn second_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
 
 @external(erlang, "gleamroom_supervisor_test_ffi", "third_child_pid")
 fn third_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
