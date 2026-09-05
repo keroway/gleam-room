@@ -275,7 +275,8 @@ pub fn actor_reset_round_clears_buzz_snapshot_test() {
   let assert Ok(event) = room.dispatch(subject, room.ResetRound, alice_session)
 
   assert event == room.RoundReset
-  assert room.get_buzz_snapshot(subject) == Ok([])
+  let assert Ok(#(_, buzzes)) = room.get_state(subject)
+  assert buzzes == []
 }
 
 pub fn departed_subscriber_receives_no_further_broadcasts_test() {
@@ -338,8 +339,8 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // reflects only the reconnected participant.
   assert room.get_snapshot(subject)
     == Ok([room.Participant(alice_new, "Alice")])
-  assert room.get_buzz_snapshot(subject)
-    == Ok([room.BuzzResult(alice_old, "Alice", 1)])
+  let assert Ok(#(_, buzzes)) = room.get_state(subject)
+  assert buzzes == [room.BuzzResult(alice_old, "Alice", 1)]
 }
 
 pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() {
@@ -383,9 +384,10 @@ pub fn independent_room_actors_do_not_share_buzz_state_test() {
 
   let assert Ok(_) = room.dispatch(room_a.data, room.Buzz(id), session)
 
-  assert room.get_buzz_snapshot(room_a.data)
-    == Ok([room.BuzzResult(id, "Alice", 1)])
-  assert room.get_buzz_snapshot(room_b.data) == Ok([])
+  let assert Ok(#(_, buzzes_a)) = room.get_state(room_a.data)
+  assert buzzes_a == [room.BuzzResult(id, "Alice", 1)]
+  let assert Ok(#(_, buzzes_b)) = room.get_state(room_b.data)
+  assert buzzes_b == []
 }
 
 /// 接続プロセスが死んだ参加者が room から自動で消えること（#56 / #35）。
@@ -599,7 +601,7 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   assert positions == one_to(count)
 
   // room 側の記録と、各参加者が受け取った通知が食い違わない。
-  let assert Ok(snapshot) = room.get_buzz_snapshot(subject)
+  let assert Ok(#(_, snapshot)) = room.get_state(subject)
   assert list.length(snapshot) == count
   assert list.map(snapshot, fn(result) { result.position }) == one_to(count)
 
