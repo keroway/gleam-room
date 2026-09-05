@@ -136,6 +136,66 @@ pub fn start(
   let poker_registry_name = process.new_name("gleamroom_poker_registry")
   let poker_registry_subject = process.named_subject(poker_registry_name)
 
+  build_supervisor(
+    registry_name,
+    poker_registry_name,
+    max_rooms,
+    mist.supervised(
+      handle_request(_, registry_subject, poker_registry_subject)
+      |> mist.new
+      |> mist.port(port),
+    ),
+  )
+  |> supervisor.start
+}
+
+/// `start` の、ポートをOSに動的採番させる版（#152）。
+///
+/// テストが固定ポートを使うと、CI・開発機でそのポートが既に他プロセスに
+/// 専有されている場合に、ルーティング自体とは無関係な bind 失敗で落ちる。
+/// ポート `0` を渡すとOSが空きポートを選んで bind するため、この衝突自体が
+/// 起こらなくなる。実際に採番されたポートは mist の `after_start` フックで
+/// 受け取り、呼び出し元へ返す。
+///
+/// registry の起動方法・supervisor構成は `build_supervisor`（`start` と共有）
+/// を経由するため、この関数を呼ぶテストは `start` が本番で組む構成そのものを
+/// 検証できる（#376）。以前は registry の起動呼び出しをここへ個別にコピーして
+/// おり、`start` 側だけが `max_rooms` 配線を失っても検知できなかった。
+pub fn start_on_ephemeral_port() -> Result(
+  #(Int, actor.Started(supervisor.Supervisor)),
+  actor.StartError,
+) {
+  let registry_name = process.new_name("gleamroom_registry")
+  let registry_subject = process.named_subject(registry_name)
+  let poker_registry_name = process.new_name("gleamroom_poker_registry")
+  let poker_registry_subject = process.named_subject(poker_registry_name)
+
+  let bound_port = process.new_subject()
+
+  build_supervisor(
+    registry_name,
+    poker_registry_name,
+    registry.get_default_max_rooms(),
+    mist.supervised(
+      handle_request(_, registry_subject, poker_registry_subject)
+      |> mist.new
+      |> with_ephemeral_port(bound_port),
+    ),
+  )
+  |> supervisor.start
+  |> with_bound_port(bound_port)
+}
+
+/// `start` と `start_on_ephemeral_port` が共有する supervisor 構成の組み立て
+/// （#376）。ポートの割り当て方だけが両者で異なり、それ以外
+/// （registry 2 つの起動方法・`restart_tolerance`・子の追加順序）は完全に
+/// 同一であるべきなので、コピーではなく1箇所にまとめる。
+fn build_supervisor(
+  registry_name: process.Name(registry.Message),
+  poker_registry_name: process.Name(poker_registry.Message),
+  max_rooms: Int,
+  web_child: supervision.ChildSpecification(supervisor.Supervisor),
+) -> supervisor.Builder {
   supervisor.new(supervisor.OneForOne)
   // `intensity`/`period` を明示する（#79）。値そのものは gleam_otp の既定
   // （5 秒間に 2 回）のままだが、無指定だと「意図して既定値を選んだ」のか
@@ -157,47 +217,7 @@ pub fn start(
       poker_registry.start_named_with_max_rooms(poker_registry_name, max_rooms)
     }),
   )
-  |> supervisor.add(mist.supervised(
-    handle_request(_, registry_subject, poker_registry_subject)
-    |> mist.new
-    |> mist.port(port),
-  ))
-  |> supervisor.start
-}
-
-/// `start` の、ポートをOSに動的採番させる版（#152）。
-///
-/// テストが固定ポートを使うと、CI・開発機でそのポートが既に他プロセスに
-/// 専有されている場合に、ルーティング自体とは無関係な bind 失敗で落ちる。
-/// ポート `0` を渡すとOSが空きポートを選んで bind するため、この衝突自体が
-/// 起こらなくなる。実際に採番されたポートは mist の `after_start` フックで
-/// 受け取り、呼び出し元へ返す。
-pub fn start_on_ephemeral_port() -> Result(
-  #(Int, actor.Started(supervisor.Supervisor)),
-  actor.StartError,
-) {
-  let registry_name = process.new_name("gleamroom_registry")
-  let registry_subject = process.named_subject(registry_name)
-  let poker_registry_name = process.new_name("gleamroom_poker_registry")
-  let poker_registry_subject = process.named_subject(poker_registry_name)
-
-  let bound_port = process.new_subject()
-
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.restart_tolerance(intensity: 2, period: 5)
-  |> supervisor.add(
-    supervision.worker(fn() { registry.start_named(registry_name) }),
-  )
-  |> supervisor.add(
-    supervision.worker(fn() { poker_registry.start_named(poker_registry_name) }),
-  )
-  |> supervisor.add(mist.supervised(
-    handle_request(_, registry_subject, poker_registry_subject)
-    |> mist.new
-    |> with_ephemeral_port(bound_port),
-  ))
-  |> supervisor.start
-  |> with_bound_port(bound_port)
+  |> supervisor.add(web_child)
 }
 
 /// registry を外部から注入して web server だけを起動する（#142）。

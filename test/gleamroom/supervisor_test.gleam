@@ -311,6 +311,28 @@ pub fn one_for_one_does_not_restart_the_web_server_when_poker_registry_crashes_t
   assert mist_pid_before == mist_pid_after
 }
 
+/// `gleamroom.start`（本番起動経路。`main` が実際に呼ぶ関数）を直接起動できる
+/// ことを検証する（#376）。
+///
+/// 以前は `gleam test` を通じて `start` が一度も呼ばれておらず、テストは常に
+/// 別実装の `start_on_ephemeral_port` を経由していた。両者は登録する
+/// registry の起動方法や supervisor 構成を独立にコピーしており、`start`
+/// 側だけが `max_rooms` 配線を失うような回帰が起きても検知できなかった。
+/// 今は両者とも `build_supervisor`（`src/gleamroom.gleam`）を共有するため、
+/// この構成上の乖離自体が起こり得なくなっているが、`start` 自身が実際に
+/// 起動できることは依然としてこのテストでしか確認できない。
+///
+/// ポート `0` を渡すとOSが空きポートを選んで bind するため、`start` は
+/// ポートを引数に取る本番と同じ関数のまま、CI・開発機でのポート衝突なく
+/// 直接呼び出せる。
+pub fn start_is_directly_callable_and_wires_max_rooms_test() {
+  let assert Ok(started) = gleamroom.start(0, 3)
+
+  let assert Ok(_registry_pid) = first_child_pid(started.pid)
+  let assert Ok(_poker_registry_pid) = second_child_pid(started.pid)
+  let assert Ok(_mist_pid) = third_child_pid(started.pid)
+}
+
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")
 fn first_child_pid(supervisor_pid: process.Pid) -> Result(process.Pid, Nil)
 
