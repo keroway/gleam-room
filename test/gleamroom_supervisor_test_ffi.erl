@@ -12,15 +12,16 @@
 %% down, the call eventually fails with `exit` — that's surfaced as
 %% `{error, nil}` rather than crashing the caller.
 -module(gleamroom_supervisor_test_ffi).
--export([first_child_pid/1, second_child_pid/1]).
+-export([first_child_pid/1, third_child_pid/1]).
 
 first_child_pid(SupervisorPid) ->
     wait_for_nth_child_pid(SupervisorPid, 1, 50).
 
 %% #78 の one_for_one 検証用: registry(1番目の子)を kill しても
-%% mist(2番目の子)が巻き添えで再起動されていないことを確認するために使う。
-second_child_pid(SupervisorPid) ->
-    wait_for_nth_child_pid(SupervisorPid, 2, 50).
+%% mist(3番目の子、#279 で poker_registry が2番目に追加されて以降)が
+%% 巻き添えで再起動されていないことを確認するために使う。
+third_child_pid(SupervisorPid) ->
+    wait_for_nth_child_pid(SupervisorPid, 3, 50).
 
 wait_for_nth_child_pid(_SupervisorPid, _N, 0) ->
     {error, nil};
