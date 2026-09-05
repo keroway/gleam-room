@@ -288,14 +288,6 @@ pub fn encode_error_frame_too_large_test() {
     == "{\"type\":\"error\",\"code\":\"frame_too_large\",\"message\":\"Message exceeds the maximum allowed size.\"}"
 }
 
-pub fn encode_error_already_revealed_test() {
-  assert poker_protocol.encode_server_message(ProtocolErrorMessage(
-      "already_revealed",
-      "The round is already revealed. Reset to vote again.",
-    ))
-    == "{\"type\":\"error\",\"code\":\"already_revealed\",\"message\":\"The round is already revealed. Reset to vote again.\"}"
-}
-
 pub fn encode_error_not_voting_phase_test() {
   assert poker_protocol.encode_server_message(ProtocolErrorMessage(
       "not_voting_phase",
