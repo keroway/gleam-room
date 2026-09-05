@@ -82,10 +82,11 @@ basic abuse limits (see the error code table in
 [`docs/mvp.md`](mvp.md#suggested-wire-protocol)):
 
 - A per-connection text frame size cap (`max_text_frame_bytes` in
-  `src/gleamroom/websocket.gleam`), returning `frame_too_large`.
+  `src/gleamroom/websocket.gleam` and `src/gleamroom/poker_websocket.gleam`),
+  returning `frame_too_large`.
 - A per-connection message rate limit within a heartbeat window
-  (`max_messages_per_heartbeat_window` in `src/gleamroom/websocket.gleam`),
-  returning `rate_limited`.
+  (`max_messages_per_heartbeat_window` in `src/gleamroom/websocket.gleam`
+  and `src/gleamroom/poker_websocket.gleam`), returning `rate_limited`.
 - A per-room participant cap (`max_participants` in `src/gleamroom/room.gleam`
   and `src/gleamroom/poker.gleam`).
 
