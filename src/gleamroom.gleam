@@ -24,7 +24,8 @@ const default_port = 4000
 /// docs/architecture.md の「Supervision and lifecycle」が示す構成を実際に組む（#23）。
 ///
 ///     Application supervisor
-///       +-- Room registry
+///       +-- Room registry (buzzer)
+///       +-- Room registry (poker)
 ///       +-- Web server
 ///
 /// 以前は registry と mist を `let assert Ok(...)` で個別に起動しているだけで、
