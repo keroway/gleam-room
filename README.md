@@ -71,6 +71,7 @@ gleam build   # compile
 gleam test    # run unit tests
 gleam format  # format source
 gleam run     # start the HTTP server (default port 4000, override with PORT)
+              # room limit defaults to 1000, override with MAX_ROOMS
 
 node --test 'test/client/*.test.mjs'  # browser client reconnect tests
 ```

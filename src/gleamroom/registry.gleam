@@ -136,6 +136,15 @@ type State {
 /// 無制限に増えることを防ぐための保守的な上限（#127）。
 const default_max_rooms = 1000
 
+/// `default_max_rooms` を呼び出し元へ公開する（#352）。
+///
+/// `gleamroom.gleam` の起動経路が「`MAX_ROOMS` 環境変数が未設定のときの
+/// 既定値」としてこの値を必要とするが、`const` は private のため直接参照
+/// できない。
+pub fn get_default_max_rooms() -> Int {
+  default_max_rooms
+}
+
 type MonitoredRoom {
   MonitoredRoom(key: String, subject: Subject(room.Message))
 }
@@ -239,7 +248,20 @@ fn build(
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  build(room.start, default_max_rooms)
+  start_named_with_max_rooms(name, default_max_rooms)
+}
+
+/// `start_named` の、room数上限を差し替えられる版（#352）。
+///
+/// 本番の起動経路（`gleamroom.gleam`）が `MAX_ROOMS` 環境変数の値を
+/// 反映できるように、`default_max_rooms` 固定だった `start_named` から
+/// 上限を引数として切り出す。`start_named` はこれを既定値で呼ぶだけの薄い
+/// 委譲になる。
+pub fn start_named_with_max_rooms(
+  name: process.Name(Message),
+  max_rooms: Int,
+) -> actor.StartResult(Subject(Message)) {
+  build(room.start, max_rooms)
   |> actor.named(name)
   |> actor.start
 }

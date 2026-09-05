@@ -165,7 +165,18 @@ fn build(
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  build(poker.start, default_max_rooms)
+  start_named_with_max_rooms(name, default_max_rooms)
+}
+
+/// `start_named` の、room数上限を差し替えられる版（#352）。
+///
+/// `registry.gleam`'s `start_named_with_max_rooms` と同じ理由: 本番の起動
+/// 経路が `MAX_ROOMS` 環境変数の値を反映できるようにする。
+pub fn start_named_with_max_rooms(
+  name: process.Name(Message),
+  max_rooms: Int,
+) -> actor.StartResult(Subject(Message)) {
+  build(poker.start, max_rooms)
   |> actor.named(name)
   |> actor.start
 }
