@@ -201,18 +201,7 @@ pub fn start_on_ephemeral_port() -> Result(
 /// 「停止した／無応答の registry」を差し込む手段が無い。`/health` の 503 分岐
 /// （`call.ActorDown` / `call.Timeout`）を実サーバ越しに検証するには、意図的に
 /// 壊れた `registry_subject` を渡して web server だけを直接起動する必要がある。
-pub fn start_web_only(
-  port: Int,
-  registry_subject: Subject(registry.Message),
-  poker_registry_subject: Subject(poker_registry.Message),
-) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
-  handle_request(_, registry_subject, poker_registry_subject)
-  |> mist.new
-  |> mist.port(port)
-  |> mist.start
-}
-
-/// `start_web_only` の、ポートをOSに動的採番させる版（#152）。
+/// ポートは CI・開発機での衝突を避けるため OS に動的採番させる（#152）。
 pub fn start_web_only_on_ephemeral_port(
   registry_subject: Subject(registry.Message),
   poker_registry_subject: Subject(poker_registry.Message),
