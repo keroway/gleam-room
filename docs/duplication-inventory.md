@@ -32,6 +32,12 @@ Each item below is marked:
 
 ## 1. Actually duplicated
 
+以下の行範囲は commit `9670769` 時点のもの。#352 のような後続変更で個々の
+節がズレることがあり、1.1・1.7 は #381 でそのズレを確認し本コミットで
+再検証済みだが、他の節は未再検証のまま残っている可能性がある。次に着手する
+人は、引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲に
+あるか確認してから読むこと。
+
 ### 1.1 Registry layer — `registry.gleam` vs `poker_registry.gleam`
 
 **抽出すべき.**
@@ -42,19 +48,19 @@ substituted:
 - `RoomId` opaque type and its accessors (`registry.gleam:16-28`,
   `poker_registry.gleam:17-28`).
 - Trapped-exit classification (`exit_to_message`,
-  `registry.gleam:180-190`, `poker_registry.gleam:120-130`).
+  `registry.gleam:189-198`, `poker_registry.gleam:120-130`).
 - Actor `build` (trap_exits, `select_trapped_exits`, initial `State`)
-  (`registry.gleam:198-228`, `poker_registry.gleam:134-160`).
+  (`registry.gleam:207-237`, `poker_registry.gleam:134-160`).
 - `Lookup` capacity check, room startup, and `subject_owner` monitored
-  registration (`registry.gleam:252-334`, `poker_registry.gleam:178-242`).
-- `RoomDown` ABA-safe dict cleanup (`registry.gleam:335-353`,
-  `poker_registry.gleam:243-256`).
+  registration (`registry.gleam:274-356`, `poker_registry.gleam:189-252`).
+- `RoomDown` ABA-safe dict cleanup (`registry.gleam:357-375`,
+  `poker_registry.gleam:254-267`).
 - `Release`/`RoomEmptyChecked` async-empty check with ABA guard
-  (`registry.gleam:406-465`, `poker_registry.gleam:258-292`).
+  (`registry.gleam:428-487`, `poker_registry.gleam:269-303`).
 - `Health`/`RoomProbed` probe tracking with the `probe_in_flight` guard from
-  #269 (`registry.gleam:354-399`, `poker_registry.gleam:293-332`).
+  #269 (`registry.gleam:376-421`, `poker_registry.gleam:304-343`).
 - Public `health`/`lookup` API delegating to `call.try_call*`
-  (`registry.gleam:479-510`, `poker_registry.gleam:336-365`).
+  (`registry.gleam:501-532`, `poker_registry.gleam:351-376`).
 
 The only differences are the room message type parameter and `poker `
 prefixes in log strings.
@@ -241,8 +247,8 @@ precedent for how a shared boundary should look.
 extracted to `test/client/harness.mjs`, and both test files now import it
 from there (#298, `0323a93`).
 
-**解消済み**: `reconnect.test.mjs` (124 lines) had two test cases not
-present in `poker-reconnect.test.mjs` (77 lines) — "error events don't
+**解消済み**: `reconnect.test.mjs` (116 lines) had two test cases not
+present in `poker-reconnect.test.mjs` (108 lines) — "error events don't
 throw" and "no pending reconnect timer while connected". This coverage gap
 has been backfilled; `poker-reconnect.test.mjs` now has matching test cases
 for both (#295).
