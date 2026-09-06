@@ -33,8 +33,8 @@ Each item below is marked:
 ## 1. Actually duplicated
 
 以下の行範囲は commit `9670769` 時点のもの。#352 のような後続変更で個々の
-節がズレることがあり、1.1・1.7 は #381 でそのズレを確認し本コミットで
-再検証済みだが、他の節は未再検証のまま残っている可能性がある。次に着手する
+節がズレることがあり、1.1・1.7 は #381 で、1.3・1.5 は #383 でそのズレを確認し
+本コミットで再検証済みだが、他の節は未再検証のまま残っている可能性がある。次に着手する
 人は、引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲に
 あるか確認してから読むこと。
 
@@ -95,12 +95,12 @@ Duplicated infrastructure (not domain state machine):
   `select_monitors`-based `SessionDown` wiring in `start`
   (`room.gleam:271-302`, `poker.gleam:295-320`).
 - `update_sessions` (register monitor on `ParticipantJoined`, demonitor +
-  remove on `ParticipantLeft`) (`room.gleam:412-459`, `poker.gleam:381-423`).
-- `broadcast_all` (`room.gleam:462-469`, `poker.gleam:426-433`).
-- `SessionDown` handler (`room.gleam:349-387`, `poker.gleam:344-364`) and
-  `ShutdownIfEmpty` handler (`room.gleam:388-399`, `poker.gleam:365-376`).
+  remove on `ParticipantLeft`) (`room.gleam:407-454`, `poker.gleam:381-423`).
+- `broadcast_all` (`room.gleam:457-464`, `poker.gleam:426-433`).
+- `SessionDown` handler (`room.gleam:344-382`, `poker.gleam:344-364`) and
+  `ShutdownIfEmpty` handler (`room.gleam:383-394`, `poker.gleam:365-376`).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
-  `call.try_call` (`room.gleam:533-592`, `poker.gleam:493-526`).
+  `call.try_call` (`room.gleam:528-575`, `poker.gleam:493-526`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
   (`room.gleam:108-139`, `poker.gleam:144-174`); `is_valid_display_name` is
@@ -171,10 +171,10 @@ source as "same value, same reason"):
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:314-348`, `poker_websocket.gleam:275-294`).
 - `connection_tag` (PID-based log identifier) (`websocket.gleam:936-938`,
-  `poker_websocket.gleam:924-926`, byte-identical).
+  `poker_websocket.gleam:938-940`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
   the same "don't leak the PID" rationale comment) (`websocket.gleam:940-959`,
-  `poker_websocket.gleam:929-931`, byte-identical).
+  `poker_websocket.gleam:943-946`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
