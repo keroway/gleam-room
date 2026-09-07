@@ -55,6 +55,11 @@ for (const state of ["CLOSING", "CLOSED"]) {
 
       assert.equal(socket.sent.length, 0);
       assert.ok(client.logEntryCount() > logEntriesBefore);
+      assert.equal(
+        client.getAttribute("card-5", "aria-pressed"),
+        "false",
+        "送信されなかった投票が aria-pressed=true として表示されている（#408）",
+      );
     } finally {
       client.dispose();
     }

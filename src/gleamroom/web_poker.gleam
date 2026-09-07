@@ -346,16 +346,17 @@ pub fn poker_html() -> String {
   function sendIfOpen(message) {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
-    } else {
-      log(\"not connected, ignoring \" + message.type);
+      return true;
     }
+    log(\"not connected, ignoring \" + message.type);
+    return false;
   }
 
   for (const card of cards) {
     card.el.addEventListener(\"click\", () => {
+      if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
       ownVote = card.value;
       updateCardButtons();
-      sendIfOpen({ type: \"vote\", value: ownVote });
     });
   }
 
