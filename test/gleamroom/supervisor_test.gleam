@@ -311,6 +311,69 @@ pub fn one_for_one_does_not_restart_the_web_server_when_poker_registry_crashes_t
   assert mist_pid_before == mist_pid_after
 }
 
+/// `gleamroom.start_on_ephemeral_port` が組む `one_for_one` 構成が、
+/// mist(3番目)⇄buzzer registry(1番目)の間でも独立していることを検証する
+/// （#390。#350/#373 は registry 系を kill する方向のみで、mist 側を
+/// kill する方向は無検証のまま残っていた）。
+///
+/// mist がクラッシュしても、buzzer registry の pid は巻き添えで
+/// 再起動されないはず。
+pub fn one_for_one_does_not_restart_buzzer_registry_when_mist_crashes_test() {
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  let assert Ok(registry_pid_before) = first_child_pid(supervisor_pid)
+  let assert Ok(mist_pid_before) = third_child_pid(supervisor_pid)
+
+  process.kill(mist_pid_before)
+
+  wait.until(
+    fn() {
+      case third_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != mist_pid_before
+        Error(Nil) -> False
+      }
+    },
+    "mist が再起動する",
+  )
+
+  // mist の再起動が観測できた時点で、buzzer registry 側が巻き添えを受けて
+  // いれば既に再起動が始まっているはず。one_for_one ならここで pid は不変。
+  let assert Ok(registry_pid_after) = first_child_pid(supervisor_pid)
+  assert registry_pid_before == registry_pid_after
+}
+
+/// `gleamroom.start_on_ephemeral_port` が組む `one_for_one` 構成が、
+/// mist(3番目)⇄poker_registry(2番目)の間でも独立していることを検証する
+/// （#390。上記テストと対になる、残るペアの検証）。
+///
+/// mist がクラッシュしても、poker_registry の pid は巻き添えで
+/// 再起動されないはず。
+pub fn one_for_one_does_not_restart_poker_registry_when_mist_crashes_test() {
+  let assert Ok(#(_port, started)) = gleamroom.start_on_ephemeral_port()
+  let supervisor_pid = started.pid
+
+  let assert Ok(poker_registry_pid_before) = second_child_pid(supervisor_pid)
+  let assert Ok(mist_pid_before) = third_child_pid(supervisor_pid)
+
+  process.kill(mist_pid_before)
+
+  wait.until(
+    fn() {
+      case third_child_pid(supervisor_pid) {
+        Ok(pid) -> pid != mist_pid_before
+        Error(Nil) -> False
+      }
+    },
+    "mist が再起動する",
+  )
+
+  // mist の再起動が観測できた時点で、poker_registry 側が巻き添えを受けて
+  // いれば既に再起動が始まっているはず。one_for_one ならここで pid は不変。
+  let assert Ok(poker_registry_pid_after) = second_child_pid(supervisor_pid)
+  assert poker_registry_pid_before == poker_registry_pid_after
+}
+
 /// `gleamroom.start`（本番起動経路。`main` が実際に呼ぶ関数）を直接起動できる
 /// ことを検証する（#376）。
 ///
