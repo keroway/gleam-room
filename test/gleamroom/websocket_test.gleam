@@ -166,6 +166,13 @@ pub fn to_wire_buzz_result_test() {
     == protocol.BuzzResult(protocol.participant_id("p1"), "Alice", 3)
 }
 
+/// `get_state` タイムアウト後のフォールバック状態は空の participants/buzzes
+/// を返す(#411)。poker側は同じ状況で phase の扱いに実バグ(#357)を踏んだ
+/// 経緯があり、buzzer側にも同等の回帰テストを固定しておく。
+pub fn fallback_state_after_get_state_timeout_is_empty_test() {
+  assert websocket.fallback_state_after_get_state_timeout() == #([], [])
+}
+
 pub fn release_room_sends_release_when_registry_is_reachable_test() {
   let registry_subject = process.new_subject()
   let room_subject = process.new_subject()
