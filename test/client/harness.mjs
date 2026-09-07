@@ -160,6 +160,14 @@ export function startClient({ modulePath, functionName } = {}) {
     logEntryCount() {
       return nodes.get("log")?.children.length ?? 0;
     },
+    /// 指定した id の要素の disabled プロパティ。
+    isDisabled(id) {
+      return nodes.get(id)?.disabled;
+    },
+    /// 指定した id の要素の指定属性値（setAttribute で設定した値）。
+    getAttribute(id, name) {
+      return nodes.get(id)?.getAttribute(name) ?? null;
+    },
     /// 保留中の setTimeout をすべて発火させる（再接続待ちを進める）。
     /// 実ブラウザの相対順序に合わせ、delay の昇順（同値は登録順）で発火する。
     runTimers() {
