@@ -33,8 +33,9 @@ Each item below is marked:
 ## 1. Actually duplicated
 
 以下の行範囲は commit `9670769` 時点のもの。#352 のような後続変更で個々の
-節がズレることがあり、1.1・1.7 は #381 で、1.3・1.5 は #383 でそのズレを確認し
-本コミットで再検証済みだが、他の節は未再検証のまま残っている可能性がある。次に着手する
+節がズレることがあり、1.1・1.7 は #381 で、1.3・1.5 は #383 で、1.4 は #385 で
+そのズレ(または baseline からの誤り)を確認し本コミットで再検証済みだが、
+他の節は未再検証のまま残っている可能性がある。次に着手する
 人は、引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲に
 あるか確認してから読むこと。
 
@@ -136,7 +137,7 @@ To resolve before committing to an approach:
   (`protocol.gleam:116-133`, `poker_protocol.gleam:205-222`, including the
   comment).
 - `decode_client_message`'s `json.UnableToDecode`/error branching shape and
-  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:132-171`).
+  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:149-172`).
 - `encode_server_message`'s json-to-string skeleton
   (`protocol.gleam:141-146`, `poker_protocol.gleam:241-246`).
 
