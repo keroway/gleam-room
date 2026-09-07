@@ -1,10 +1,11 @@
 // handleServerMessage（web.gleam）が participant_joined / participant_left /
 // buzz_accepted / round_reset / error の各分岐を正しく処理することの回帰テスト（#187）。
 //
-// harness.mjs の DOM スタブは replaceChildren を no-op にしているため（#log 以外の
-// 描画結果は検証できない）、ここでは log() 呼び出しの内容で分岐の正しさを検証する。
-// フィールド参照を取り違えても（例: message.participant.id と message.participant_id
-// の混同）ログの内容やハンドラの例外で検知できる。
+// log() 呼び出しの内容に加えて、childTextContents() で participants/buzzes 要素
+// への描画結果も検証する（#389: harness.mjs の replaceChildren スタブが no-op
+// だった間は描画内容を一切検証できていなかった）。フィールド参照を取り違えても
+// （例: message.participant.id と message.participant_id の混同）ログの内容や
+// ハンドラの例外、DOM への描画内容で検知できる。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
@@ -34,6 +35,11 @@ test("participant_joined は participants に追加されログに残る", () =>
       client.logs.some((line) => line.includes("joined: Alice")),
       "参加ログが残っていない",
     );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "participants 要素に Alice が描画されていない",
+    );
   } finally {
     client.dispose();
   }
@@ -50,6 +56,11 @@ test("participant_left はログに残る", () => {
     assert.ok(
       client.logs.some((line) => line.includes("left: p1")),
       "退出ログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      [],
+      "退出後も participants 要素に描画が残っている",
     );
   } finally {
     client.dispose();
@@ -72,6 +83,11 @@ test("buzz_accepted はログに残り、同じ position の再配信は無視�
     assert.equal(acceptedLogs.length, 1, "重複配信が二重にログされている");
     assert.ok(acceptedLogs[0].includes("p1"));
     assert.ok(acceptedLogs[0].includes("#1"));
+    assert.deepEqual(
+      client.childTextContents("buzzes"),
+      ["Alice"],
+      "buzzes 要素に順序付けたブザーが描画されていない",
+    );
   } finally {
     client.dispose();
   }
@@ -93,6 +109,11 @@ test("round_reset はログに残る", () => {
     assert.ok(
       client.logs.some((line) => line.includes("round reset")),
       "リセットログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("buzzes"),
+      [],
+      "round_reset 後も buzzes 要素にブザーが残っている",
     );
   } finally {
     client.dispose();

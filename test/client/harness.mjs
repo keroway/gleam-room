@@ -1,8 +1,11 @@
 // クライアント JS を Node 上で動かすための最小スタブ。
 //
-// ブラウザ自動化（Playwright 等）は入れない。検証したいのは再接続の
-// **試行回数とタイマー解除**であって描画ではなく、そのためにブラウザを
-// 起動するのは割に合わない。DOM は「呼ばれても落ちない」程度に留める。
+// ブラウザ自動化（Playwright 等）は入れない。中心的な検証対象は再接続の
+// **試行回数とタイマー解除**であって、そのためにブラウザを起動するのは
+// 割に合わない。DOM は基本的に「呼ばれても落ちない」程度に留めるが、
+// replaceChildren() だけは実際に children に反映する（#389）。
+// renderParticipants/renderVotes/renderBuzzes が書き込んだ内容を
+// childTextContents() 経由でテストから検証できるようにするため。
 import { extractClientScript, extractElementIds } from "./extract.mjs";
 
 /// join が成立しないまま open→close を繰り返す状況を作る。
@@ -57,7 +60,10 @@ export function startClient({ modulePath, functionName } = {}) {
         if (typeof child.textContent === "string") logs.push(child.textContent);
       },
       remove() {},
-      replaceChildren() {},
+      replaceChildren(...newChildren) {
+        children.length = 0;
+        children.push(...newChildren);
+      },
       addEventListener(type, fn) {
         listeners.set(`${id}:${type}`, fn);
       },
@@ -159,6 +165,12 @@ export function startClient({ modulePath, functionName } = {}) {
     /// #log 要素が保持している子要素（ログ行）の件数。
     logEntryCount() {
       return nodes.get("log")?.children.length ?? 0;
+    },
+    /// 指定した id の要素が replaceChildren() で保持している子要素の
+    /// textContent 一覧（renderParticipants/renderVotes/renderBuzzes の
+    /// 描画結果を検証するためのアクセサ）。
+    childTextContents(id) {
+      return (nodes.get(id)?.children ?? []).map((child) => child.textContent);
     },
     /// 指定した id の要素の disabled プロパティ。
     isDisabled(id) {
