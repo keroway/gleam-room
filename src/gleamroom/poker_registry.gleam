@@ -9,6 +9,7 @@ import gleam/set.{type Set}
 import gleam/string
 import gleamroom/call
 import gleamroom/poker
+import gleamroom/registry
 import logging
 
 /// Opaque so callers cannot construct a `RoomId` except through `room_id`,
@@ -82,9 +83,6 @@ type State {
   )
 }
 
-/// `max_rooms` の既定値。`registry.gleam`'s `default_max_rooms` と同じ値。
-const default_max_rooms = 1000
-
 type MonitoredRoom {
   MonitoredRoom(key: String, subject: Subject(poker.Message))
 }
@@ -94,7 +92,7 @@ type MonitoredRoom {
 /// `RoomId` cannot race into starting two authoritative room actors
 /// (mirrors `registry.gleam`'s `start`, ADR 0002 / ADR 0009).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  build(poker.start, default_max_rooms)
+  build(poker.start, registry.get_default_max_rooms())
   |> actor.start
 }
 
@@ -102,7 +100,7 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
 pub fn start_with_room_starter(
   start_room: fn() -> actor.StartResult(Subject(poker.Message)),
 ) -> actor.StartResult(Subject(Message)) {
-  build(start_room, default_max_rooms)
+  build(start_room, registry.get_default_max_rooms())
   |> actor.start
 }
 
@@ -165,7 +163,7 @@ fn build(
 pub fn start_named(
   name: process.Name(Message),
 ) -> actor.StartResult(Subject(Message)) {
-  start_named_with_max_rooms(name, default_max_rooms)
+  start_named_with_max_rooms(name, registry.get_default_max_rooms())
 }
 
 /// `start_named` の、room数上限を差し替えられる版（#352）。
