@@ -17,6 +17,17 @@ test("open だけでは connected にならない", () => {
     client.latestSocket().handlers.open?.();
 
     assert.notEqual(client.connectionState(), "connected");
+    // buzz/reset の初期 disabled は静的HTML由来（<button disabled>）で、
+    // setConnected() を経由しないためこの harness では再現されない。ここで
+    // 検証するのは open だけでは setConnected(true) が呼ばれない（join/room-id/
+    // display-name が無効化されない）ことに限る。
+    assert.equal(client.isDisabled("join"), false, "join未成立でjoinボタンが無効化されている");
+    assert.equal(client.isDisabled("room-id"), false, "join未成立でroom-id入力欄が無効化されている");
+    assert.equal(
+      client.isDisabled("display-name"),
+      false,
+      "join未成立でdisplay-name入力欄が無効化されている",
+    );
   } finally {
     client.dispose();
   }
@@ -33,6 +44,41 @@ test("join成立（state受信）で初めて connected になる", () => {
     });
 
     assert.equal(client.connectionState(), "connected");
+    assert.equal(client.isDisabled("buzz"), false, "join成立後もbuzzが無効化されたまま");
+    assert.equal(client.isDisabled("reset"), false, "join成立後もresetが無効化されたまま");
+    assert.equal(client.isDisabled("join"), true, "join成立後もjoinボタンが押せてしまう");
+    assert.equal(client.isDisabled("room-id"), true, "join成立後もroom-id入力欄が編集できてしまう");
+    assert.equal(
+      client.isDisabled("display-name"),
+      true,
+      "join成立後もdisplay-name入力欄が編集できてしまう",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("join成立後にソケットが切断されると再度 join できる状態に戻る", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+    });
+    socket.handlers.close?.();
+
+    assert.equal(client.connectionState(), "disconnected");
+    assert.equal(client.isDisabled("buzz"), true, "切断後もbuzzが押せてしまう");
+    assert.equal(client.isDisabled("reset"), true, "切断後もresetが押せてしまう");
+    assert.equal(client.isDisabled("join"), false, "切断後にjoinボタンが無効化されたまま");
+    assert.equal(client.isDisabled("room-id"), false, "切断後にroom-id入力欄が無効化されたまま");
+    assert.equal(
+      client.isDisabled("display-name"),
+      false,
+      "切断後にdisplay-name入力欄が無効化されたまま",
+    );
   } finally {
     client.dispose();
   }
@@ -51,6 +97,13 @@ for (const code of ["room_full", "invalid_display_name", "room_unavailable"]) {
 
       assert.equal(client.connectionState(), "disconnected");
       assert.equal(client.pendingTimers(), 0, "拒否直後に自動再接続を予約してはいけない");
+      assert.equal(client.isDisabled("buzz"), true, `${code}拒否後もbuzzが押せてしまう`);
+      assert.equal(client.isDisabled("reset"), true, `${code}拒否後もresetが押せてしまう`);
+      assert.equal(
+        client.isDisabled("join"),
+        false,
+        `${code}拒否後にjoinボタンが無効化されたまま`,
+      );
 
       // ソケットが解放され、フォームから再度 join できる。
       const before = client.sockets.length;
