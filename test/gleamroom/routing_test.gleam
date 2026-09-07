@@ -290,6 +290,23 @@ pub fn health_returns_503_when_the_poker_registry_is_dead_test() {
   assert body == "poker: registry down"
 }
 
+/// poker 側の `Timeout` 分岐の実サーバ越し確認（#394）。
+/// `health_returns_503_timeout_via_http_test`（buzzer 側）と対になるテスト。
+/// README は poker 側の "timeout" 分岐も buzzer 側と同じだけ実HTTP経由で
+/// 検証されていると主張していたが、実際にはこの分岐だけ欠けていた。
+pub fn health_returns_503_poker_timeout_via_http_test() {
+  let assert Ok(healthy_registry_started) = registry.start()
+
+  let unresponsive: process.Subject(poker_registry.Message) =
+    process.new_subject()
+
+  let port = start_web_only_server(healthy_registry_started.data, unresponsive)
+
+  let assert Ok(#(status, body)) = get(port, "/health")
+  assert status == 503
+  assert body == "poker: registry not responding"
+}
+
 /// `/health` の200成功時本文（`buzzer_rooms=`/`buzzer_stuck=`/`poker_rooms=`/
 /// `poker_stuck=`の文字列連結）は、これまで実HTTP経由では全部ゼロの場合しか
 /// 検証されていなかった（#332）。非ゼロ値の検証は `registry.health` /
