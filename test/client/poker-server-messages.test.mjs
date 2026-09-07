@@ -35,6 +35,11 @@ test("participant_joined は participants に追加されログに残る", () =>
       client.logs.some((line) => line.includes("joined: Alice")),
       "参加ログが残っていない",
     );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "participants 要素に Alice が描画されていない",
+    );
   } finally {
     client.dispose();
   }
@@ -79,6 +84,16 @@ test("vote_registered はログに残るが、投票値そのものは送られ�
       !client.logs.some((line) => line.includes("value")),
       "vote_registered が投票値らしきものをログに出している",
     );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice ✓"],
+      "vote_registered 後に participants の投票済み表示が更新されていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      [],
+      "reveal 前なのに votes 要素に何か描画されている",
+    );
   } finally {
     client.dispose();
   }
@@ -121,11 +136,21 @@ test("revealed で votes がログに残り、round_reset で phase が voting �
       client.logs.some((line) => line.includes("revealed: 1 vote(s)")),
       "reveal ログが残っていない",
     );
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      ["Alice: 5"],
+      "revealed 後に votes 要素へ投票値が描画されていない",
+    );
 
     socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
     assert.ok(
       client.logs.some((line) => line.includes("round reset")),
       "リセットログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      [],
+      "round_reset 後も votes 要素に投票値が残っている",
     );
   } finally {
     client.dispose();
