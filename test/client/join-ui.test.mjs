@@ -84,7 +84,7 @@ test("join成立後にソケットが切断されると再度 join できる状�
   }
 });
 
-for (const code of ["room_full", "invalid_display_name", "room_unavailable"]) {
+for (const code of ["room_full", "invalid_display_name", "invalid_room_id", "room_unavailable"]) {
   test(`${code} エラーは connected に戻さず、再度 join できる状態にする`, () => {
     const client = startClient();
     try {
