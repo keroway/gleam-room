@@ -493,7 +493,7 @@ fn handle_join(
                   <> ", participant="
                   <> room.participant_id_to_string(participant.id),
               )
-              #([], [])
+              fallback_state_after_get_state_timeout()
             }
           }
           send_server_message(
@@ -925,6 +925,18 @@ pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
     display_name: result.display_name,
     position: result.position,
   )
+}
+
+/// The state sent to a joining client when `room.get_state` times out right
+/// after join. Empty participants/buzzes is a safe default here (unlike
+/// poker's `phase`, buzzer has no "which state are we lying about" ambiguity
+/// to record — mirrors `poker_websocket.fallback_state_after_get_state_timeout`
+/// (#357, #411)).
+pub fn fallback_state_after_get_state_timeout() -> #(
+  List(room.Participant),
+  List(room.BuzzResult),
+) {
+  #([], [])
 }
 
 /// ログの中で同一 WebSocket 接続の open/close を突き合わせるための識別子。
