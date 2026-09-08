@@ -23,6 +23,26 @@ pub fn decode_join_trims_and_normalizes_room_id_test() {
     == Ok(Join(RoomId("ABCD"), "Alice"))
 }
 
+pub fn decode_join_missing_room_id_test() {
+  let json = "{\"type\":\"join\",\"display_name\":\"Alice\"}"
+
+  assert poker_protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
+pub fn decode_join_missing_display_name_test() {
+  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\"}"
+
+  assert poker_protocol.decode_client_message(json)
+    == Error(ProtocolError(
+      code: "invalid_message",
+      message: "Message did not match a known client message shape.",
+    ))
+}
+
 pub fn decode_join_empty_room_id_test() {
   let json = "{\"type\":\"join\",\"room_id\":\"\",\"display_name\":\"Alice\"}"
 
