@@ -132,15 +132,52 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   tcp_close(socket)
 }
 
+/// `Origin` が `Host` と一致しない接続を実HTTP経由で 403 拒否する
+/// (CSWSH対策、#124)。`websocket.origin_header_allowed` 自体は
+/// `websocket_test.gleam` で純粋関数として検証済みだが、それを呼び出す
+/// `upgrade` 関数の配線(実際に 403 レスポンスが返ること)は、この
+/// テストが無いと検知できなかった（#430）。
+pub fn ws_rejects_origin_mismatch_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let socket = connect_with_retry(port, 50)
+
+  let key = ws.make_client_key()
+  let request =
+    "GET /ws HTTP/1.1\r\n"
+    <> "Host: 127.0.0.1:"
+    <> int.to_string(port)
+    <> "\r\n"
+    <> "Upgrade: websocket\r\n"
+    <> "Connection: Upgrade\r\n"
+    <> "Sec-WebSocket-Key: "
+    <> key
+    <> "\r\n"
+    <> "Sec-WebSocket-Version: 13\r\n"
+    <> "Origin: https://evil.example\r\n"
+    <> "\r\n"
+  let assert Ok(Nil) = tcp_send(socket, bit_array.from_string(request))
+
+  let #(header_text, _leftover) = read_response_headers(socket, <<>>)
+  assert string.starts_with(header_text, "HTTP/1.1 403")
+
+  tcp_close(socket)
+}
+
 /// `/ws` へ生ソケットで接続し、RFC 6455 ハンドシェイクを成立させる。
 /// サーバはまだ listen していないことがあるので、接続自体もリトライする。
 fn handshake(port: Int, attempts_remaining: Int) -> #(TcpSocket, BitArray) {
+  upgrade(connect_with_retry(port, attempts_remaining), port)
+}
+
+/// `/ws` へ生ソケットで接続する（ハンドシェイクは行わない）。サーバはまだ
+/// listen していないことがあるので、接続自体をリトライする。
+fn connect_with_retry(port: Int, attempts_remaining: Int) -> TcpSocket {
   case tcp_connect(port), attempts_remaining {
-    Ok(socket), _ -> upgrade(socket, port)
+    Ok(socket), _ -> socket
     Error(_), 0 -> panic as "サーバが期限内に listen しなかった"
     Error(_), _ -> {
       process.sleep(20)
-      handshake(port, attempts_remaining - 1)
+      connect_with_retry(port, attempts_remaining - 1)
     }
   }
 }
