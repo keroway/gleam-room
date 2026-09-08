@@ -278,6 +278,15 @@ pub fn poker_html() -> String {
           ownVote = null;
           renderParticipants();
           renderVotes();
+        } else if (
+          message.code === \"round_already_revealed\" ||
+          message.code === \"voter_not_joined\"
+        ) {
+          // vote が楽観的に反映した ownVote/aria-pressed をサーバーの拒否に
+          // 合わせて巻き戻す（reveal との競合などで届いた vote が拒否される
+          // ケース。参加者リストの✓は元々サーバー権威なので不整合はない）。
+          ownVote = null;
+          updateCardButtons();
         }
         break;
       default:

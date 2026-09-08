@@ -111,6 +111,28 @@ test("round_reset で再びカードが有効になり、aria-pressed もリセ�
   }
 });
 
+for (const code of ["round_already_revealed", "voter_not_joined"]) {
+  test(`vote が ${code} で拒否されると ownVote がロールバックされる（#422）`, () => {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(client);
+      client.click("card-5");
+      assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "楽観的反映で aria-pressed=true になっていない");
+
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "error", code, message: "rejected" }),
+      });
+
+      assert.equal(client.getAttribute("card-5", "aria-pressed"), "false", "拒否後も ownVote のカードに aria-pressed=true が残っている");
+      for (const id of CARD_IDS) {
+        assert.equal(client.getAttribute(id, "aria-pressed"), "false", `拒否後も ${id} の aria-pressed が true のまま`);
+      }
+    } finally {
+      client.dispose();
+    }
+  });
+}
+
 test("切断されると全カードが無効化される", () => {
   const client = startClient(POKER_MODULE);
   try {
