@@ -110,7 +110,8 @@ alongside a `200` rather than turning `/health` itself into a `503` — a
 wedged room doesn't mean its registry (and thus new joins) is unavailable.
 
 `.github/workflows/ci.yml` runs `gleam format --check`, `gleam build`,
-`gleam test`, and the client tests on every pull request and push to `main`.
+`gleam test`, and the client tests on every pull request and push to `main`,
+and shellchecks `.claude/hooks/post-stop-check.sh`.
 
 The client tests use Node's built-in test runner and a small DOM/WebSocket
 stub. **No new dependency is introduced** — there is no `package.json` and no
