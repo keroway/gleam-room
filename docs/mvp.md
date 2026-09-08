@@ -121,7 +121,7 @@ may vary for the same code.
 | `already_joined` | This connection sent `join` after it had already joined a room (checked at the connection layer), or the room's domain layer rejected a `join` for a `ParticipantId` already present in its state. |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
-| `buzzer_not_joined` | This connection has not joined the room yet, so the buzz was rejected. |
+| `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |
 | `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; buzz/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
