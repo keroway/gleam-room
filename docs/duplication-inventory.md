@@ -34,7 +34,7 @@ Each item below is marked:
 
 以下の行範囲は commit `9670769` 時点のもの。#352 のような後続変更で個々の
 節がズレることがあり、1.1・1.7 は #381 で、1.3・1.5 は #383 で、1.4 は #385 で、
-1.6 は #386 でそのズレ(または baseline からの誤り)を確認し本コミットで再検証済みだが、
+1.6 は #386・#424 でそのズレ(または baseline からの誤り)を確認し本コミットで再検証済みだが、
 他の節は未再検証のまま残っている可能性がある。次に着手する
 人は、引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲に
 あるか確認してから読むこと。
@@ -225,10 +225,10 @@ literals, not Gleam code.
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
   `web_poker.gleam:148-158`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:234-277`, `web_poker.gleam:288-328`).
-- `joinForm` submit handler (`web.gleam:279-293`, `web_poker.gleam:330-344`,
+  (`web.gleam:234-277`, `web_poker.gleam:297-337`).
+- `joinForm` submit handler (`web.gleam:279-293`, `web_poker.gleam:339-353`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:295-301`, `web_poker.gleam:346-352`,
+- `sendIfOpen` (`web.gleam:295-301`, `web_poker.gleam:355-362`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
