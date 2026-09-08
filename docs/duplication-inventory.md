@@ -182,10 +182,10 @@ source as "same value, same reason"):
   (`websocket.gleam:283-304`, `poker_websocket.gleam:252-263`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:314-348`, `poker_websocket.gleam:275-294`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:936-938`,
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:948-950`,
   `poker_websocket.gleam:938-940`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:940-959`,
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:952-971`,
   `poker_websocket.gleam:943-946`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
