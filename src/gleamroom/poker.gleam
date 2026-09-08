@@ -110,7 +110,7 @@ pub type PokerEvent {
   VoteRejected(id: ParticipantId, reason: VoteRejectReason)
   /// Named `RoundRevealed` rather than `Revealed` to avoid colliding with
   /// `RoundPhase`'s `Revealed` constructor in this module's flat namespace;
-  /// matches the wire protocol's `round_revealed` message type.
+  /// matches the wire protocol's `revealed` message type.
   RoundRevealed(votes: List(RevealedVote))
   RoundReset
 }
