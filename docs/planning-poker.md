@@ -140,7 +140,7 @@ identical, and add phase-specific ones:
 | `voter_not_joined` | A `vote` was rejected because the domain layer could not find this connection's `ParticipantId` in the room, e.g. a vote arriving just after this session left. |
 | `round_already_revealed` | A `vote` was rejected because the round is `Revealed`; the client must wait for `reset`. |
 | `not_voting_phase` | Reserved for a command restricted to the `Voting` phase; unused until a phase-gated command beyond `vote` exists. |
-| `room_unavailable` | The requested room could not be started or did not respond in time. |
+| `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; vote/reveal/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `binary_frame` | The connection sent a binary WebSocket frame. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward. |
