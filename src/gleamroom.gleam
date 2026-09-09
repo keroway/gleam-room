@@ -8,6 +8,7 @@ import gleam/int
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
+import gleam/result
 import gleam/string
 import gleamroom/call
 import gleamroom/poker_registry
@@ -57,7 +58,8 @@ pub fn main() -> Nil {
   process.trap_exits(True)
 
   case start(read_port(), read_max_rooms()) {
-    Ok(started) -> await_supervisor_exit(started.pid, halt_with_failure)
+    Ok(#(started, _registry_subject, _poker_registry_subject)) ->
+      await_supervisor_exit(started.pid, halt_with_failure)
     Error(reason) -> {
       // #29 / #32 / #53 と同じ方針: 失敗を無警告でクラッシュさせず、
       // 理由をログに残してから終了する（#136）。
@@ -125,10 +127,23 @@ fn erlang_halt(code: Int) -> Nil
 ///
 /// registry の名前は呼び出しごとに新しく作る。同じ VM で複数回起動しても
 /// 名前が衝突しない（テストが本番と同じ経路を通れる）。
+///
+/// buzzer / poker それぞれの registry `Subject` も一緒に返す（#437）。
+/// `start` は名前を関数内部で生成するため、以前は呼び出し元（テスト含む）が
+/// registry へ直接問い合わせる手段が無く、`max_rooms` が実際に room 数上限
+/// として効いているかを `start` 経由では検証できなかった。`main` は
+/// `started.pid` だけを使い、subject 側は無視する。
 pub fn start(
   port: Int,
   max_rooms: Int,
-) -> Result(actor.Started(supervisor.Supervisor), actor.StartError) {
+) -> Result(
+  #(
+    actor.Started(supervisor.Supervisor),
+    Subject(registry.Message),
+    Subject(poker_registry.Message),
+  ),
+  actor.StartError,
+) {
   // 名前を経由することで、registry が再起動しても HTTP ハンドラは
   // 現行のプロセスへ届く（起動時の subject を握らない）。
   let registry_name = process.new_name("gleamroom_registry")
@@ -147,6 +162,9 @@ pub fn start(
     ),
   )
   |> supervisor.start
+  |> result.map(fn(started) {
+    #(started, registry_subject, poker_registry_subject)
+  })
 }
 
 /// `start` の、ポートをOSに動的採番させる版（#152）。
