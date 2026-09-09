@@ -2,6 +2,7 @@ import gleam/erlang/process
 import gleam/otp/static_supervisor as supervisor
 import gleam/otp/supervision
 import gleamroom
+import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/room
 import gleamroom/wait
@@ -389,11 +390,45 @@ pub fn one_for_one_does_not_restart_poker_registry_when_mist_crashes_test() {
 /// ポートを引数に取る本番と同じ関数のまま、CI・開発機でのポート衝突なく
 /// 直接呼び出せる。
 pub fn start_is_directly_callable_and_wires_max_rooms_test() {
-  let assert Ok(started) = gleamroom.start(0, 3)
+  let assert Ok(#(started, _registry_subject, _poker_registry_subject)) =
+    gleamroom.start(0, 3)
 
   let assert Ok(_registry_pid) = first_child_pid(started.pid)
   let assert Ok(_poker_registry_pid) = second_child_pid(started.pid)
   let assert Ok(_mist_pid) = third_child_pid(started.pid)
+}
+
+/// `start` の `max_rooms` が実際に room 数上限として効いていることを、
+/// `start` が返す registry `Subject` へ直接 `lookup` して検証する（#437）。
+///
+/// 以前は pid の存在確認しかしておらず、`build_supervisor` への
+/// `max_rooms` 引数を誤って握りつぶす回帰（既定値へのすり替え、
+/// 引数の渡し忘れ等）が起きても green のまま通っていた。`registry.lookup`
+/// / `poker_registry.lookup` は上限超過時に `Error(Nil)` を返す
+/// （`registry_test.gleam` の
+/// `lookup_rejects_new_rooms_once_max_rooms_is_reached_test` と同じ契約）。
+pub fn start_actually_enforces_the_given_max_rooms_test() {
+  let assert Ok(#(_started, registry_subject, poker_registry_subject)) =
+    gleamroom.start(0, 1)
+
+  let assert Ok(_) =
+    registry.lookup(registry_subject, registry.room_id("room-437-buzzer-a"))
+  assert registry.lookup(
+      registry_subject,
+      registry.room_id("room-437-buzzer-b"),
+    )
+    == Error(Nil)
+
+  let assert Ok(_) =
+    poker_registry.lookup(
+      poker_registry_subject,
+      poker_registry.room_id("room-437-poker-a"),
+    )
+  assert poker_registry.lookup(
+      poker_registry_subject,
+      poker_registry.room_id("room-437-poker-b"),
+    )
+    == Error(Nil)
 }
 
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")
