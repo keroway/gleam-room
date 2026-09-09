@@ -170,6 +170,37 @@ test("壊れた JSON の message イベントは例外を漏らさずログに�
   }
 });
 
+test("未知の message.type はエラーにせずログに残す（#440: プロトコルドリフトの防衛線）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const logsBeforeUnknown = client.logs.length;
+
+    assert.doesNotThrow(() => {
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "some_future_message_type", foo: "bar" }),
+      });
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("unrecognized message")),
+      "未知メッセージのログが残っていない",
+    );
+    assert.equal(
+      client.logs.length,
+      logsBeforeUnknown + 1,
+      "未知メッセージ以外のログが増えている（状態が変化した疑い）",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "未知メッセージで既存の participants 描画が壊れている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 // join 拒否コード（#265/#314 相当）: サーバーが接続を閉じずに error を返す場合でも
 // UI を即座に未接続へ戻し、フォームを再送信可能にする必要がある。
 for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "room_unavailable"]) {
