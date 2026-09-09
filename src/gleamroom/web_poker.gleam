@@ -231,9 +231,13 @@ pub fn poker_html() -> String {
         break;
       case \"vote_registered\": {
         const participant = participants.get(message.participant_id);
-        if (participant) participant.has_voted = true;
-        renderParticipants();
-        log(`vote registered: ${message.participant_id}`);
+        if (participant) {
+          participant.has_voted = true;
+          renderParticipants();
+          log(`vote registered: ${message.participant_id}`);
+        } else {
+          log(`vote registered for unknown participant: ${message.participant_id}`);
+        }
         break;
       }
       case \"revealed\":

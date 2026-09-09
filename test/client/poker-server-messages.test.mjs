@@ -99,6 +99,30 @@ test("vote_registered はログに残るが、投票値そのものは送られ�
   }
 });
 
+test("vote_registered が未知の participant_id を受け取った場合、silent skip せずログに残す", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "unknown-id" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("unknown-id")),
+      "未知の participant_id での vote_registered がログに残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "未知の participant_id なのに既存 participant の表示が変わっている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("reveal 前は投票ボタンが有効なままで、自分の投票は変更できる", () => {
   const client = startClient(POKER_MODULE);
   try {
