@@ -176,6 +176,39 @@ test("拒否以外のサーバー error はログに残るが接続は維持さ�
   }
 });
 
+test("未知の message.type はエラーにせずログに残す（#440: プロトコルドリフトの防衛線）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    const logsBeforeUnknown = client.logs.length;
+
+    assert.doesNotThrow(() => {
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "some_future_message_type", foo: "bar" }),
+      });
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("unrecognized message")),
+      "未知メッセージのログが残っていない",
+    );
+    assert.equal(
+      client.logs.length,
+      logsBeforeUnknown + 1,
+      "未知メッセージ以外のログが増えている（状態が変化した疑い）",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "未知メッセージで既存の participants 描画が壊れている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("壊れた JSON の message イベントは例外を漏らさずログに残り、直前の participants 状態を保つ（#324）", () => {
   const client = startClient(POKER_MODULE);
   try {
