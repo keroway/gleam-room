@@ -135,6 +135,28 @@ pub fn poker_ws_rejoins_after_room_actor_dies_test() {
   tcp_close(socket)
 }
 
+/// `docs/mvp.md`・`docs/planning-poker.md` が明示的に約束している
+/// 「`frame_too_large` の後は接続が閉じる」というクライアント可視の契約を、
+/// 実ソケットで検証する。`websocket_integration_test.gleam`'s
+/// `ws_closes_after_frame_too_large_test` と同じ理由（#445）を `/poker/ws`
+/// 側の配線（`poker_websocket.gleam`'s `handle_text`）に対して行う。
+pub fn poker_ws_closes_after_frame_too_large_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_raw_text_frame(socket, string.repeat("a", 2049))
+  let #(error_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
+
+  // `mist.stop()` closes the connection right after the error frame above;
+  // a further read must observe the closed socket instead of hanging or
+  // returning another frame.
+  let assert Error(_) = tcp_recv(socket, 2000)
+
+  tcp_close(socket)
+}
+
 /// `Origin` が `Host` と一致しない接続を実HTTP経由で 403 拒否する
 /// (CSWSH対策、#124)。`websocket_integration_test.gleam` の
 /// `ws_rejects_origin_mismatch_test` と同じ検証を `/poker/ws` 側の配線
@@ -226,8 +248,14 @@ fn read_response_headers(
 }
 
 fn send_client_message(socket: TcpSocket, body: json.Json) -> Nil {
+  send_raw_text_frame(socket, json.to_string(body))
+}
+
+/// `frame_size_outcome` only inspects byte size, so an oversized frame does
+/// not need to be valid JSON.
+fn send_raw_text_frame(socket: TcpSocket, text: String) -> Nil {
   let mask = crypto.strong_random_bytes(4)
-  let frame = ws.encode_text_frame(json.to_string(body), None, Some(mask))
+  let frame = ws.encode_text_frame(text, None, Some(mask))
   let assert Ok(Nil) = tcp_send(socket, bytes_tree.to_bit_array(frame))
   Nil
 }
