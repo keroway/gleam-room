@@ -143,13 +143,16 @@ pub fn ws_closes_after_frame_too_large_test() {
   let #(socket, buffer) = handshake(port, 50)
 
   send_raw_text_frame(socket, string.repeat("a", 2049))
-  let #(error_reply, _buffer) = recv_text_message(socket, buffer)
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(error_reply, "\"type\":\"error\"")
   assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
 
-  // `mist.stop()` closes the connection right after the error frame above;
-  // a further read must observe the closed socket instead of hanging or
-  // returning another frame.
+  // `mist.stop()` makes mist send a standard WebSocket close frame (RFC
+  // 6455 §5.5.1) before it actually closes the underlying TCP socket; the
+  // close frame and the TCP close may or may not land in the same `recv`
+  // depending on scheduling, so consume the close frame explicitly before
+  // asserting the socket itself is closed.
+  let assert <<>> = recv_close_frame(socket, buffer)
   let assert Error(_) = tcp_recv(socket, 2000)
 
   tcp_close(socket)
@@ -248,6 +251,19 @@ fn read_response_headers(
 
 fn send_client_message(socket: TcpSocket, body: json.Json) -> Nil {
   send_raw_text_frame(socket, json.to_string(body))
+}
+
+/// Reads until a WebSocket close frame (RFC 6455 §5.5.1) is decoded, then
+/// returns whatever bytes followed it (normally none).
+fn recv_close_frame(socket: TcpSocket, buffer: BitArray) -> BitArray {
+  case ws.decode_frame(buffer, None) {
+    Ok(#(ws.Complete(ws.Control(ws.CloseFrame(_))), rest)) -> rest
+    Ok(#(_, _)) -> panic as "close frame を期待したが別のフレームを受信した"
+    Error(_) -> {
+      let assert Ok(chunk) = tcp_recv(socket, 2000)
+      recv_close_frame(socket, <<buffer:bits, chunk:bits>>)
+    }
+  }
 }
 
 /// `frame_size_outcome` only inspects byte size, so an oversized frame does
