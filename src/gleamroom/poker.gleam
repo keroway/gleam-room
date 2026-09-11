@@ -343,7 +343,19 @@ fn handle_message(
     }
     SessionDown(pid) ->
       case dict.get(state.sessions, pid) {
-        Error(Nil) -> actor.continue(state)
+        // sessions に無い pid の SessionDown は、demonitor 済みの参加者に対して
+        // 遅延して届いた ProcessDown を無視するだけの想定内のレース
+        // （room.gleam's SessionDown と同じ理由）。ただし sessions の更新経路に
+        // バグが混入して本来追跡すべき pid を見失った場合にも気づけるよう、
+        // Debug ログだけは残す。
+        Error(Nil) -> {
+          logging.log(
+            logging.Debug,
+            "SessionDown for untracked pid, ignoring: pid="
+              <> string.inspect(pid),
+          )
+          actor.continue(state)
+        }
         Ok(#(participant_key, _monitor)) -> {
           let id = ParticipantId(participant_key)
           let #(next_poker, event) = apply_command(state.poker, Leave(id))

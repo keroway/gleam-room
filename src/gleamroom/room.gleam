@@ -343,7 +343,18 @@ fn handle_message(
     }
     SessionDown(pid) ->
       case dict.get(state.sessions, pid) {
-        Error(Nil) -> actor.continue(state)
+        // sessions に無い pid の SessionDown は、demonitor 済みの参加者に対して
+        // 遅延して届いた ProcessDown を無視するだけの想定内のレース。ただし
+        // sessions の更新経路にバグが混入して本来追跡すべき pid を見失った
+        // 場合にも気づけるよう、Debug ログだけは残す。
+        Error(Nil) -> {
+          logging.log(
+            logging.Debug,
+            "SessionDown for untracked pid, ignoring: pid="
+              <> string.inspect(pid),
+          )
+          actor.continue(state)
+        }
         Ok(#(participant_key, _monitor)) -> {
           // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
           // 通常の Leave と同じ経路を通すので、他の参加者にも
