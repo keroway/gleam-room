@@ -71,7 +71,9 @@ gleam build   # compile
 gleam test    # run unit tests
 gleam format  # format source
 gleam run     # start the HTTP server (default port 4000, override with PORT)
-              # room limit defaults to 1000, override with MAX_ROOMS
+              # MAX_ROOMS (default 1000) applies independently to the buzzer
+              # and poker registries, so the process-wide effective ceiling
+              # is up to 2x MAX_ROOMS
 
 node --test 'test/client/*.test.mjs'  # browser client reconnect tests
 ```

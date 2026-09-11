@@ -89,6 +89,10 @@ basic abuse limits (see the error code table in
   and `src/gleamroom/poker_websocket.gleam`), returning `rate_limited`.
 - A per-room participant cap (`max_participants` in `src/gleamroom/room.gleam`
   and `src/gleamroom/poker.gleam`).
+- A room count cap per registry (`MAX_ROOMS`, default 1000). The buzzer and
+  poker registries are independent processes (see "Room registry" below) and
+  each enforces this cap on its own room count, so the process-wide effective
+  ceiling is up to 2x `MAX_ROOMS`.
 
 These are deliberately simple, in-process limits, not the broader compliance
 features (e.g. audit logging, IP-based blocking, regulatory certifications)
