@@ -161,6 +161,14 @@ pub fn index_html() -> String {
   function handleServerMessage(message) {
     switch (message.type) {
       case \"state\":
+        // 妥当な JSON でも participants/buzzes フィールドが欠落・型不一致の
+        // ことがある（サーバ側プロトコル変更等）。副作用を始める前に検証し、
+        // setConnected(true) 実行済みのまま参加者/buzz が更新されない
+        // 部分適用状態を避ける（#478）。
+        if (!Array.isArray(message.participants) || !Array.isArray(message.buzzes)) {
+          log(`state message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
         reconnectAttempts = 0;
         setConnected(true);
@@ -253,10 +261,17 @@ pub fn index_html() -> String {
     });
 
     socket.addEventListener(\"message\", (event) => {
+      let message;
       try {
-        handleServerMessage(JSON.parse(event.data));
+        message = JSON.parse(event.data);
       } catch (err) {
         log(`could not parse server message: ${event.data}`);
+        return;
+      }
+      try {
+        handleServerMessage(message);
+      } catch (err) {
+        log(`failed to handle server message: ${event.data}`);
       }
     });
 

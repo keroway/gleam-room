@@ -170,6 +170,35 @@ test("壊れた JSON の message イベントは例外を漏らさずログに�
   }
 });
 
+test("state メッセージが妥当なJSONだが participants フィールド欠落だと、connected にならず誤って「パース失敗」と表示されない（#478）", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "state", buzzes: [] }),
+    });
+
+    assert.notEqual(
+      client.connectionState(),
+      "connected",
+      "参加者情報が反映できないのに connected 扱いになっている",
+    );
+    assert.ok(
+      client.logs.some((line) => line.includes("state message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.ok(
+      !client.logs.some((line) => line.includes("could not parse server message")),
+      "JSON 自体は妥当なパースに成功しているのに「パース失敗」と誤ログされている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("未知の message.type はエラーにせずログに残す（#440: プロトコルドリフトの防衛線）", () => {
   const client = startClient();
   try {
