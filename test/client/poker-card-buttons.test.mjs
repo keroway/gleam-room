@@ -133,6 +133,41 @@ for (const code of ["round_already_revealed", "voter_not_joined"]) {
   });
 }
 
+test("vote 直後の rate_limited で拒否されると ownVote がロールバックされる（#469）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "楽観的反映で aria-pressed=true になっていない");
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected" }),
+    });
+
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "false", "rate_limited 後も ownVote のカードに aria-pressed=true が残っている");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("vote 以外の直後の rate_limited では ownVote をロールバックしない（#469）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "楽観的反映で aria-pressed=true になっていない");
+
+    client.click("reveal");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected" }),
+    });
+
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "reveal の rate_limited で無関係な vote までロールバックされた");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("切断されると全カードが無効化される", () => {
   const client = startClient(POKER_MODULE);
   try {
