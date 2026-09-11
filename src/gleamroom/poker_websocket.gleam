@@ -144,12 +144,23 @@ fn on_close(state: ConnectionState) -> Nil {
       )
       // `websocket.gleam`'s `on_close` と同じ理由: room が死んでいれば
       // room actor 側の SessionDown 経由で外れる。
-      let _ =
+      case
         poker.dispatch(
           handle.subject,
           poker.Leave(handle.participant_id),
           handle.session,
         )
+      {
+        Ok(_) -> Nil
+        Error(Nil) ->
+          logging.log(
+            logging.Warning,
+            "leave dispatch failed: room="
+              <> poker_registry.room_id_to_string(handle.room_id)
+              <> ", participant="
+              <> poker.participant_id_to_string(handle.participant_id),
+          )
+      }
       // `websocket.gleam`'s `on_close` と同じ理由（#26 / #36）:
       // 空かどうかの判定は room actor 側で行う。
       release_room(state.registry, handle.room_id, handle.subject)

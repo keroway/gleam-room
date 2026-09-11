@@ -158,12 +158,23 @@ fn on_close(state: ConnectionState) -> Nil {
       )
       // 応答が無くても切断処理は続ける。room が死んでいれば #39 の経路で
       // registry から外れる。
-      let _ =
+      case
         room.dispatch(
           handle.subject,
           room.Leave(handle.participant_id),
           handle.session,
         )
+      {
+        Ok(_) -> Nil
+        Error(Nil) ->
+          logging.log(
+            logging.Warning,
+            "leave dispatch failed: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(handle.participant_id),
+          )
+      }
       // 最後の参加者が抜けたら registry から外す（#26）。外さないと、
       // 一度でも join された RoomId の Room actor と Dict エントリが
       // プロセス終了まで残り続ける。
