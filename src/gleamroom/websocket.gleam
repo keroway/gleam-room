@@ -772,6 +772,12 @@ fn with_join_reply(
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "room unavailable: room="
+          <> registry.room_id_to_string(room_id)
+          <> ", reason=join_timed_out",
+      )
       // `lookup` がこの room を作った直後でも、ConnectionState にはまだ
       // RoomHandle が無い。そのまま接続を止めると on_close から Release されず、
       // 空の room actor が registry に残り続ける（#168）。room 自身が空かを
@@ -815,6 +821,15 @@ fn with_room_reply(
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "room unavailable: room="
+          <> case state.room {
+          Some(handle) -> registry.room_id_to_string(handle.room_id)
+          None -> "unknown"
+        }
+          <> ", reason=reply_timed_out",
+      )
       send_room_unavailable(connection)
       mist.continue(ConnectionState(..state, room: None))
     }

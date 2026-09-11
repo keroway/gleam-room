@@ -737,6 +737,12 @@ fn with_join_reply(
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "poker room unavailable: room="
+          <> poker_registry.room_id_to_string(room_id)
+          <> ", reason=join_timed_out",
+      )
       release_room(registry_subject, room_id, room_subject)
       send_server_message(
         connection,
@@ -760,6 +766,15 @@ fn with_room_reply(
   case reply {
     Ok(event) -> next(event)
     Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "poker room unavailable: room="
+          <> case state.room {
+          Some(handle) -> poker_registry.room_id_to_string(handle.room_id)
+          None -> "unknown"
+        }
+          <> ", reason=reply_timed_out",
+      )
       send_room_unavailable(connection)
       mist.continue(ConnectionState(..state, room: None))
     }
