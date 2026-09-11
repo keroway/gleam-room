@@ -75,7 +75,7 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
               # and poker registries, so the process-wide effective ceiling
               # is up to 2x MAX_ROOMS
 
-node --test 'test/client/*.test.mjs'  # browser client reconnect tests
+node --test 'test/client/*.test.mjs'  # browser client behavior tests (reconnect, join UI, server messages, ...)
 ```
 
 Once running, `GET http://localhost:4000/health` asks **both** the buzzer and
