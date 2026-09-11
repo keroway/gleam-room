@@ -111,6 +111,7 @@ pub fn poker_html() -> String {
   let phase = \"voting\";
   let votes = [];
   let ownVote = null;
+  let lastSentType = null;
 
   // Same transient-identity reconnect model as the buzzer (docs/mvp.md's
   // Reconnect section, referenced by docs/planning-poker.md): a reconnect
@@ -284,11 +285,16 @@ pub fn poker_html() -> String {
           renderVotes();
         } else if (
           message.code === \"round_already_revealed\" ||
-          message.code === \"voter_not_joined\"
+          message.code === \"voter_not_joined\" ||
+          (message.code === \"rate_limited\" && lastSentType === \"vote\")
         ) {
           // vote が楽観的に反映した ownVote/aria-pressed をサーバーの拒否に
           // 合わせて巻き戻す（reveal との競合などで届いた vote が拒否される
           // ケース。参加者リストの✓は元々サーバー権威なので不整合はない）。
+          // rate_limited は vote 以外（reveal/reset）でも発生しうるため、
+          // 直前に送信したメッセージ種別が vote のときだけロールバックする
+          // （WebSocket はメッセージ順序を保証し、サーバーは受信順に1件ずつ
+          // 処理するため、直前送信と直後に届くエラーは対応する）。
           ownVote = null;
           updateCardButtons();
         }
@@ -359,6 +365,7 @@ pub fn poker_html() -> String {
   function sendIfOpen(message) {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
+      lastSentType = message.type;
       return true;
     }
     log(\"not connected, ignoring \" + message.type);
