@@ -225,14 +225,18 @@ literals, not Gleam code.
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
   `web_poker.gleam:148-158`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:234-277`, `web_poker.gleam:297-337`).
-- `joinForm` submit handler (`web.gleam:279-293`, `web_poker.gleam:339-353`,
+  (`web.gleam:234-277`, `web_poker.gleam:301-341`).
+- `joinForm` submit handler (`web.gleam:279-293`, `web_poker.gleam:343-357`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:295-301`, `web_poker.gleam:355-362`,
+- `sendIfOpen` (`web.gleam:295-301`, `web_poker.gleam:359-366`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
-  (`web.gleam:199-225`, `web_poker.gleam:258-279`).
+  (`web.gleam:199-225`, `web_poker.gleam:262-284`). The poker-only
+  `round_already_revealed`/`voter_not_joined` `else if` branch
+  (`web_poker.gleam:285-294`) rolls back the optimistic `ownVote` and is
+  **not** part of this duplication — buzzer has no equivalent — so it
+  should not be counted when comparing the two files' `error` handling.
 
 Extracting this conflicts with the current "single static HTML document, no
 build tooling" design noted in both files' headers (`web.gleam:1-6`,
