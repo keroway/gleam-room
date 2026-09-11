@@ -158,6 +158,51 @@ pub fn ws_closes_after_frame_too_large_test() {
   tcp_close(socket)
 }
 
+/// `docs/mvp.md`・`docs/planning-poker.md` が明示的に約束している
+/// 「`rate_limited` の後も接続は継続する」というクライアント可視の契約を、
+/// 実ソケットで検証する（#449）。`frame_too_large` とは異なり `handle_text`
+/// は `MessageRateLimited` に対して `mist.stop()` ではなく `mist.continue()`
+/// を返すため、上限超過後もソケットは生きたままで応答し続けなければならない。
+/// これまでは `message_rate_outcome` の閾値判定だけが純粋関数として
+/// テストされており、`handle_text` がこの結果を `mist.continue()` に
+/// 正しくつなぐことは検証されていなかった。
+pub fn ws_continues_after_rate_limited_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  // `max_messages_per_heartbeat_window` (30) に達するまで送って応答を捨てる。
+  let buffer = send_and_drain_buzz(socket, buffer, 30)
+
+  // 31件目は上限超過なので rate_limited を受け取る。
+  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  let #(rate_limited_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(rate_limited_reply, "\"type\":\"error\"")
+  assert string.contains(rate_limited_reply, "\"code\":\"rate_limited\"")
+
+  // 接続はまだ生きている: もう1通送っても close frame ではなく応答が返る。
+  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  let #(still_alive_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(still_alive_reply, "\"type\":\"error\"")
+
+  tcp_close(socket)
+}
+
+/// `buzz` メッセージを `count` 件送り、応答を1件ずつ読み捨てる。
+fn send_and_drain_buzz(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+      let #(_reply, buffer) = recv_text_message(socket, buffer)
+      send_and_drain_buzz(socket, buffer, count - 1)
+    }
+  }
+}
+
 /// `Origin` が `Host` と一致しない接続を実HTTP経由で 403 拒否する
 /// (CSWSH対策、#124)。`websocket.origin_header_allowed` 自体は
 /// `websocket_test.gleam` で純粋関数として検証済みだが、それを呼び出す
