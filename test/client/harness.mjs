@@ -139,7 +139,7 @@ export function startClient({ modulePath, functionName } = {}) {
     saved[key] = globalThis[key];
     globalThis[key] = sandbox[key];
   }
-  // eslint-disable-next-line no-eval
+  // 抽出したクライアントスクリプトを差し替え済みグローバルの文脈で実行するために eval を使う。
   (0, eval)(extractClientScript(modulePath, functionName));
 
   return {
