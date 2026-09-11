@@ -74,6 +74,7 @@ test("buzz_accepted はログに残り、同じ position の再配信は無視�
     const buzz = {
       type: "buzz_accepted",
       participant_id: "p1",
+      display_name: "Alice",
       position: 1,
     };
     socket.handlers.message?.({ data: JSON.stringify(buzz) });
