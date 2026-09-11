@@ -151,8 +151,7 @@ pub fn index_html() -> String {
         .sort((a, b) => a.position - b.position)
         .map((b) => {
           const li = document.createElement(\"li\");
-          const name = b.display_name ?? participants.get(b.participant_id)?.display_name;
-          li.textContent = name ?? b.participant_id;
+          li.textContent = b.display_name;
           return li;
         }),
     );
