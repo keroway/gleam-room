@@ -394,6 +394,37 @@ pub fn health_reports_a_room_that_does_not_respond_to_a_probe_test() {
   )
 }
 
+/// stuck 判定された room が `RoomDown` でクラッシュ扱いになったら、
+/// `stuck_rooms` からも外れること（#454）。
+///
+/// 外れないと、二度と使われない `RoomId` の分だけ `/health` の `stuck`
+/// カウントが恒久的に水増しされる。
+pub fn a_stuck_room_is_pruned_from_stuck_rooms_when_it_goes_down_test() {
+  let stuck_subject: process.Subject(room.Message) = process.new_subject()
+  let assert Ok(started) =
+    registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: stuck_subject))
+    })
+  let reg = started.data
+
+  let assert Ok(_) = registry.lookup(reg, registry.room_id("stuck-room"))
+
+  assert registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 1, stuck: 0))
+
+  wait.until_within(
+    fn() {
+      registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 1, stuck: 1))
+    },
+    "詰まっている room が probe で検知される",
+    200,
+  )
+
+  // trap_exits から届くものと同じ、room actor のクラッシュ通知を再現する。
+  process.send(reg, registry.RoomDown(process.self()))
+
+  assert registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 0, stuck: 0))
+}
+
 /// 前回発火した probe がまだ全件返り終えていなければ、`Health` を連打しても
 /// probe を重ねて発火しないこと（#269）。
 ///

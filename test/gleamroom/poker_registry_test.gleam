@@ -365,6 +365,38 @@ pub fn health_reports_a_room_that_does_not_respond_to_a_probe_test() {
   )
 }
 
+/// stuck 判定された room が `RoomDown` でクラッシュ扱いになったら、
+/// `stuck_rooms` からも外れること（#454）。`registry_test.gleam`'s
+/// `a_stuck_room_is_pruned_from_stuck_rooms_when_it_goes_down_test` と同じ理由。
+pub fn a_stuck_room_is_pruned_from_stuck_rooms_when_it_goes_down_test() {
+  let stuck_subject: process.Subject(poker.Message) = process.new_subject()
+  let assert Ok(started) =
+    poker_registry.start_with_room_starter(fn() {
+      Ok(actor.Started(pid: process.self(), data: stuck_subject))
+    })
+  let reg = started.data
+
+  let assert Ok(_) =
+    poker_registry.lookup(reg, poker_registry.room_id("stuck-room"))
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 0))
+
+  wait.until_within(
+    fn() {
+      poker_registry.health(reg)
+      == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 1))
+    },
+    "詰まっている poker room が probe で検知される",
+    200,
+  )
+
+  process.send(reg, poker_registry.RoomDown(process.self()))
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 0, stuck: 0))
+}
+
 /// **応答しない registry では失敗する**こと。`registry_test.gleam`'s
 /// `health_fails_when_the_registry_does_not_answer_test` と同じ理由。
 pub fn health_fails_when_the_registry_does_not_answer_test() {

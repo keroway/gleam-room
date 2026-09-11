@@ -262,7 +262,12 @@ fn handle_message(
             _ -> state.rooms
           }
           actor.continue(
-            State(..state, rooms:, monitored: dict.delete(state.monitored, pid)),
+            State(
+              ..state,
+              rooms:,
+              monitored: dict.delete(state.monitored, pid),
+              stuck_rooms: set.delete(state.stuck_rooms, key),
+            ),
           )
         }
         Error(Nil) -> actor.continue(state)

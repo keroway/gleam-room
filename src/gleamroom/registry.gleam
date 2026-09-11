@@ -68,9 +68,9 @@ pub type Message {
   /// room 1 件分の probe（`room.get_snapshot`）の結果（#138）。
   ///
   /// `ok` が `False` なのはタイムアウトまたは応答不能（詰まっている/死んで
-  /// いる）。死んだ room は別途 `RoomDown` で `rooms` から外れるので、
-  /// ここでの `stuck_rooms` への追加は一時的（次の probe で消えるか、
-  /// `RoomDown` で `rooms` ごと存在しなくなる）。
+  /// いる）。死んだ room は別途 `RoomDown` で `rooms`・`stuck_rooms` の両方
+  /// から外れるので、ここでの `stuck_rooms` への追加は一時的（次の probe で
+  /// 消えるか、`RoomDown` で `rooms` ごと存在しなくなる）。
   ///
   /// probe 発火時点の `subject` を運び、応答時に `dict.get(state.rooms, key)`
   /// の現在値と一致するかを確かめる（#471）。一致確認が無いと、probe 発火後に
@@ -373,7 +373,12 @@ fn handle_message(
             _ -> state.rooms
           }
           actor.continue(
-            State(..state, rooms:, monitored: dict.delete(state.monitored, pid)),
+            State(
+              ..state,
+              rooms:,
+              monitored: dict.delete(state.monitored, pid),
+              stuck_rooms: set.delete(state.stuck_rooms, key),
+            ),
           )
         }
         // 既に Release 済みなど、監視表に無い pid は無視する。
