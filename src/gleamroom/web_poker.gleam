@@ -207,6 +207,17 @@ pub fn poker_html() -> String {
   function handleServerMessage(message) {
     switch (message.type) {
       case \"state\":
+        // 妥当な JSON でも phase/participants フィールドが欠落・型不一致の
+        // ことがある（サーバ側プロトコル変更等）。副作用を始める前に検証し、
+        // setConnected(true) 実行済みのまま参加者が更新されない部分適用状態を
+        // 避ける（web.gleam #478 と同じ理由）。
+        if (
+          typeof message.phase !== \"string\" ||
+          !Array.isArray(message.participants)
+        ) {
+          log(`state message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         // join が成立した証拠。ここで初めて試行回数を戻す（web.gleam の #87 と同じ理由）。
         reconnectAttempts = 0;
         phase = message.phase;
@@ -322,10 +333,17 @@ pub fn poker_html() -> String {
     });
 
     socket.addEventListener(\"message\", (event) => {
+      let message;
       try {
-        handleServerMessage(JSON.parse(event.data));
+        message = JSON.parse(event.data);
       } catch (err) {
         log(`could not parse server message: ${event.data}`);
+        return;
+      }
+      try {
+        handleServerMessage(message);
+      } catch (err) {
+        log(`failed to handle server message: ${event.data}`);
       }
     });
 
