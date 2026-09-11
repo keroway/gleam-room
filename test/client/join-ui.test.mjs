@@ -137,6 +137,27 @@ for (const [roomId, displayName] of [
   });
 }
 
+// socket確立中(open〜state受信前)の二重submitが無音で握りつぶされる問題の
+// 回帰テスト（#458）。
+test("socket確立中の二重submitはログを残して新規接続を開始しない", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    client.latestSocket().handlers.open?.();
+
+    const before = client.sockets.length;
+    client.submitJoin();
+
+    assert.equal(client.sockets.length, before, "socket確立中に再度接続を試みてはいけない");
+    assert.ok(
+      client.logs.some((line) => line.includes("already connecting or connected")),
+      "二重submitの理由がログに出ていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("not_joined のような join 以外のエラーは接続状態を変えない", () => {
   const client = startClient();
   try {
