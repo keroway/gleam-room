@@ -71,7 +71,13 @@ pub type Message {
   /// いる）。死んだ room は別途 `RoomDown` で `rooms` から外れるので、
   /// ここでの `stuck_rooms` への追加は一時的（次の probe で消えるか、
   /// `RoomDown` で `rooms` ごと存在しなくなる）。
-  RoomProbed(key: String, ok: Bool)
+  ///
+  /// probe 発火時点の `subject` を運び、応答時に `dict.get(state.rooms, key)`
+  /// の現在値と一致するかを確かめる（#471）。一致確認が無いと、probe 発火後に
+  /// 同じ key で room が入れ替わった場合（room 破棄→再登録）、遅れて届いた
+  /// probe 結果が無関係な新しい room の `stuck_rooms` を誤って書き換える。
+  /// `RoomDown`/`Release`/`RoomEmptyChecked` と同じ ABA 対処（#160）。
+  RoomProbed(key: String, subject: Subject(room.Message), ok: Bool)
   /// `trap_exits(True)` はリンクされた**全て**の相手からの exit を拾うため、
   /// registry を起動した supervisor が shutdown で子を畳もうとした exit
   /// （reason: `shutdown`）も room のクラッシュと区別なく届いてしまう（#117）。
@@ -399,7 +405,7 @@ fn handle_message(
                 Ok(_) -> True
                 Error(Nil) -> False
               }
-              process.send(state.self, RoomProbed(key, ok))
+              process.send(state.self, RoomProbed(key, subject, ok))
             })
           })
           actor.continue(
@@ -409,10 +415,17 @@ fn handle_message(
         _ -> actor.continue(state)
       }
     }
-    RoomProbed(key, ok) -> {
-      let stuck_rooms = case ok {
-        True -> set.delete(state.stuck_rooms, key)
-        False -> set.insert(state.stuck_rooms, key)
+    RoomProbed(key, subject, ok) -> {
+      // probe 発火後に同じ key で room が入れ替わっていないか確かめる（#471）。
+      // 一致しなければ、遅れて届いたこの結果は既に無関係な room のものなので、
+      // stuck_rooms は書き換えない（probe_in_flight のカウントダウンだけ行う）。
+      let stuck_rooms = case dict.get(state.rooms, key) {
+        Ok(current) if current == subject ->
+          case ok {
+            True -> set.delete(state.stuck_rooms, key)
+            False -> set.insert(state.stuck_rooms, key)
+          }
+        _ -> state.stuck_rooms
       }
       // 0 未満にはならない: probe_in_flight は発火時に room 数で設定され、
       // 各発火につき `RoomProbed` はちょうど1回だけ返る。

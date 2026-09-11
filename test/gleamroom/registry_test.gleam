@@ -428,6 +428,45 @@ pub fn health_does_not_refire_probes_while_previous_ones_are_in_flight_test() {
   assert process.receive(probe_subject, 100) == Error(Nil)
 }
 
+/// probe 発火後に同じ key で room が入れ替わっていたら、遅れて届いた
+/// probe 結果は新しい room の stuck 状態を書き換えないこと（#471）。
+///
+/// `RoomDown`/`Release`/`RoomEmptyChecked` と同じ ABA 対処が `RoomProbed`
+/// に無いと、古い room 宛の probe 結果が別 room の `stuck_rooms` を
+/// クロスコンタミネーションする。
+pub fn a_delayed_room_probed_does_not_overwrite_the_stuck_state_of_a_recreated_room_test() {
+  let assert Ok(started) = registry.start()
+  let reg = started.data
+  let id = registry.room_id("room-probe-aba")
+  let key = registry.room_id_to_string(id)
+
+  let assert Ok(old) = registry.lookup(reg, id)
+  process.send(reg, registry.Release(id, old))
+  // Release は非同期。新しい room に置き換わるまで待つ（#71）。
+  wait.until(
+    fn() { registry_subject_of(reg, id) != old },
+    "release が処理され新しい room に置き換わる",
+  )
+  let assert Ok(current) = registry.lookup(reg, id)
+  assert current != old
+
+  // 旧 room 宛の、遅れて届いた「詰まっていた」probe 結果。current を
+  // 巻き込んで stuck 扱いにしてはいけない。
+  process.send(reg, registry.RoomProbed(key, old, False))
+
+  assert registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 1, stuck: 0))
+
+  // 一致する subject の probe 結果は引き続き反映される。
+  process.send(reg, registry.RoomProbed(key, current, False))
+  wait.until_within(
+    fn() {
+      registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 1, stuck: 1))
+    },
+    "現在の room 宛の probe 結果は反映される",
+    200,
+  )
+}
+
 /// **応答しない registry では失敗する**こと。ここが本体で、件数は付随情報。
 ///
 /// 「詰まっている」を再現するため、誰も処理しない subject を渡す

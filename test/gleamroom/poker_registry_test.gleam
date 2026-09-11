@@ -300,6 +300,42 @@ pub fn health_reports_the_number_of_registered_rooms_test() {
     == Ok(poker_registry.HealthSnapshot(rooms: 2, stuck: 0))
 }
 
+/// probe 発火後に同じ key で room が入れ替わっていたら、遅れて届いた
+/// probe 結果は新しい room の stuck 状態を書き換えないこと。
+/// `registry_test.gleam`'s
+/// `a_delayed_room_probed_does_not_overwrite_the_stuck_state_of_a_recreated_room_test`
+/// と同じ理由（#471）。
+pub fn a_delayed_room_probed_does_not_overwrite_the_stuck_state_of_a_recreated_room_test() {
+  let assert Ok(started) = poker_registry.start()
+  let reg = started.data
+  let id = poker_registry.room_id("room-probe-aba")
+  let key = poker_registry.room_id_to_string(id)
+
+  let assert Ok(old) = poker_registry.lookup(reg, id)
+  process.send(reg, poker_registry.Release(id, old))
+  wait.until(
+    fn() { registry_subject_of(reg, id) != old },
+    "release が処理され新しい room に置き換わる",
+  )
+  let assert Ok(current) = poker_registry.lookup(reg, id)
+  assert current != old
+
+  process.send(reg, poker_registry.RoomProbed(key, old, False))
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 0))
+
+  process.send(reg, poker_registry.RoomProbed(key, current, False))
+  wait.until_within(
+    fn() {
+      poker_registry.health(reg)
+      == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 1))
+    },
+    "現在の room 宛の probe 結果は反映される",
+    200,
+  )
+}
+
 /// registry 自体は応答していても、個々の room actor がハング/デッドロック
 /// していれば `Health` の `stuck` に反映されること。`registry_test.gleam`'s
 /// `health_reports_a_room_that_does_not_respond_to_a_probe_test` と同じ理由
