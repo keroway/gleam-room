@@ -292,7 +292,10 @@ pub fn index_html() -> String {
 
   joinForm.addEventListener(\"submit\", (event) => {
     event.preventDefault();
-    if (socket) return;
+    if (socket) {
+      log(\"already connecting or connected\");
+      return;
+    }
 
     const roomId = roomInput.value.trim();
     const displayName = nameInput.value.trim();
