@@ -181,6 +181,33 @@ test("revealed で votes がログに残り、round_reset で phase が voting �
   }
 });
 
+test("revealed で未投票者(value: null)は votes 要素に (no vote) として描画される", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: true },
+      { participant_id: "p2", display_name: "Carol", has_voted: false },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "revealed",
+        votes: [
+          { participant_id: "p1", display_name: "Alice", value: "5" },
+          { participant_id: "p2", display_name: "Carol", value: null },
+        ],
+      }),
+    });
+
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      ["Alice: 5", "Carol: (no vote)"],
+      "未投票者の value: null が (no vote) として votes 要素に描画されていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("拒否以外のサーバー error はログに残るが接続は維持される", () => {
   const client = startClient(POKER_MODULE);
   try {
