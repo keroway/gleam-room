@@ -9,7 +9,10 @@ server-authoritative round) while introducing a requirement the buzzer never
 needed: **secrecy until reveal**.
 
 Per ADR 0009, Planning Poker duplicates the buzzer's registry/transport/
-client rather than sharing code with it. This document, plus
+client rather than sharing code with it, with one narrow exception:
+`poker_registry.gleam` calls `registry.get_default_max_rooms()` directly
+instead of keeping its own copy of the default max-rooms value (see
+`docs/duplication-inventory.md` §1.1). This document, plus
 [`docs/mvp.md`](mvp.md) for the buzzer, are the two data points step 4
 (extracting reusable room/presence/lifecycle primitives) will compare before
 generalizing anything.
