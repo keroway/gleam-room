@@ -1,3 +1,4 @@
+import gleam/dict
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
@@ -268,6 +269,33 @@ pub fn independent_poker_room_actors_do_not_share_state_test() {
 
   assert snapshot_of(room_a.data) == Ok([poker.Participant(id, "Alice")])
   assert snapshot_of(room_b.data) == Ok([])
+}
+
+/// `independent_poker_room_actors_do_not_share_state_test` は participants
+/// の非共有しか確認していない。`PokerState` は `votes`/`phase` も持つため
+/// (`room_test.gleam` の buzz 履歴用
+/// `independent_room_actors_do_not_share_buzz_state_test` に相当)、
+/// room_a で Vote してから Reveal しても room_b の votes/phase が初期状態の
+/// ままであることを別途確認する。
+pub fn independent_poker_room_actors_do_not_share_vote_state_test() {
+  let assert Ok(room_a) = poker.start()
+  let assert Ok(room_b) = poker.start()
+  let id = poker.participant_id("p1")
+  let session = process.new_subject()
+
+  let assert Ok(_) =
+    poker.dispatch(room_a.data, poker.Join(id, "Alice"), session)
+  let assert Ok(_) =
+    poker.dispatch(room_a.data, poker.Vote(id, poker.Five), session)
+  let assert Ok(_) = poker.dispatch(room_a.data, poker.Reveal, session)
+
+  let assert Ok(state_a) = poker.get_state(room_a.data)
+  assert state_a.phase == poker.Revealed
+  assert poker.has_voted(state_a, id)
+
+  let assert Ok(state_b) = poker.get_state(room_b.data)
+  assert state_b.phase == poker.Voting
+  assert state_b.votes == dict.new()
 }
 
 pub fn join_broadcasts_to_other_subscribers_but_not_the_joiner_test() {
