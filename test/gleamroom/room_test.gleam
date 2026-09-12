@@ -240,6 +240,23 @@ pub fn reset_round_clears_buzzes_and_permits_rebuzz_test() {
   assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1)
 }
 
+pub fn buzz_history_survives_the_buzzer_leaving_test() {
+  // ADR 0003 / #30: buzz history outlives the participant's connection, so
+  // `apply_leave` must not remove a departed participant's BuzzResult. This
+  // pins the inverse of poker's leaving_participant_is_dropped_from_a_later_reveal_test.
+  let alice = room.participant_id("p1")
+  let bob = room.participant_id("p2")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
+  let #(state, _) = room.apply_command(state, room.Buzz(bob))
+
+  let #(next, event) = room.apply_command(state, room.Leave(bob))
+
+  assert event == room.ParticipantLeft(bob)
+  assert room.buzz_snapshot(next) == [room.BuzzResult(bob, "Bob", 1)]
+}
+
 pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
   let assert Ok(started) = room.start()
   let subject = started.data
