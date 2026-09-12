@@ -40,7 +40,7 @@ needs; collapsing it prematurely would destroy the evidence.
 Update (#391 / PR #399): one narrow exception exists. `poker_registry.gleam`
 imports `gleamroom/registry` and calls `registry.get_default_max_rooms()`
 directly instead of keeping its own copy of the default max-rooms value
-(`poker_registry.gleam:12,95,103,166`). This is a one-value dependency on the
+(`poker_registry.gleam:12,99,107,170`). This is a one-value dependency on the
 default capacity, not a general one — the registries' actor logic remains
 independently implemented as described above. See
 `docs/duplication-inventory.md` §1.1 for the full analysis.
