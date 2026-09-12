@@ -111,8 +111,8 @@ test("round_reset で再びカードが有効になり、aria-pressed もリセ�
   }
 });
 
-for (const code of ["round_already_revealed", "voter_not_joined"]) {
-  test(`vote が ${code} で拒否されると ownVote がロールバックされる（#422）`, () => {
+for (const code of ["round_already_revealed", "voter_not_joined", "invalid_card"]) {
+  test(`vote が ${code} で拒否されると ownVote がロールバックされる（#422, #486）`, () => {
     const client = startClient(POKER_MODULE);
     try {
       const socket = joinAndConnect(client);

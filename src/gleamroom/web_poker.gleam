@@ -297,6 +297,7 @@ pub fn poker_html() -> String {
         } else if (
           message.code === \"round_already_revealed\" ||
           message.code === \"voter_not_joined\" ||
+          message.code === \"invalid_card\" ||
           (message.code === \"rate_limited\" && lastSentType === \"vote\")
         ) {
           // vote が楽観的に反映した ownVote/aria-pressed をサーバーの拒否に
