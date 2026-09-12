@@ -155,7 +155,7 @@ fn on_close(state: ConnectionState) -> Nil {
         Error(Nil) ->
           logging.log(
             logging.Warning,
-            "leave dispatch failed: room="
+            "poker leave dispatch failed: room="
               <> poker_registry.room_id_to_string(handle.room_id)
               <> ", participant="
               <> poker.participant_id_to_string(handle.participant_id),
@@ -183,7 +183,10 @@ fn handle_message(
   case message {
     mist.Text(text) -> handle_text(mark_active(state), text, connection)
     mist.Binary(_data) -> {
-      logging.log(logging.Info, "protocol message rejected: code=binary_frame")
+      logging.log(
+        logging.Info,
+        "poker protocol message rejected: code=binary_frame",
+      )
       let #(code, message) = binary_frame_code_and_message
       send_server_message(
         connection,
@@ -316,7 +319,10 @@ fn handle_text(
   let state = record_message(state)
   case message_rate_outcome(state.messages_since_heartbeat) {
     MessageRateLimited -> {
-      logging.log(logging.Info, "protocol message rejected: code=rate_limited")
+      logging.log(
+        logging.Info,
+        "poker protocol message rejected: code=rate_limited",
+      )
       let #(code, message) = rate_limited_code_and_message
       send_server_message(
         connection,
@@ -329,7 +335,7 @@ fn handle_text(
         FrameTooLarge -> {
           logging.log(
             logging.Info,
-            "protocol message rejected: code=frame_too_large",
+            "poker protocol message rejected: code=frame_too_large",
           )
           let #(code, message) = frame_too_large_code_and_message
           send_server_message(
@@ -343,7 +349,7 @@ fn handle_text(
             Error(error) -> {
               logging.log(
                 logging.Info,
-                "protocol message rejected: code=" <> error.code,
+                "poker protocol message rejected: code=" <> error.code,
               )
               send_server_message(
                 connection,
@@ -811,7 +817,7 @@ fn send_not_joined_error(
 ) -> Nil {
   logging.log(
     logging.Info,
-    "not joined: command=" <> command <> ", " <> connection_tag(),
+    "poker not joined: command=" <> command <> ", " <> connection_tag(),
   )
   send_server_message(
     connection,
