@@ -1,5 +1,6 @@
 import gleam/dict
 import gleam/erlang/process
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
@@ -625,4 +626,91 @@ pub fn rejoin_before_old_connection_leaves_keeps_both_identities_present_test() 
 
   // 古い接続の Leave が処理されたあとは、再接続した identity だけが残る。
   assert snapshot_of(subject) == Ok([poker.Participant(alice_new, "Alice")])
+}
+
+/// **複数プロセスから同時に Vote しても `votes` が欠落・上書きされない**こと（#464）。
+///
+/// `room_test.gleam` の `concurrent_buzzes_get_unique_consecutive_positions_test`
+/// を poker ドメインへ移植したもの。`apply_vote` は
+/// `dict.insert(state.votes, id, card)` で参加者ごとに独立した key へ書き込むため
+/// actor のメールボックス直列化の下では安全なはずだが、その保証自体を検証する
+/// 回帰テストがこれまで無かった。
+///
+/// 各参加者を**別プロセス**で Join させたうえで同時に異なる Card を Vote させ、
+/// Reveal 後に全員分の投票が欠落・上書きなく反映されていることを検証する。
+pub fn concurrent_votes_are_not_lost_or_overwritten_test() {
+  let assert Ok(started) = poker.start()
+  let subject = started.data
+  let cards = [
+    poker.Zero,
+    poker.One,
+    poker.Two,
+    poker.Three,
+    poker.Five,
+    poker.Eight,
+    poker.Thirteen,
+    poker.TwentyOne,
+  ]
+  let count = list.length(cards)
+
+  // 各参加者を別プロセスにする。同一プロセスから順番に送ると直列に呼んだ
+  // だけになり、actor の mailbox による直列化を再現できない。
+  let results = process.new_subject()
+  cards
+  |> list.index_map(fn(card, n) { #(n, card) })
+  |> list.each(fn(indexed) {
+    let #(n, card) = indexed
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let id = poker.participant_id("p" <> int.to_string(n))
+      let display_name = "P" <> int.to_string(n)
+      let assert Ok(_) =
+        poker.dispatch(subject, poker.Join(id, display_name), session)
+      let assert Ok(event) =
+        poker.dispatch(subject, poker.Vote(id, card), session)
+      process.send(results, #(id, card, event))
+      process.sleep(3000)
+    })
+  })
+
+  let voted = collect_vote_events(results, count, [])
+
+  // 全員が受理され、拒否・欠落が無い。
+  voted
+  |> list.each(fn(reported) {
+    let #(id, _, event) = reported
+    assert event == poker.VoteRegistered(id)
+  })
+
+  let assert Ok(_) =
+    poker.dispatch(subject, poker.Reveal, process.new_subject())
+  let assert Ok(state) = poker.get_state(subject)
+
+  // room 側の記録(votes dict)が、各参加者に割り当てたカードと1件も
+  // 食い違わない。dict 比較なので join/vote の受付順には依存しない。
+  let expected_votes =
+    voted
+    |> list.fold(dict.new(), fn(acc, reported) {
+      let #(id, card, _) = reported
+      dict.insert(acc, id, card)
+    })
+  assert state.votes == expected_votes
+  assert dict.size(state.votes) == count
+}
+
+/// 期待件数だけ Vote の結果を集める。件数が揃わなければ待ち続けず落とす
+/// （黙って少ない件数で assert すると、取りこぼしを「成功」と読み違える）。
+fn collect_vote_events(
+  results: process.Subject(#(poker.ParticipantId, poker.Card, poker.PokerEvent)),
+  remaining: Int,
+  acc: List(#(poker.ParticipantId, poker.Card, poker.PokerEvent)),
+) -> List(#(poker.ParticipantId, poker.Card, poker.PokerEvent)) {
+  case remaining {
+    0 -> acc
+    _ ->
+      case process.receive(results, 2000) {
+        Ok(event) -> collect_vote_events(results, remaining - 1, [event, ..acc])
+        Error(Nil) -> panic as "Vote の結果が期限内に揃わなかった"
+      }
+  }
 }
