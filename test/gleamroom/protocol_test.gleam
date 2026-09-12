@@ -190,14 +190,14 @@ pub fn encode_state_test() {
     ])
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"participants\":[{\"id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
 }
 
 pub fn encode_participant_joined_test() {
   let message = ParticipantJoined(Participant(ParticipantId("p1"), "Alice"))
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"participant_joined\",\"participant\":{\"id\":\"p1\",\"display_name\":\"Alice\"}}"
+    == "{\"type\":\"participant_joined\",\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}}"
 }
 
 pub fn encode_participant_left_test() {

@@ -4,7 +4,7 @@
 // log() 呼び出しの内容に加えて、childTextContents() で participants/buzzes 要素
 // への描画結果も検証する（#389: harness.mjs の replaceChildren スタブが no-op
 // だった間は描画内容を一切検証できていなかった）。フィールド参照を取り違えても
-// （例: message.participant.id と message.participant_id の混同）ログの内容や
+// （例: message.participant.participant_id と message.participant_id の混同）ログの内容や
 // ハンドラの例外、DOM への描画内容で検知できる。
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -27,7 +27,7 @@ test("participant_joined は participants に追加されログに残る", () =>
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "participant_joined",
-        participant: { id: "p1", display_name: "Alice" },
+        participant: { participant_id: "p1", display_name: "Alice" },
       }),
     });
 
@@ -48,7 +48,7 @@ test("participant_joined は participants に追加されログに残る", () =>
 test("participant_left はログに残る", () => {
   const client = startClient();
   try {
-    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     socket.handlers.message?.({
       data: JSON.stringify({ type: "participant_left", participant_id: "p1" }),
     });
@@ -70,7 +70,7 @@ test("participant_left はログに残る", () => {
 test("buzz_accepted はログに残り、同じ position の再配信は無視される（#43 の冪等化）", () => {
   const client = startClient();
   try {
-    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     const buzz = {
       type: "buzz_accepted",
       participant_id: "p1",
@@ -97,7 +97,7 @@ test("buzz_accepted はログに残り、同じ position の再配信は無視�
 test("round_reset はログに残る", () => {
   const client = startClient();
   try {
-    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "buzz_accepted",
@@ -142,7 +142,7 @@ test("拒否以外のサーバー error はログに残るが接続は維持さ�
 test("壊れた JSON の message イベントは例外を漏らさずログに残り、直前の participants 状態を保つ（#324）", () => {
   const client = startClient();
   try {
-    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     const logsBeforeMalformed = client.logs.length;
 
     socket.handlers.message?.({ data: "not valid json" });
@@ -203,7 +203,7 @@ test("state メッセージが妥当なJSONだが participants フィールド�
 test("未知の message.type はエラーにせずログに残す（#440: プロトコルドリフトの防衛線）", () => {
   const client = startClient();
   try {
-    const socket = joinAndConnect(client, [{ id: "p1", display_name: "Alice" }]);
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     const logsBeforeUnknown = client.logs.length;
 
     assert.doesNotThrow(() => {
