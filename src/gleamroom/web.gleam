@@ -39,6 +39,7 @@ pub fn index_html() -> String {
 </head>
 <body>
 <h1>gleam-room buzzer</h1>
+<p><a href=\"/poker\">Planning Poker</a></p>
 
 <form id=\"join-form\">
   <fieldset>
