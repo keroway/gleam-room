@@ -187,7 +187,7 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
 
 fn participant_to_json(participant: Participant) -> json.Json {
   json.object([
-    #("id", json.string(participant_id_to_string(participant.id))),
+    #("participant_id", json.string(participant_id_to_string(participant.id))),
     #("display_name", json.string(participant.display_name)),
   ])
 }

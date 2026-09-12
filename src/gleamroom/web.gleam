@@ -171,14 +171,14 @@ pub fn index_html() -> String {
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
         reconnectAttempts = 0;
         setConnected(true);
-        participants = new Map(message.participants.map((p) => [p.id, p]));
+        participants = new Map(message.participants.map((p) => [p.participant_id, p]));
         buzzes = message.buzzes;
         renderParticipants();
         renderBuzzes();
         log(`state: ${message.participants.length} participant(s)`);
         break;
       case \"participant_joined\":
-        participants.set(message.participant.id, message.participant);
+        participants.set(message.participant.participant_id, message.participant);
         renderParticipants();
         log(`joined: ${message.participant.display_name}`);
         break;
