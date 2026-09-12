@@ -271,12 +271,20 @@ pub fn actor_reset_round_clears_buzz_snapshot_test() {
   let assert Ok(_) =
     room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
   let assert Ok(_) = room.dispatch(subject, room.Buzz(alice), alice_session)
+  // Buzz also broadcasts an async echo back to the issuer (#143); drain it
+  // before asserting on RoundReset's own async echo below.
+  let assert Ok(room.BuzzAccepted(alice, "Alice", 1)) =
+    process.receive(alice_session, 100)
 
   let assert Ok(event) = room.dispatch(subject, room.ResetRound, alice_session)
 
   assert event == room.RoundReset
   let assert Ok(#(_, buzzes)) = room.get_state(subject)
   assert buzzes == []
+  // RoundReset is on the same issuer-inclusive `broadcast_all` branch as
+  // Buzz (#465), so the issuer also receives an async second copy on top
+  // of the synchronous `dispatch` return value already asserted above.
+  assert process.receive(alice_session, 100) == Ok(room.RoundReset)
 }
 
 pub fn departed_subscriber_receives_no_further_broadcasts_test() {

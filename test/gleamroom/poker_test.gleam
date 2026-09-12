@@ -319,6 +319,34 @@ pub fn join_broadcasts_to_other_subscribers_but_not_the_joiner_test() {
     == Ok(poker.ParticipantJoined(poker.Participant(bob, "Bob")))
 }
 
+/// `poker.gleam`'s `broadcast` puts `ResetRound` on the same
+/// issuer-inclusive `broadcast_all` branch as `VoteRegistered`/
+/// `RoundRevealed` (#143), so the issuer receives an async second copy on
+/// top of the synchronous `dispatch` return value. Mirrors `room_test.gleam`'s
+/// `actor_reset_round_clears_buzz_snapshot_test` (#465): before this test,
+/// `RoundReset`'s self-echo was pinned at the wire level
+/// (`poker_websocket_integration_test.gleam`) but never at the actor level.
+pub fn actor_reset_round_echoes_back_to_issuer_test() {
+  let assert Ok(started) = poker.start()
+  let subject = started.data
+  let alice = poker.participant_id("p1")
+  let alice_session = process.new_subject()
+  let assert Ok(_) =
+    poker.dispatch(subject, poker.Join(alice, "Alice"), alice_session)
+  let assert Ok(_) =
+    poker.dispatch(subject, poker.Vote(alice, poker.Five), alice_session)
+  // Vote also broadcasts an async echo back to the issuer; drain it before
+  // asserting on ResetRound's own async echo below.
+  let assert Ok(poker.VoteRegistered(alice)) =
+    process.receive(alice_session, 100)
+
+  let assert Ok(event) =
+    poker.dispatch(subject, poker.ResetRound, alice_session)
+
+  assert event == poker.RoundReset
+  assert process.receive(alice_session, 100) == Ok(poker.RoundReset)
+}
+
 pub fn leave_broadcasts_to_remaining_subscribers_test() {
   let assert Ok(started) = poker.start()
   let subject = started.data

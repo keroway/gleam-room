@@ -71,8 +71,13 @@ pub fn poker_ws_roundtrip_join_vote_reveal_reset_test() {
   assert reveal_echo == reveal_reply
 
   send_client_message(socket, json.object([#("type", json.string("reset"))]))
-  let #(reset_reply, _buffer) = recv_text_message(socket, buffer)
+  let #(reset_reply, buffer) = recv_text_message(socket, buffer)
   assert reset_reply == "{\"type\":\"round_reset\"}"
+  // `RoundReset` is on the same issuer-inclusive `broadcast_all` branch as
+  // `Vote`/`Reveal` (#143, #465), so it also echoes back a second, identical
+  // copy; pin that the same way `vote_echo`/`reveal_echo` above already are.
+  let #(reset_echo, _buffer) = recv_text_message(socket, buffer)
+  assert reset_echo == reset_reply
 
   tcp_close(socket)
 }
