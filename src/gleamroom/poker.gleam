@@ -283,8 +283,13 @@ type ActorState {
   ActorState(
     poker: PokerState,
     subscribers: Dict(String, Subject(PokerEvent)),
-    /// 監視中の接続プロセス pid → (ParticipantId の文字列表現, Monitor)。
-    sessions: Dict(process.Pid, #(String, process.Monitor)),
+    /// 監視中の接続プロセス pid → [(ParticipantId の文字列表現, Monitor)]。
+    ///
+    /// **値は単一エントリではなくリスト**（`room.gleam`'s `ActorState.sessions`
+    /// と同じ理由、#459）。同一物理接続（＝同一 pid）がタイムアウト後の再joinで
+    /// 新しい `ParticipantId` を得ることがあり、単一エントリだと2回目のjoinが
+    /// 1回目の監視エントリを上書きして幽霊参加者になる。
+    sessions: Dict(process.Pid, List(#(String, process.Monitor))),
   )
 }
 
@@ -356,11 +361,25 @@ fn handle_message(
           )
           actor.continue(state)
         }
-        Ok(#(participant_key, _monitor)) -> {
-          let id = ParticipantId(participant_key)
-          let #(next_poker, event) = apply_command(state.poker, Leave(id))
-          let next_subscribers = dict.delete(state.subscribers, participant_key)
-          broadcast_all(next_subscribers, event)
+        Ok(entries) -> {
+          // **1つの pid に複数エントリがありうる**（`room.gleam`'s `SessionDown`
+          // と同じ理由、#459）。同一物理接続が再joinで複数の ParticipantId を
+          // 持つに至った場合、その全員をここで片付ける。
+          let #(next_poker, next_subscribers) =
+            list.fold(
+              entries,
+              #(state.poker, state.subscribers),
+              fn(acc, entry) {
+                let #(poker, subscribers) = acc
+                let #(participant_key, monitor) = entry
+                process.demonitor_process(monitor)
+                let id = ParticipantId(participant_key)
+                let #(next_poker, event) = apply_command(poker, Leave(id))
+                let next_subscribers = dict.delete(subscribers, participant_key)
+                broadcast_all(next_subscribers, event)
+                #(next_poker, next_subscribers)
+              },
+            )
           case next_poker.participants {
             // 無人になったら自分で止まる（`room.gleam`'s `SessionDown` と
             // 同じ理由、#91）。
@@ -391,19 +410,24 @@ fn handle_message(
 /// 参加時に接続プロセスを監視対象へ入れ、離脱時に外す（`room.gleam`'s
 /// `update_sessions` と同じ理由、#56 / #69）。
 fn update_sessions(
-  sessions: Dict(process.Pid, #(String, process.Monitor)),
+  sessions: Dict(process.Pid, List(#(String, process.Monitor))),
   event: PokerEvent,
   session: Subject(PokerEvent),
-) -> Dict(process.Pid, #(String, process.Monitor)) {
+) -> Dict(process.Pid, List(#(String, process.Monitor))) {
   case event {
     ParticipantJoined(participant) ->
       case process.subject_owner(session) {
         Ok(pid) -> {
           let monitor = process.monitor(pid)
-          dict.insert(sessions, pid, #(
-            participant_id_to_string(participant.id),
-            monitor,
-          ))
+          let entry = #(participant_id_to_string(participant.id), monitor)
+          // **既存エントリに追加する。上書きしない**（`room.gleam`'s
+          // `update_sessions` と同じ理由、#459）。
+          dict.upsert(sessions, pid, fn(existing) {
+            case existing {
+              option.Some(entries) -> [entry, ..entries]
+              option.None -> [entry]
+            }
+          })
         }
         Error(Nil) -> {
           logging.log(
@@ -416,14 +440,20 @@ fn update_sessions(
       }
     ParticipantLeft(id) -> {
       let key = participant_id_to_string(id)
-      dict.each(sessions, fn(_pid, entry) {
-        case entry {
-          #(participant_key, monitor) if participant_key == key ->
-            process.demonitor_process(monitor)
-          _ -> Nil
-        }
+      dict.each(sessions, fn(_pid, entries) {
+        list.each(entries, fn(entry) {
+          case entry {
+            #(participant_key, monitor) if participant_key == key ->
+              process.demonitor_process(monitor)
+            _ -> Nil
+          }
+        })
       })
-      dict.filter(sessions, fn(_pid, entry) { entry.0 != key })
+      sessions
+      |> dict.map_values(fn(_pid, entries) {
+        list.filter(entries, fn(entry) { entry.0 != key })
+      })
+      |> dict.filter(fn(_pid, entries) { entries != [] })
     }
     JoinRejected(_, _)
     | LeaveRejected(_, _)

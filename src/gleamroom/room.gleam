@@ -1,6 +1,7 @@
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
+import gleam/option
 import gleam/otp/actor
 import gleam/string
 import gleamroom/call
@@ -254,13 +255,19 @@ type ActorState {
   ActorState(
     room: RoomState,
     subscribers: Dict(String, Subject(RoomEvent)),
-    /// 監視中の接続プロセス pid → (ParticipantId の文字列表現, Monitor)（#56 / #69）。
+    /// 監視中の接続プロセス pid → [(ParticipantId の文字列表現, Monitor)]（#56 / #69）。
     ///
     /// Down メッセージは pid しか運ばないため逆引きが要る。Monitor を併せて
     /// 持つのは、離脱時に `demonitor_process` で解除するため。解除しないと
     /// Leave 後も監視が残り、その接続プロセスが後から終了したときに
     /// 無関係な Down 通知が届く。
-    sessions: Dict(process.Pid, #(String, process.Monitor)),
+    ///
+    /// **値は単一エントリではなくリスト**（#459）。同一物理接続（＝同一 pid）が
+    /// タイムアウト後の再joinで新しい `ParticipantId` を得ることがあり
+    /// （`with_room_reply` が `ConnectionState.room` を `None` に戻す経路）、
+    /// 単一エントリだと2回目のjoinが1回目の監視エントリを上書きして
+    /// 1回目の参加者が `SessionDown` で回収されない「幽霊参加者」になる。
+    sessions: Dict(process.Pid, List(#(String, process.Monitor))),
   )
 }
 
@@ -355,14 +362,26 @@ fn handle_message(
           )
           actor.continue(state)
         }
-        Ok(#(participant_key, _monitor)) -> {
+        Ok(entries) -> {
           // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
           // 通常の Leave と同じ経路を通すので、他の参加者にも
           // ParticipantLeft が配信される。
-          let id = ParticipantId(participant_key)
-          let #(next_room, event) = apply_command(state.room, Leave(id))
-          let next_subscribers = dict.delete(state.subscribers, participant_key)
-          broadcast_all(next_subscribers, event)
+          //
+          // **1つの pid に複数エントリがありうる**（#459）。同一物理接続が
+          // タイムアウト後の再joinで複数の ParticipantId を持つに至った場合、
+          // その全員をここで片付けないと再joinの度に増えた分だけ「幽霊参加者」
+          // が残り続ける。
+          let #(next_room, next_subscribers) =
+            list.fold(entries, #(state.room, state.subscribers), fn(acc, entry) {
+              let #(room, subscribers) = acc
+              let #(participant_key, monitor) = entry
+              process.demonitor_process(monitor)
+              let id = ParticipantId(participant_key)
+              let #(next_room, event) = apply_command(room, Leave(id))
+              let next_subscribers = dict.delete(subscribers, participant_key)
+              broadcast_all(next_subscribers, event)
+              #(next_room, next_subscribers)
+            })
           case next_room.participants {
             // **無人になったら自分で止まる（#91）。**
             //
@@ -416,19 +435,27 @@ fn handle_message(
 /// 全参加者が落ちる。monitor は対象の終了をメッセージで受け取るだけで、
 /// 監視元は影響を受けない。
 fn update_sessions(
-  sessions: Dict(process.Pid, #(String, process.Monitor)),
+  sessions: Dict(process.Pid, List(#(String, process.Monitor))),
   event: RoomEvent,
   session: Subject(RoomEvent),
-) -> Dict(process.Pid, #(String, process.Monitor)) {
+) -> Dict(process.Pid, List(#(String, process.Monitor))) {
   case event {
     ParticipantJoined(participant) ->
       case process.subject_owner(session) {
         Ok(pid) -> {
           let monitor = process.monitor(pid)
-          dict.insert(sessions, pid, #(
-            participant_id_to_string(participant.id),
-            monitor,
-          ))
+          let entry = #(participant_id_to_string(participant.id), monitor)
+          // **既存エントリに追加する。上書きしない**（#459）。同一 pid から
+          // 二度目の Join が来るのは、タイムアウト後の再joinで新しい
+          // ParticipantId が発行されたケース（#100）。上書きすると1回目の
+          // 参加者の監視エントリが失われ、SessionDown で回収されない
+          // 「幽霊参加者」になる。
+          dict.upsert(sessions, pid, fn(existing) {
+            case existing {
+              option.Some(entries) -> [entry, ..entries]
+              option.None -> [entry]
+            }
+          })
         }
         // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
         // 未登録のため #56 の切断検知が効かない参加者になるので、後から
@@ -447,14 +474,20 @@ fn update_sessions(
       // 値（ParticipantId）で引いて外す。pid は Down 側でしか分からない。
       // **監視も解除する**（#69）。残すと、Leave 後も生きている接続プロセスが
       // 後から終了したときに無関係な Down 通知が届く。
-      dict.each(sessions, fn(_pid, entry) {
-        case entry {
-          #(participant_key, monitor) if participant_key == key ->
-            process.demonitor_process(monitor)
-          _ -> Nil
-        }
+      dict.each(sessions, fn(_pid, entries) {
+        list.each(entries, fn(entry) {
+          case entry {
+            #(participant_key, monitor) if participant_key == key ->
+              process.demonitor_process(monitor)
+            _ -> Nil
+          }
+        })
       })
-      dict.filter(sessions, fn(_pid, entry) { entry.0 != key })
+      sessions
+      |> dict.map_values(fn(_pid, entries) {
+        list.filter(entries, fn(entry) { entry.0 != key })
+      })
+      |> dict.filter(fn(_pid, entries) { entries != [] })
     }
     JoinRejected(_, _)
     | LeaveRejected(_, _)

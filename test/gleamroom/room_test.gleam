@@ -438,6 +438,62 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
   )
 }
 
+/// 同一物理接続がタイムアウト後に再joinしても、接続が死ねば両方の
+/// `ParticipantId` が片付くこと（#459）。
+///
+/// `with_room_reply` のタイムアウト分岐は `ConnectionState.room` を `None` に
+/// 戻すだけで `Leave` を送らないため、同じ接続（＝同じ pid）が新しい
+/// `ParticipantId` で再joinしうる（#100）。修正前は `sessions` の値が
+/// pid ごとの単一エントリだったため、2回目の join が1回目の監視エントリを
+/// 上書きし、接続が最終的に死んでも1回目の参加者（`alice_old`）が
+/// `state.room.participants` に残り続ける「幽霊参加者」になっていた。
+pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+
+  // room が空になって自己停止しないよう、無関係な生存者を先に join させておく
+  // （`get_snapshot` を最後まで問い合わせ続けられるようにするため）。
+  let survivor = room.participant_id("survivor")
+  let survivor_session = process.new_subject()
+  let assert Ok(_) =
+    room.dispatch(subject, room.Join(survivor, "Survivor"), survivor_session)
+
+  let alice_old = room.participant_id("connection-1")
+  let alice_new = room.participant_id("connection-2")
+
+  let connection_pid =
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let _ = room.dispatch(subject, room.Join(alice_old, "Alice"), session)
+      // 同一接続（同一 session/pid）から、旧IDに対する Leave を送らずに
+      // 再度 Join する。
+      let _ = room.dispatch(subject, room.Join(alice_new, "Alice"), session)
+      // room 側が両方の監視を張るまで生きている必要がある。
+      process.sleep(500)
+    })
+
+  wait.until(
+    fn() {
+      room.get_snapshot(subject)
+      == Ok([
+        room.Participant(survivor, "Survivor"),
+        room.Participant(alice_old, "Alice"),
+        room.Participant(alice_new, "Alice"),
+      ])
+    },
+    "同一接続からの再joinで両方のIDが一時的に併存する",
+  )
+
+  process.kill(connection_pid)
+
+  wait.until(
+    fn() {
+      room.get_snapshot(subject) == Ok([room.Participant(survivor, "Survivor")])
+    },
+    "接続が死ねば再joinで増えた分も含めて全員が片付く",
+  )
+}
+
 /// `select_monitors` の `PortDown` 分岐が no-op であること（#147）。
 ///
 /// room actor は Port を監視していないため、`PortDown` を受けても
