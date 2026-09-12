@@ -378,6 +378,57 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
   )
 }
 
+/// 同一物理接続がタイムアウト後に再joinしても、接続が死ねば両方の
+/// `ParticipantId` が片付くこと。`room_test.gleam` の
+/// `ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test`
+/// (#459) を poker ドメインへ移植したもの。
+pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test() {
+  let assert Ok(started) = poker.start()
+  let subject = started.data
+
+  // room が空になって自己停止しないよう、無関係な生存者を先に join させておく
+  // （`snapshot_of` を最後まで問い合わせ続けられるようにするため）。
+  let survivor = poker.participant_id("survivor")
+  let survivor_session = process.new_subject()
+  let assert Ok(_) =
+    poker.dispatch(subject, poker.Join(survivor, "Survivor"), survivor_session)
+
+  let alice_old = poker.participant_id("connection-1")
+  let alice_new = poker.participant_id("connection-2")
+
+  let connection_pid =
+    process.spawn_unlinked(fn() {
+      let session = process.new_subject()
+      let _ = poker.dispatch(subject, poker.Join(alice_old, "Alice"), session)
+      // 同一接続（同一 session/pid）から、旧IDに対する Leave を送らずに
+      // 再度 Join する。
+      let _ = poker.dispatch(subject, poker.Join(alice_new, "Alice"), session)
+      // room 側が両方の監視を張るまで生きている必要がある。
+      process.sleep(500)
+    })
+
+  wait.until(
+    fn() {
+      snapshot_of(subject)
+      == Ok([
+        poker.Participant(survivor, "Survivor"),
+        poker.Participant(alice_old, "Alice"),
+        poker.Participant(alice_new, "Alice"),
+      ])
+    },
+    "同一接続からの再joinで両方のIDが一時的に併存する",
+  )
+
+  process.kill(connection_pid)
+
+  wait.until(
+    fn() {
+      snapshot_of(subject) == Ok([poker.Participant(survivor, "Survivor")])
+    },
+    "接続が死ねば再joinで増えた分も含めて全員が片付く",
+  )
+}
+
 /// `select_monitors` の `PortDown` 分岐が no-op であること。
 /// `room_test.gleam` の `session_down_for_an_untracked_pid_is_a_no_op_test`
 /// (#147) を poker ドメインへ移植したもの。
