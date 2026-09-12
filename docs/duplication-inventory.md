@@ -70,7 +70,7 @@ Update (#391 / PR #399): this section originally assumed the two registries
 have no dependency on each other. That is no longer true for the default
 capacity value — `poker_registry.gleam` now does `import gleamroom/registry`
 and calls `registry.get_default_max_rooms()` directly
-(`poker_registry.gleam:12,95,103,166`) instead of keeping its own copy of the
+(`poker_registry.gleam:12,99,107,170`) instead of keeping its own copy of the
 default. This is a narrow, one-value dependency (default max rooms), not a
 general one: the actor logic duplication described above is unchanged, and
 the function-value-injection need below still applies to the rest of the
