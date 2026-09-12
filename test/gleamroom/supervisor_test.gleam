@@ -46,15 +46,19 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
   assert before != after
 }
 
-/// `RestForOne` を選んだ根拠（`src/gleamroom.gleam` のコメント）である
-/// 「registry がクラッシュしたら、後ろに追加した子（web server 相当）も
-/// 作り直される」ことそのものを検証する（#95）。
+/// もともとは #95 で「`RestForOne` を選んだ根拠（後ろに追加した子も
+/// 巻き添えで再起動される）」を検証する目的で追加されたが、その根拠自体が
+/// ADR 0008（2026-08-17、ADR 0004 を supersede）で否定され、本番構成は
+/// `one_for_one` に変更済み（`src/gleamroom.gleam` の `build_supervisor`）。
+/// 本テストは `gleamroom.build_supervisor`（本番の起動経路）を使わず、
+/// 使い捨ての `RestForOne` supervisor を単独で組み立てているため、本番構成の
+/// 変更はこのテストに一切影響しない。よってこれは「設計判断の検証」ではなく、
+/// `gleam_otp` の `RestForOne` セマンティクス自体（後ろに追加した子も巻き添えで
+/// 再起動される）を確認する汎用ユニットテストとして残している。
 ///
-/// 以前の唯一のテストは registry 単体を子に持つ supervisor しか組んでおらず、
-/// 「後ろの子も巻き添えで再起動される」という `RestForOne` 固有の主張は
-/// `OneForOne` でも成立してしまうため検証できていなかった。ここでは registry
-/// の後ろにもう一つ子を追加し、registry を kill したときにその子まで
-/// 再起動されている（pid が変わっている）ことを確認する。
+/// 現行の `one_for_one` 構成に対する実質的な後継テストは
+/// `one_for_one_does_not_restart_the_web_server_when_registry_crashes_test`
+/// （ADR 0008 の Notes 節が参照）。
 pub fn rest_for_one_restarts_children_added_after_the_killed_child_test() {
   let registry_name = process.new_name("gleamroom_registry_rfo_test")
   let registry_subject = process.named_subject(registry_name)
