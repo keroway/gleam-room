@@ -221,20 +221,20 @@ literals, not Gleam code.
 
 - `cancelReconnect`/`scheduleReconnect`, including the shared
   `RECONNECT_DELAY_MS = 1500` / `MAX_RECONNECT_ATTEMPTS = 5` constants
-  (`web.gleam:85-113`, `web_poker.gleam:118-146`, byte-identical).
+  (`web.gleam:85-113`, `web_poker.gleam:119-147`, byte-identical).
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
-  `web_poker.gleam:148-158`, byte-identical).
+  `web_poker.gleam:149-159`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:234-277`, `web_poker.gleam:301-341`).
-- `joinForm` submit handler (`web.gleam:279-293`, `web_poker.gleam:343-357`,
+  (`web.gleam:241-291`, `web_poker.gleam:319-366`).
+- `joinForm` submit handler (`web.gleam:293-310`, `web_poker.gleam:368-385`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:295-301`, `web_poker.gleam:359-366`,
+- `sendIfOpen` (`web.gleam:312-318`, `web_poker.gleam:387-395`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
-  (`web.gleam:199-225`, `web_poker.gleam:262-284`). The poker-only
+  (`web.gleam:206-234`, `web_poker.gleam:274-296`). The poker-only
   `round_already_revealed`/`voter_not_joined` `else if` branch
-  (`web_poker.gleam:285-294`) rolls back the optimistic `ownVote` and is
+  (`web_poker.gleam:297-312`) rolls back the optimistic `ownVote` and is
   **not** part of this duplication — buzzer has no equivalent — so it
   should not be counted when comparing the two files' `error` handling.
 
