@@ -61,10 +61,17 @@ Not responsible for:
 #### WebSocket handshake origin check
 
 Before upgrading a connection, the transport layer rejects the handshake with
-`403` unless the request's `Origin` header matches its `Host` header. This
-guards against Cross-Site WebSocket Hijacking (CSWSH); see ADR/issue #124 and
-`origin_allowed` in `src/gleamroom/websocket.gleam` and
+`403` if the request carries an `Origin` header that does not match its `Host`
+header. This guards against Cross-Site WebSocket Hijacking (CSWSH); see
+ADR/issue #124 and `origin_allowed` in `src/gleamroom/websocket.gleam` and
 `src/gleamroom/poker_websocket.gleam`.
+
+Requests with **no** `Origin` header are allowed through, not rejected.
+Browsers always send `Origin`, but non-browser clients (CLI tools, custom
+clients) often do not, and the MVP has no authentication layer to justify
+distinguishing them — this is an intentional design decision left open in
+#124, fixed by the `origin_header_allowed_missing_origin_is_allowed` test in
+`test/gleamroom/websocket_test.gleam` and `poker_websocket_test.gleam`.
 
 This means a deployment behind a reverse proxy must ensure the `Host` header
 the Gleam process sees still matches the browser's `Origin` (for example by
