@@ -182,11 +182,11 @@ source as "same value, same reason"):
   (`websocket.gleam:283-304`, `poker_websocket.gleam:252-263`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:314-348`, `poker_websocket.gleam:275-294`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:948-950`,
-  `poker_websocket.gleam:938-940`, byte-identical).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:974-976`,
+  `poker_websocket.gleam:970-972`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:952-971`,
-  `poker_websocket.gleam:943-946`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:994-997`,
+  `poker_websocket.gleam:975-978`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -194,10 +194,10 @@ beyond moving code.
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:683-698`,
-  `poker_websocket.gleam` near 665) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:722-822`,
-  `poker_websocket.gleam:702-796`) — these encode "how to talk to a room
+- `release_room` (`websocket.gleam:694-709`,
+  `poker_websocket.gleam:682-700`) and the `with_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:735-848`,
+  `poker_websocket.gleam:719-799`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,
