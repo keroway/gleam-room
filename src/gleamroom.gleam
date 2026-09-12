@@ -57,9 +57,23 @@ pub fn main() -> Nil {
   // trap_exits で受け止めて exit を明示的にログしてから終了させる。
   process.trap_exits(True)
 
-  case start(read_port(), read_max_rooms()) {
-    Ok(#(started, _registry_subject, _poker_registry_subject)) ->
+  let port = read_port()
+  let max_rooms = read_max_rooms()
+
+  case start(port, max_rooms) {
+    Ok(#(started, _registry_subject, _poker_registry_subject)) -> {
+      // 正常系こそ port/max_rooms をログに残す（#519）。以前は不正値のときの
+      // 警告だけがログに現れ、正しく起動できた場合は実際に何のポート・
+      // 上限で動いているかログから判別できなかった。
+      logging.log(
+        logging.Info,
+        "gleamroom started: port="
+          <> int.to_string(port)
+          <> " max_rooms="
+          <> int.to_string(max_rooms),
+      )
       await_supervisor_exit(started.pid, halt_with_failure)
+    }
     Error(reason) -> {
       // #29 / #32 / #53 と同じ方針: 失敗を無警告でクラッシュさせず、
       // 理由をログに残してから終了する（#136）。
