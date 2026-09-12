@@ -337,8 +337,7 @@ pub fn actor_reset_round_echoes_back_to_issuer_test() {
     poker.dispatch(subject, poker.Vote(alice, poker.Five), alice_session)
   // Vote also broadcasts an async echo back to the issuer; drain it before
   // asserting on ResetRound's own async echo below.
-  let assert Ok(poker.VoteRegistered(alice)) =
-    process.receive(alice_session, 100)
+  let assert Ok(poker.VoteRegistered(_)) = process.receive(alice_session, 100)
 
   let assert Ok(event) =
     poker.dispatch(subject, poker.ResetRound, alice_session)

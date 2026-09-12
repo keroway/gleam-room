@@ -273,7 +273,7 @@ pub fn actor_reset_round_clears_buzz_snapshot_test() {
   let assert Ok(_) = room.dispatch(subject, room.Buzz(alice), alice_session)
   // Buzz also broadcasts an async echo back to the issuer (#143); drain it
   // before asserting on RoundReset's own async echo below.
-  let assert Ok(room.BuzzAccepted(alice, "Alice", 1)) =
+  let assert Ok(room.BuzzAccepted(_, "Alice", 1)) =
     process.receive(alice_session, 100)
 
   let assert Ok(event) = room.dispatch(subject, room.ResetRound, alice_session)
