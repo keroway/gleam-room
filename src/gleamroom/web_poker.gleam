@@ -42,6 +42,7 @@ pub fn poker_html() -> String {
 </head>
 <body>
 <h1>gleam-room planning poker</h1>
+<p><a href=\"/\">Buzzer</a></p>
 
 <form id=\"join-form\">
   <fieldset>
