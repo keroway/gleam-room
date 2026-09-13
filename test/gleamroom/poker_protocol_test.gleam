@@ -2,7 +2,7 @@ import gleam/option.{None, Some}
 import gleam/string
 import gleamroom/poker_protocol.{
   Coffee, Eight, Five, Join, ParticipantId, ParticipantJoined, ParticipantLeft,
-  ParticipantView, ProtocolError, ProtocolErrorMessage, Reset, Reveal,
+  ParticipantView, ProtocolError, ProtocolErrorMessage, Reset, Reveal, Revealed,
   RevealedVote, RoomId, RoundReset, RoundRevealed, State, Vote, VoteRegistered,
   Voting,
 }
@@ -200,6 +200,16 @@ pub fn encode_state_test() {
 
   assert poker_protocol.encode_server_message(message)
     == "{\"type\":\"state\",\"phase\":\"voting\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}]}"
+}
+
+pub fn encode_state_revealed_phase_test() {
+  let message =
+    State(phase: Revealed, participants: [
+      ParticipantView(ParticipantId("p1"), "Alice", True),
+    ])
+
+  assert poker_protocol.encode_server_message(message)
+    == "{\"type\":\"state\",\"phase\":\"revealed\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}]}"
 }
 
 pub fn encode_participant_joined_test() {
