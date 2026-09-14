@@ -1,0 +1,16 @@
+# keroway 標準 lefthook 設定（https://lefthook.dev/configuration/）
+# 導入: `brew install lefthook` && `lefthook install`
+
+pre-commit:
+  parallel: true
+  jobs:
+    - name: gleam format check
+      glob: "*.gleam"
+      run: gleam format --check {staged_files}
+    - name: typos
+      run: typos {staged_files}
+
+pre-push:
+  jobs:
+    - name: gleam test
+      run: gleam test

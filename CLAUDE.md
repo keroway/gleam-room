@@ -84,14 +84,14 @@ Typed domain state/messages
 
 Before implementing an issue:
 
-1. Read `README.md`, `AGENTS.md`, and the relevant ADRs.
+1. Read `README.md`, `AGENTS.md`, and the relevant ADRs. If a `justfile` exists
+   (it does), run `just --list` first to discover build/test/check tasks.
 2. Read the issue completely, including acceptance criteria and non-goals.
 3. Inspect the existing implementation before proposing structural changes.
 4. Implement the smallest coherent change satisfying the issue.
 5. Add or update tests.
-6. Run formatter and tests before completion (`gleam format`, `gleam test`, and
-   `node --test 'test/client/*.test.mjs'` when `src/gleamroom/web.gleam` or
-   `src/gleamroom/web_poker.gleam` changes).
+6. Run `just check` before completion — it runs the same format/build/test/
+   client-JS-test/shellcheck sequence as CI (`.github/workflows/ci.yml`).
 7. Update documentation only if behavior or architecture changed.
 8. Summarize design decisions, validation, and known limitations in the PR.
 

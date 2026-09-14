@@ -11,8 +11,12 @@
 ├── settings.json        # 承認なしで実行してよいコマンドの共有許可 + Stop hook
 ├── settings.local.json  # 個人設定（gitignore、コミット対象外。beamsg アダプタもここ）
 ├── hooks/
-│   └── post-stop-check.sh  # Stop hook 本体
+│   └── post-stop-check.sh  # Stop hook 本体（just check を呼ぶ）
 └── README.md            # この設定の説明
+
+（リポジトリ直下）
+├── justfile              # build / test / format / check の標準動詞
+└── lefthook.yml          # pre-commit / pre-push の決定的検証ゲート
 ```
 
 ### `settings.json` の許可の基準
@@ -32,25 +36,22 @@
 
 ## Stop hook
 
-`hooks/post-stop-check.sh` が、変更されたファイルに応じて `.github/workflows/ci.yml`
-と同じコマンドをターン終了ごとに実行する（`agent-assets/templates/post-stop-check.sh`
-を基にした構成）:
+`hooks/post-stop-check.sh` は、次のいずれかのファイルが変わったターンでのみ
+`just check`（`justfile` 参照）を実行する:
 
-- `src/*.gleam` / `test/*.gleam` / `gleam.toml` / `manifest.toml` が変わった場合:
-  `gleam format --check src test` → `gleam build --warnings-as-errors` → `gleam test`
-  （bash の `case` パターンは（ファイルグロブと違い）`*` が `/` をまたいでマッチするため、
-  このパターンだけで `src/gleamroom/web.gleam` のようなネストしたファイルも
-  正しく拾える。#499 はこの挙動を誤認した報告で、実際には検知漏れはなかった）
-- `test/client/*.test.mjs` / `src/gleamroom/web.gleam` /
-  `src/gleamroom/web_poker.gleam` / `test/client/harness.mjs` /
-  `test/client/extract.mjs` が変わった場合:
-  `node --test 'test/client/*.test.mjs'`
-  （web.gleam / web_poker.gleam に埋め込まれたクライアント JS の回帰テスト。
-  Gleam 側からは検証できない。テスト自体を触らなくても web.gleam /
-  web_poker.gleam の変更でテスト対象は変わるため、両方をトリガーに含める
-  （web.gleam: #183、web_poker.gleam: #305・#466）。harness.mjs / extract.mjs
-  はテストが import する共有ハーネスで、単独変更でもテストの検証内容が
-  変わりうるため同様にトリガーに含める（#186））
+`src/*.gleam` / `test/*.gleam` / `gleam.toml` / `manifest.toml` /
+`test/client/*.test.mjs` / `test/client/harness.mjs` / `test/client/extract.mjs`
+
+（bash の `case` パターンは（ファイルグロブと違い）`*` が `/` をまたいでマッチするため、
+`src/*.gleam` だけで `src/gleamroom/web.gleam` / `web_poker.gleam` のようなネストした
+ファイルも正しく拾える。#499 はこの挙動を誤認した報告で、実際には検知漏れはなかった）
+
+以前は「Gleam側の変更なら format/build/test」「client JS側の変更なら node --test」と
+2系統に分けてトリガー対象ファイルを個別に列挙していたが、web.gleam / web_poker.gleam の
+ようにどちらのカテゴリにも影響するファイルをリストへ追加し忘れるたびに検知漏れバグを
+作っていた（#183, #305, #466）。`just check` に一本化し、トリガーが立ったら常に
+`.github/workflows/ci.yml` と同じ全チェック（format → build → test → client JS test →
+shellcheck）を回すことで、この種のバグの発生源そのものを消した（#356）。
 
 Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が両方 CLOSED になり
 検証できない状態を成功扱いする心配が無くなったため導入した。
@@ -62,14 +63,19 @@ Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が�
 限らない。ロジックを揃えたい場合は各自 `.codex/hooks/post-stop-check.sh` を手動で
 同期すること（#337）。
 
+## justfile / lefthook
+
+- `justfile`: `build` / `test` / `format` / `check` の標準動詞（`just --list` で一覧）。
+  `check` が `.github/workflows/ci.yml` と同じ手順を直列実行する唯一の場所で、
+  Stop hook もこれを呼ぶ（#356）。以前は「Stop hook と CI がすでに決定的チェックを
+  担っているので不要」として意図的に未導入だったが、その二重管理自体が
+  検知漏れバグ（#305, #466）の温床になっていたため方針を変更した。
+- `lefthook.yml`: pre-commit で `gleam format --check`（変更 .gleam のみ）と
+  `typos`、pre-push で `gleam test` を実行する（導入: `lefthook install`）。
+
 ## 意図的に未導入の設定
 
 - format-on-write hook: formatter の対象範囲が広がるたびに個別リポジトリの都合で
   分岐させたくないため、現時点では Stop hook の `gleam format --check` のみに留める。
-- `justfile` / lefthook: `.github/workflows/ci.yml` と Stop hook がすでに
-  `gleam format --check` / `gleam build --warnings-as-errors` / `gleam test` /
-  client JS テストの決定的チェックを担っており、ローカル短縮コマンドを別途
-  用意する必要性が薄い。Gleam エコシステムにも lefthook 相当の広く定着した
-  慣行が無いため、現時点では見送る。
 
 codex stop review gate は、ワークスペース共通方針どおり無効のまま運用します。
