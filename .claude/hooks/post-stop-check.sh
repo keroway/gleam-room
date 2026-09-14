@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-# Claude Code Stop hook: ターン終了時に変更領域だけ format / build / test を検証する。
+# Claude Code Stop hook: 関連ファイルが変わったターンだけ `just check` を実行する。
 #
 # .claude/README.md が「意図的に未導入」としていた条件（Gleam プロジェクトの
 # bootstrap = Issue #1、CI 整備 = Issue #10）は両方 CLOSED になり、
 # .github/workflows/ci.yml の gleam format --check / gleam build / gleam test /
 # node --test と同じコマンドが既に settings.json で許可済みだったため、ここで追加する。
 #
-# CI と一致させるコマンド（.github/workflows/ci.yml）:
-#   gleam format --check src test
-#   gleam build --warnings-as-errors
-#   gleam test
-#   node --test 'test/client/*.test.mjs'（test/client 配下が変わったときのみ）
+# `just check`（justfile）が .github/workflows/ci.yml と同じ手順を直列実行する。
+# 以前はここで GLEAM_CHANGED / CLIENT_TEST_CHANGED を別々に判定し、変更領域だけ
+# 実行していたが、変更を検知するトリガー用 case パターンにファイルを追加し忘れる
+# たびに検知漏れバグを作っていた（#305, #466）。`just check` に一本化し、
+# トリガーが立ったら常に全チェックを回すことで、この種のバグの発生源を消す（#356）。
 
 set -u
 
@@ -65,76 +65,41 @@ CHANGED_FILES="$(
 )"
 [ -z "$CHANGED_FILES" ] && exit 0
 
-GLEAM_CHANGED=0
-CLIENT_TEST_CHANGED=0
+CHECK_TRIGGERED=0
 while IFS= read -r file; do
   [ -z "$file" ] && continue
   case "$file" in
-    src/*.gleam|test/*.gleam|gleam.toml|manifest.toml) GLEAM_CHANGED=1 ;;
-  esac
-  case "$file" in
-    # web.gleam embeds the client JS as a string (see test/client/extract.mjs),
-    # so a web.gleam-only change can break it without touching *.test.mjs (#183).
+    # web.gleam/web_poker.gleam embed the client JS as a string (see
+    # test/client/extract.mjs), so a web.gleam/web_poker.gleam-only change can
+    # break it without touching *.test.mjs (#183, #305/#466).
     # harness.mjs/extract.mjs are the shared test harness the *.test.mjs files
     # import, so changing either without touching a *.test.mjs file can also
     # change what the tests actually verify (#186).
-    test/client/*.test.mjs|src/gleamroom/web.gleam|test/client/harness.mjs|test/client/extract.mjs)
-      CLIENT_TEST_CHANGED=1 ;;
+    src/*.gleam|test/*.gleam|gleam.toml|manifest.toml|test/client/*.test.mjs|test/client/harness.mjs|test/client/extract.mjs)
+      CHECK_TRIGGERED=1 ;;
   esac
 done <<EOF
 $CHANGED_FILES
 EOF
-[ "$GLEAM_CHANGED" -eq 0 ] && [ "$CLIENT_TEST_CHANGED" -eq 0 ] && exit 0
+[ "$CHECK_TRIGGERED" -eq 0 ] && exit 0
 
-FAILED=0
-REPORT=""
-append_report() { REPORT="${REPORT}$1"$'\n'; }
-run_step() {
-  local label="$1"
-  shift
-  local output rc=0
-  echo "→ [stop-hook] $label" >&2
-  output="$("$@" 2>&1)" || rc=$?
-  if [ "$rc" -ne 0 ]; then
-    FAILED=1
-    append_report ""
-    append_report "FAIL: $label (rc=$rc)"
-    append_report "Command: $*"
-    append_report "$output"
-  fi
-}
-
-if ! command -v gleam >/dev/null 2>&1; then
+if ! command -v just >/dev/null 2>&1; then
   {
-    echo "Stop hook: gleam コマンドが見つかりません。検証は実行されていません。"
+    echo "Stop hook: just コマンドが見つかりません。検証は実行されていません。"
     echo "  一時的に回避する場合のみ GLEAM_ROOM_SKIP_STOP_HOOK=1"
   } >&2
   exit 2
 fi
 
-if [ "$GLEAM_CHANGED" -eq 1 ]; then
-  run_step "format" gleam format --check src test
-  run_step "build" gleam build --warnings-as-errors
-  run_step "test" gleam test
-fi
-
-if [ "$CLIENT_TEST_CHANGED" -eq 1 ]; then
-  if command -v node >/dev/null 2>&1; then
-    run_step "client-test" node --test 'test/client/*.test.mjs'
-  else
-    FAILED=1
-    append_report ""
-    append_report "FAIL: client-test (node が見つかりません)"
-  fi
-fi
-
-if [ "$FAILED" -eq 1 ]; then
+echo "→ [stop-hook] just check" >&2
+OUTPUT="$(just check 2>&1)" || {
   {
-    echo "Stop hook: 検証に失敗しました。報告された問題を直してから完了してください。"
+    echo "Stop hook: 検証に失敗しました（just check）。報告された問題を直してから完了してください。"
     echo "  一時的に回避する場合のみ: GLEAM_ROOM_SKIP_STOP_HOOK=1"
-    echo "$REPORT"
+    echo ""
+    echo "$OUTPUT"
   } >&2
   exit 2
-fi
+}
 
 exit 0

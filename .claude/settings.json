@@ -41,7 +41,14 @@
       "Bash(gleam check *)",
       "Bash(gleam deps download)",
       "Bash(gleam clean)",
-      "Bash(node --test 'test/client/*.test.mjs')"
+      "Bash(node --test 'test/client/*.test.mjs')",
+      "Bash(just)",
+      "Bash(just --list)",
+      "Bash(just build)",
+      "Bash(just test)",
+      "Bash(just format)",
+      "Bash(just check)",
+      "Bash(shellcheck .claude/hooks/post-stop-check.sh)"
     ]
   }
 }
