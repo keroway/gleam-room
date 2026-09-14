@@ -332,7 +332,7 @@ fn handle_message(
         0 -> {
           dict.each(state.rooms, fn(key, subject) {
             process.spawn_unlinked(fn() {
-              let ok = case poker.get_state(subject) {
+              let ok = case poker.get_snapshot(subject) {
                 Ok(_) -> True
                 Error(Nil) -> False
               }

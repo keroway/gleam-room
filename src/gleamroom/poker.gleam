@@ -266,6 +266,10 @@ pub type Message {
     reply_to: Subject(PokerEvent),
   )
   GetState(reply_to: Subject(PokerState))
+  /// `GetState` の軽量版。`room.gleam`'s `GetSnapshot` と同じ理由（#497）:
+  /// 生存確認だけが目的の呼び出しに対して、votes dict まで含む `PokerState`
+  /// 全体をコピー・送信するのは非対称なオーバーヘッドになる。
+  GetSnapshot(reply_to: Subject(List(Participant)))
   /// 自分が無人なら終了する。`room.gleam`'s `ShutdownIfEmpty` と同じ理由
   /// （#36 / #91）で、判定と停止を 1 メッセージに閉じてレースを防ぐ。
   ShutdownIfEmpty(reply_to: Subject(Bool))
@@ -344,6 +348,10 @@ fn handle_message(
     }
     GetState(reply_to) -> {
       process.send(reply_to, state.poker)
+      actor.continue(state)
+    }
+    GetSnapshot(reply_to) -> {
+      process.send(reply_to, snapshot(state.poker))
       actor.continue(state)
     }
     SessionDown(pid) ->
@@ -549,6 +557,20 @@ pub fn dispatch(
 /// running poker room actor.
 pub fn get_state(subject: Subject(Message)) -> Result(PokerState, Nil) {
   call.try_call(subject, call.default_timeout, GetState, "poker.get_state")
+}
+
+/// Reads the current participant list from a running poker room actor.
+/// The lightweight counterpart to `get_state`, for callers (health probes)
+/// that only need to confirm liveness (#497).
+pub fn get_snapshot(
+  subject: Subject(Message),
+) -> Result(List(Participant), Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    GetSnapshot,
+    "poker.get_snapshot",
+  )
 }
 
 /// 無人なら poker room を停止させ、停止したかどうかを返す。`room.gleam`'s
