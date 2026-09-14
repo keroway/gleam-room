@@ -55,6 +55,13 @@
 Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が両方 CLOSED になり
 検証できない状態を成功扱いする心配が無くなったため導入した。
 
+`.codex/hooks/post-stop-check.sh` は上記と同種の Stop hook だが、`.codex/` 自体が
+`.gitignore` 対象の個人ローカル層（Codex CLI / pi のローカル生成物と同様）であり、
+このリポジトリの共有状態ではない。したがって `.claude/hooks/post-stop-check.sh` への
+修正は自動的には反映されず、他クローン・他コントリビューター環境にも存在するとは
+限らない。ロジックを揃えたい場合は各自 `.codex/hooks/post-stop-check.sh` を手動で
+同期すること（#337）。
+
 ## 意図的に未導入の設定
 
 - format-on-write hook: formatter の対象範囲が広がるたびに個別リポジトリの都合で
