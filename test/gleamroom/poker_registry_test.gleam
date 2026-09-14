@@ -451,10 +451,11 @@ pub fn health_does_not_refire_probes_while_previous_ones_are_in_flight_test() {
   let assert Ok(_) = poker_registry.health(reg)
 
   // 発火した唯一の probe を受け取り、応答する。
-  let assert Ok(poker.GetState(reply_to)) = process.receive(probe_subject, 200)
-  process.send(reply_to, poker.new_state())
+  let assert Ok(poker.GetSnapshot(reply_to)) =
+    process.receive(probe_subject, 200)
+  process.send(reply_to, [])
 
-  // 再発火していれば追加の GetState が届くはずだが、届かないことを確認する。
+  // 再発火していれば追加の GetSnapshot が届くはずだが、届かないことを確認する。
   assert process.receive(probe_subject, 100) == Error(Nil)
 }
 
