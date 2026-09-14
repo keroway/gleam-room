@@ -38,14 +38,19 @@
 
 - `src/*.gleam` / `test/*.gleam` / `gleam.toml` / `manifest.toml` が変わった場合:
   `gleam format --check src test` → `gleam build --warnings-as-errors` → `gleam test`
+  （bash の `case` パターンは（ファイルグロブと違い）`*` が `/` をまたいでマッチするため、
+  このパターンだけで `src/gleamroom/web.gleam` のようなネストしたファイルも
+  正しく拾える。#499 はこの挙動を誤認した報告で、実際には検知漏れはなかった）
 - `test/client/*.test.mjs` / `src/gleamroom/web.gleam` /
-  `test/client/harness.mjs` / `test/client/extract.mjs` が変わった場合:
+  `src/gleamroom/web_poker.gleam` / `test/client/harness.mjs` /
+  `test/client/extract.mjs` が変わった場合:
   `node --test 'test/client/*.test.mjs'`
-  （web.gleam に埋め込まれたクライアント JS の回帰テスト。Gleam 側からは検証できない。
-  テスト自体を触らなくても web.gleam の変更でテスト対象は変わるため、
-  web.gleam もトリガーに含める（#183）。harness.mjs / extract.mjs はテストが
-  import する共有ハーネスで、単独変更でもテストの検証内容が変わりうるため
-  同様にトリガーに含める（#186））
+  （web.gleam / web_poker.gleam に埋め込まれたクライアント JS の回帰テスト。
+  Gleam 側からは検証できない。テスト自体を触らなくても web.gleam /
+  web_poker.gleam の変更でテスト対象は変わるため、両方をトリガーに含める
+  （web.gleam: #183、web_poker.gleam: #305・#466）。harness.mjs / extract.mjs
+  はテストが import する共有ハーネスで、単独変更でもテストの検証内容が
+  変わりうるため同様にトリガーに含める（#186））
 
 Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が両方 CLOSED になり
 検証できない状態を成功扱いする心配が無くなったため導入した。
