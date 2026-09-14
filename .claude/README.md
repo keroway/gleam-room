@@ -60,8 +60,20 @@ Issue #1（Gleam プロジェクト bootstrap）・Issue #10（CI 整備）が�
 `.gitignore` 対象の個人ローカル層（Codex CLI / pi のローカル生成物と同様）であり、
 このリポジトリの共有状態ではない。したがって `.claude/hooks/post-stop-check.sh` への
 修正は自動的には反映されず、他クローン・他コントリビューター環境にも存在するとは
-限らない。ロジックを揃えたい場合は各自 `.codex/hooks/post-stop-check.sh` を手動で
-同期すること（#337）。
+限らない（#337）。同じ理由で CI の shellcheck（`scandir: ./.claude/hooks`）は
+`.codex/hooks/post-stop-check.sh` を対象にできない（CI の checkout に `.codex/` 自体が
+存在しない）。`scandir` に `./.codex/hooks` を追加しても走査対象が無いだけなので、
+そちらでの解決は避ける（#461）。
+
+Codex を使う場合は、内容を手動コピーして同期し続けるのではなく、
+`.codex/hooks/post-stop-check.sh` を `.claude/hooks/post-stop-check.sh` への
+シンボリックリンクにすること。実体は1つだけになり、CI の shellcheck も
+（`.claude/hooks` 経由で）実質的にカバーする。
+
+```sh
+rm -f .codex/hooks/post-stop-check.sh
+ln -s ../../.claude/hooks/post-stop-check.sh .codex/hooks/post-stop-check.sh
+```
 
 ## justfile / lefthook
 
