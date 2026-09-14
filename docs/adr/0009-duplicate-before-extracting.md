@@ -56,7 +56,8 @@ independently implemented as described above. See
   implementations instead of one implementation plus a guess.
 - Each application's room actor keeps its own supervised failure domain,
   consistent with ADR 0002 and ADR 0008 — no coupling is introduced between
-  the buzzer's and Planning Poker's registries or supervisors.
+  the buzzer's and Planning Poker's registries or supervisors, aside from the
+  narrow `get_default_max_rooms()` dependency noted in the Update above.
 
 ### Negative
 
