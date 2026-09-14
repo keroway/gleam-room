@@ -192,6 +192,31 @@ pub fn ws_continues_after_rate_limited_test() {
   tcp_close(socket)
 }
 
+/// `handle_text` は `frame_size_outcome` を `message_rate_outcome` より先に
+/// 評価する(#501)。レート制限中でも巨大フレームは `rate_limited` ではなく
+/// `frame_too_large` で拒否され、接続が閉じることを実ソケットで検証する。
+/// 修正前はこの経路で `frame_size_outcome` が評価されず、`rate_limited` を
+/// 受け取ったまま接続が生き続けていた。
+pub fn ws_closes_after_frame_too_large_while_rate_limited_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  // `max_messages_per_heartbeat_window` (30) に達するまで送って応答を捨てる。
+  let buffer = send_and_drain_buzz(socket, buffer, 30)
+
+  // 31件目はレート制限に該当する状態だが、巨大フレームなので
+  // `frame_too_large` を受け取り、接続は閉じるはずである。
+  send_raw_text_frame(socket, string.repeat("a", 2049))
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
+
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+
+  tcp_close(socket)
+}
+
 /// `buzz` メッセージを `count` 件送り、応答を1件ずつ読み捨てる。
 fn send_and_drain_buzz(
   socket: TcpSocket,

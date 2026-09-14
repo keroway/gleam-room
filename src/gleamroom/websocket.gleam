@@ -364,31 +364,39 @@ fn handle_text(
   connection: WebsocketConnection,
 ) -> Next(ConnectionState, ConnectionEvent) {
   let state = record_message(state)
-  case message_rate_outcome(state.messages_since_heartbeat) {
-    MessageRateLimited -> {
-      logging.log(logging.Info, "protocol message rejected: code=rate_limited")
-      let #(code, message) = rate_limited_code_and_message
+  // frame_size_outcome must be evaluated before message_rate_outcome: the
+  // frame size limit's purpose is to cap the cost a single oversized frame
+  // can force onto json.parse/broadcast regardless of connection state, so it
+  // must not be short-circuited while a connection is already rate-limited
+  // (#501).
+  case frame_size_outcome(text) {
+    FrameTooLarge -> {
+      logging.log(
+        logging.Info,
+        "protocol message rejected: code=frame_too_large",
+      )
+      let #(code, message) = frame_too_large_code_and_message
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(code, message),
       )
-      mist.continue(state)
+      mist.stop()
     }
-    MessageRateAccepted ->
-      case frame_size_outcome(text) {
-        FrameTooLarge -> {
+    FrameSizeAccepted ->
+      case message_rate_outcome(state.messages_since_heartbeat) {
+        MessageRateLimited -> {
           logging.log(
             logging.Info,
-            "protocol message rejected: code=frame_too_large",
+            "protocol message rejected: code=rate_limited",
           )
-          let #(code, message) = frame_too_large_code_and_message
+          let #(code, message) = rate_limited_code_and_message
           send_server_message(
             connection,
             protocol.ProtocolErrorMessage(code, message),
           )
-          mist.stop()
+          mist.continue(state)
         }
-        FrameSizeAccepted ->
+        MessageRateAccepted ->
           case protocol.decode_client_message(text) {
             Error(error) -> {
               logging.log(
