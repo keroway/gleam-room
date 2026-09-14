@@ -174,10 +174,10 @@ source as "same value, same reason"):
   `poker_websocket.gleam:85-102`).
 - `on_init` heartbeat subject + `send_after` scheduling
   (`websocket.gleam:121-138`, `poker_websocket.gleam:104-124`).
-- `mark_active`/`record_message` (`websocket.gleam:225-235`,
-  `poker_websocket.gleam:197-202`).
+- `mark_active`/`record_message` (`websocket.gleam:236-246`,
+  `poker_websocket.gleam:211-221`).
 - `heartbeat_outcome`/`handle_heartbeat_tick` idle-timeout logic
-  (`websocket.gleam:238-281`, `poker_websocket.gleam:224-238`).
+  (`websocket.gleam:249-292`, `poker_websocket.gleam:224-238`).
 - `max_text_frame_bytes = 2048` and `frame_size_outcome`
   (`websocket.gleam:283-304`, `poker_websocket.gleam:252-263`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
@@ -225,16 +225,16 @@ literals, not Gleam code.
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
   `web_poker.gleam:149-159`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:241-291`, `web_poker.gleam:319-366`).
-- `joinForm` submit handler (`web.gleam:293-310`, `web_poker.gleam:368-385`,
+  (`web.gleam:242-292`, `web_poker.gleam:320-367`).
+- `joinForm` submit handler (`web.gleam:294-311`, `web_poker.gleam:369-386`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:312-318`, `web_poker.gleam:387-395`,
+- `sendIfOpen` (`web.gleam:313-319`, `web_poker.gleam:388-396`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
-  (`web.gleam:206-234`, `web_poker.gleam:274-296`). The poker-only
+  (`web.gleam:207-235`, `web_poker.gleam:275-297`). The poker-only
   `round_already_revealed`/`voter_not_joined` `else if` branch
-  (`web_poker.gleam:297-312`) rolls back the optimistic `ownVote` and is
+  (`web_poker.gleam:298-313`) rolls back the optimistic `ownVote` and is
   **not** part of this duplication — buzzer has no equivalent — so it
   should not be counted when comparing the two files' `error` handling.
 
