@@ -312,39 +312,43 @@ fn handle_message(
           // 失敗は呼び出し側へ返し、registry は動き続ける。
           case state.start_room() {
             Ok(started) -> {
-              logging.log(logging.Info, "room created: id=" <> key)
               let subject = started.data
-              process.send(reply_to, Ok(subject))
               // 監視しておかないと、クラッシュした room の subject が
               // Dict に残り続ける（#39）。
               // link は actor.start が張るので、ここでは pid → 登録時の
               // subject の逆引きを持つ。exit メッセージは pid しか運ばないため。
-              let monitored = case process.subject_owner(subject) {
-                Ok(pid) ->
-                  dict.insert(
-                    state.monitored,
-                    pid,
-                    MonitoredRoom(key:, subject:),
+              //
+              // subject_owner が引けない場合、room を state.rooms に登録すると
+              // 監視表に載らないままクラッシュしたときに RoomDown で回収できず、
+              // その room_id が永久に使用不能になる（#467）。想定外の事態
+              // （BEAM の実装上通常は起きない）なので、追跡できない room は
+              // 起動失敗として扱い registry には一切残さない。
+              case process.subject_owner(subject) {
+                Ok(pid) -> {
+                  logging.log(logging.Info, "room created: id=" <> key)
+                  process.send(reply_to, Ok(subject))
+                  actor.continue(
+                    State(
+                      ..state,
+                      rooms: dict.insert(state.rooms, key, subject),
+                      monitored: dict.insert(
+                        state.monitored,
+                        pid,
+                        MonitoredRoom(key:, subject:),
+                      ),
+                    ),
                   )
-                // 持ち主が引けないのは想定外だが、追跡できないだけで
-                // room 自体は使える。未登録のため #39 の RoomDown 逆引きが
-                // 効かなくなるので、後から追えるようにログだけは残す。
+                }
                 Error(Nil) -> {
                   logging.log(
                     logging.Warning,
-                    "subject_owner failed for started room, room not monitored: id="
+                    "subject_owner failed for started room, treating as start failure: id="
                       <> key,
                   )
-                  state.monitored
+                  process.send(reply_to, Error(Nil))
+                  actor.continue(state)
                 }
               }
-              actor.continue(
-                State(
-                  ..state,
-                  rooms: dict.insert(state.rooms, key, subject),
-                  monitored:,
-                ),
-              )
             }
             Error(reason) -> {
               logging.log(

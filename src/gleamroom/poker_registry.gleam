@@ -212,32 +212,38 @@ fn handle_message(
         Error(Nil) ->
           case state.start_room() {
             Ok(started) -> {
-              logging.log(logging.Info, "poker room created: id=" <> key)
               let subject = started.data
-              process.send(reply_to, Ok(subject))
-              let monitored = case process.subject_owner(subject) {
-                Ok(pid) ->
-                  dict.insert(
-                    state.monitored,
-                    pid,
-                    MonitoredRoom(key:, subject:),
+              // subject_owner が引けない場合、room を state.rooms に登録すると
+              // 監視表に載らないままクラッシュしたときに RoomDown で回収できず、
+              // その room_id が永久に使用不能になる（#467）。想定外の事態
+              // なので、追跡できない room は起動失敗として扱い registry には
+              // 一切残さない（registry.gleam と同じ方針）。
+              case process.subject_owner(subject) {
+                Ok(pid) -> {
+                  logging.log(logging.Info, "poker room created: id=" <> key)
+                  process.send(reply_to, Ok(subject))
+                  actor.continue(
+                    State(
+                      ..state,
+                      rooms: dict.insert(state.rooms, key, subject),
+                      monitored: dict.insert(
+                        state.monitored,
+                        pid,
+                        MonitoredRoom(key:, subject:),
+                      ),
+                    ),
                   )
+                }
                 Error(Nil) -> {
                   logging.log(
                     logging.Warning,
-                    "subject_owner failed for started poker room, room not monitored: id="
+                    "subject_owner failed for started poker room, treating as start failure: id="
                       <> key,
                   )
-                  state.monitored
+                  process.send(reply_to, Error(Nil))
+                  actor.continue(state)
                 }
               }
-              actor.continue(
-                State(
-                  ..state,
-                  rooms: dict.insert(state.rooms, key, subject),
-                  monitored:,
-                ),
-              )
             }
             Error(reason) -> {
               logging.log(
@@ -270,6 +276,7 @@ fn handle_message(
             ),
           )
         }
+        // 既に Release 済みなど、監視表に無い pid は無視する。
         Error(Nil) -> actor.continue(state)
       }
     ParentShutdown -> actor.stop()
