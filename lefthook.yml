@@ -12,5 +12,5 @@ pre-commit:
 
 pre-push:
   jobs:
-    - name: gleam test
-      run: gleam test
+    - name: just check
+      run: just check
