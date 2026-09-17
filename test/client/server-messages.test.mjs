@@ -274,3 +274,26 @@ for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "roo
     }
   });
 }
+
+// already_joined はこの接続が既にroomへ参加済みであることを示すだけで
+// join失敗ではないため、room_full等の join拒否コードとは異なり接続状態・
+// UIを一切変更しない意図的な設計（#553）。
+test("already_joined エラーはログに残るが接続状態・participants描画を変えない", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "already_joined", message: "already joined" }),
+    });
+
+    assert.equal(client.connectionState(), "connected");
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "already_joined で既存の participants 描画が壊れている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
