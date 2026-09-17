@@ -106,6 +106,53 @@ pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
   assert registry_subject_of(started.data, id) == current
 }
 
+/// 唯一の参加者の接続プロセスが死んだとき、room actor が自己終了し、
+/// その終了が実際に registry まで `RoomDown` として伝搬して登録が外れること（#504）。
+///
+/// `room.gleam` の `SessionDown` ハンドラは「無人になったら自分で止まる」
+/// （#91）、「正常停止でも RoomDown が発火することは実際に確かめた」と
+/// コメントしているが、その確認を固定するテストが無かった。
+/// `a_participant_whose_session_dies_is_removed_test`（room_test.gleam）は
+/// 生存者を残す分岐しか通らず、`release_stops_the_room_actor_process_test`
+/// （このファイル）は `Release` からの停止しか検証していない。
+pub fn the_last_participants_session_dying_stops_the_room_via_registry_test() {
+  let assert Ok(started) = registry.start()
+  let id = registry.room_id("room-last-participant-session-down")
+
+  let assert Ok(subject) = registry.lookup(started.data, id)
+  let assert Ok(pid) = process.subject_owner(subject)
+
+  // 別プロセスから唯一の参加者として join させ、そのプロセスを殺す。
+  let doomed = room.participant_id("doomed")
+  let doomed_pid =
+    process.spawn_unlinked(fn() {
+      let doomed_session = process.new_subject()
+      let _ =
+        room.dispatch(subject, room.Join(doomed, "Doomed"), doomed_session)
+      // room 側が監視を張るまで生きている必要がある。
+      process.sleep(500)
+    })
+
+  wait.until(
+    fn() {
+      room.get_snapshot(subject) == Ok([room.Participant(doomed, "Doomed")])
+    },
+    "唯一の参加者が join し終わる",
+  )
+
+  process.kill(doomed_pid)
+
+  // room actor 自身が終了する（SessionDown → 無人判定 → actor.stop()）。
+  wait.until_dead(pid, "唯一の参加者のセッション死亡で room actor が自己終了する")
+
+  // その終了が RoomDown として registry まで伝搬し、登録から外れて
+  // 新しい room actor に置き換わる。
+  wait.until(
+    fn() { registry_subject_of(started.data, id) != subject },
+    "room actor の終了が RoomDown として registry に伝搬する",
+  )
+}
+
 /// Release された room の **actor プロセス自体**が終了すること（#26）。
 ///
 /// registry の Dict から外すだけでは足りない。エントリは消えても BEAM
