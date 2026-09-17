@@ -209,16 +209,11 @@ fn handle_message(
     // Binary frames carry no protocol meaning yet. Unlike a silent ignore,
     // this responds the same way other unrecognized input does (#47), so a
     // client sending binary frames by mistake can tell it was rejected
-    // rather than swallowed.
-    mist.Binary(_data) -> {
-      logging.log(logging.Info, "protocol message rejected: code=binary_frame")
-      let #(code, message) = binary_frame_code_and_message
-      send_server_message(
-        connection,
-        protocol.ProtocolErrorMessage(code, message),
-      )
-      mist.continue(mark_active(state))
-    }
+    // rather than swallowed. They still go through the same frame size
+    // (#126) and message rate (#156) accounting as text frames, otherwise a
+    // connection sending binary frames instead of text bypasses both limits
+    // entirely (#500).
+    mist.Binary(data) -> handle_binary(mark_active(state), data, connection)
     mist.Custom(RoomBroadcast(event)) -> {
       case room_event_to_server_message(event) {
         Some(server_message) -> send_server_message(connection, server_message)
@@ -308,7 +303,13 @@ pub type FrameSizeOutcome {
 /// Pure and thus testable without a live `WebsocketConnection`, like
 /// `heartbeat_outcome` above.
 pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
-  case string.byte_size(text) > max_text_frame_bytes {
+  frame_size_outcome_for_byte_size(string.byte_size(text))
+}
+
+/// `frame_size_outcome`'s byte-size check, shared with `handle_binary` which
+/// has no `String` to measure via `string.byte_size` (#500).
+fn frame_size_outcome_for_byte_size(size: Int) -> FrameSizeOutcome {
+  case size > max_text_frame_bytes {
     True -> FrameTooLarge
     False -> FrameSizeAccepted
   }
@@ -414,6 +415,60 @@ fn handle_text(
             Ok(protocol.Buzz) -> handle_buzz(state, connection)
             Ok(protocol.Reset) -> handle_reset(state, connection)
           }
+      }
+  }
+}
+
+/// Applies the same frame size (#126) and message rate (#156) accounting as
+/// `handle_text` to a binary frame, then rejects it as `binary_frame` once
+/// both checks pass. Mirrors `handle_text`'s structure and evaluation order
+/// (frame size before message rate, #501) so a connection cannot dodge either
+/// limit by sending binary frames instead of text (#500).
+fn handle_binary(
+  state: ConnectionState,
+  data: BitArray,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let state = record_message(state)
+  case frame_size_outcome_for_byte_size(bit_array.byte_size(data)) {
+    FrameTooLarge -> {
+      logging.log(
+        logging.Info,
+        "protocol message rejected: code=frame_too_large",
+      )
+      let #(code, message) = frame_too_large_code_and_message
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(code, message),
+      )
+      mist.stop()
+    }
+    FrameSizeAccepted ->
+      case message_rate_outcome(state.messages_since_heartbeat) {
+        MessageRateLimited -> {
+          logging.log(
+            logging.Info,
+            "protocol message rejected: code=rate_limited",
+          )
+          let #(code, message) = rate_limited_code_and_message
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(code, message),
+          )
+          mist.continue(state)
+        }
+        MessageRateAccepted -> {
+          logging.log(
+            logging.Info,
+            "protocol message rejected: code=binary_frame",
+          )
+          let #(code, message) = binary_frame_code_and_message
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(code, message),
+          )
+          mist.continue(state)
+        }
       }
   }
 }

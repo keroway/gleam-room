@@ -215,6 +215,57 @@ pub fn poker_ws_closes_after_frame_too_large_while_rate_limited_test() {
   tcp_close(socket)
 }
 
+/// `websocket_integration_test.gleam`'s
+/// `ws_closes_after_binary_frame_too_large_test` と同じ検証を `/poker/ws`
+/// 側の配線に対して行う(#500)。
+pub fn poker_ws_closes_after_binary_frame_too_large_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_raw_binary_frame(socket, bit_array.from_string(string.repeat("a", 2049)))
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
+
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+
+  tcp_close(socket)
+}
+
+/// `websocket_integration_test.gleam`'s
+/// `ws_binary_frames_count_toward_rate_limit_test` と同じ検証を
+/// `/poker/ws` 側の配線に対して行う(#500)。
+pub fn poker_ws_binary_frames_count_toward_rate_limit_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  let buffer = send_and_drain_binary(socket, buffer, 30)
+
+  send_raw_binary_frame(socket, bit_array.from_string("x"))
+  let #(rate_limited_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(rate_limited_reply, "\"type\":\"error\"")
+  assert string.contains(rate_limited_reply, "\"code\":\"rate_limited\"")
+
+  tcp_close(socket)
+}
+
+/// バイナリフレームを `count` 件送り、応答を1件ずつ読み捨てる。
+fn send_and_drain_binary(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      send_raw_binary_frame(socket, bit_array.from_string("x"))
+      let #(_reply, buffer) = recv_text_message(socket, buffer)
+      send_and_drain_binary(socket, buffer, count - 1)
+    }
+  }
+}
+
 /// `reveal` メッセージを `count` 件送り、応答を1件ずつ読み捨てる。
 fn send_and_drain_reveal(
   socket: TcpSocket,
@@ -346,6 +397,15 @@ fn recv_close_frame(socket: TcpSocket, buffer: BitArray) -> BitArray {
 fn send_raw_text_frame(socket: TcpSocket, text: String) -> Nil {
   let mask = crypto.strong_random_bytes(4)
   let frame = ws.encode_text_frame(text, None, Some(mask))
+  let assert Ok(Nil) = tcp_send(socket, bytes_tree.to_bit_array(frame))
+  Nil
+}
+
+/// `send_raw_text_frame` と同じ理由・実装だが、`mist.Binary` 分岐を通す
+/// バイナリフレームを送る(#500)。
+fn send_raw_binary_frame(socket: TcpSocket, data: BitArray) -> Nil {
+  let mask = crypto.strong_random_bytes(4)
+  let frame = ws.encode_binary_frame(data, None, Some(mask))
   let assert Ok(Nil) = tcp_send(socket, bytes_tree.to_bit_array(frame))
   Nil
 }

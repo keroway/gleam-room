@@ -182,18 +182,9 @@ fn handle_message(
 ) -> Next(ConnectionState, ConnectionEvent) {
   case message {
     mist.Text(text) -> handle_text(mark_active(state), text, connection)
-    mist.Binary(_data) -> {
-      logging.log(
-        logging.Info,
-        "poker protocol message rejected: code=binary_frame",
-      )
-      let #(code, message) = binary_frame_code_and_message
-      send_server_message(
-        connection,
-        poker_protocol.ProtocolErrorMessage(code, message),
-      )
-      mist.continue(mark_active(state))
-    }
+    // `websocket.gleam`'s `mist.Binary` branch と同じ理由・実装（#500）:
+    // フレームサイズ・メッセージレートの計上をテキストフレームと揃える。
+    mist.Binary(data) -> handle_binary(mark_active(state), data, connection)
     mist.Custom(RoomBroadcast(event)) -> {
       case room_event_to_server_message(event) {
         Some(server_message) -> send_server_message(connection, server_message)
@@ -274,7 +265,12 @@ pub type FrameSizeOutcome {
 
 /// `websocket.gleam`'s `frame_size_outcome` と同じ理由・実装。
 pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
-  case string.byte_size(text) > max_text_frame_bytes {
+  frame_size_outcome_for_byte_size(string.byte_size(text))
+}
+
+/// `websocket.gleam`'s `frame_size_outcome_for_byte_size` と同じ理由・実装（#500）。
+fn frame_size_outcome_for_byte_size(size: Int) -> FrameSizeOutcome {
+  case size > max_text_frame_bytes {
     True -> FrameTooLarge
     False -> FrameSizeAccepted
   }
@@ -366,6 +362,56 @@ fn handle_text(
             Ok(poker_protocol.Reveal) -> handle_reveal(state, connection)
             Ok(poker_protocol.Reset) -> handle_reset(state, connection)
           }
+      }
+  }
+}
+
+/// `websocket.gleam`'s `handle_binary` と同じ理由・実装（#500）。
+fn handle_binary(
+  state: ConnectionState,
+  data: BitArray,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let state = record_message(state)
+  case frame_size_outcome_for_byte_size(bit_array.byte_size(data)) {
+    FrameTooLarge -> {
+      logging.log(
+        logging.Info,
+        "poker protocol message rejected: code=frame_too_large",
+      )
+      let #(code, message) = frame_too_large_code_and_message
+      send_server_message(
+        connection,
+        poker_protocol.ProtocolErrorMessage(code, message),
+      )
+      mist.stop()
+    }
+    FrameSizeAccepted ->
+      case message_rate_outcome(state.messages_since_heartbeat) {
+        MessageRateLimited -> {
+          logging.log(
+            logging.Info,
+            "poker protocol message rejected: code=rate_limited",
+          )
+          let #(code, message) = rate_limited_code_and_message
+          send_server_message(
+            connection,
+            poker_protocol.ProtocolErrorMessage(code, message),
+          )
+          mist.continue(state)
+        }
+        MessageRateAccepted -> {
+          logging.log(
+            logging.Info,
+            "poker protocol message rejected: code=binary_frame",
+          )
+          let #(code, message) = binary_frame_code_and_message
+          send_server_message(
+            connection,
+            poker_protocol.ProtocolErrorMessage(code, message),
+          )
+          mist.continue(state)
+        }
       }
   }
 }
