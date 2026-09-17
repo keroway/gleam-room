@@ -504,6 +504,15 @@ fn handle_join(
               fallback_state_after_get_state_timeout()
             }
           }
+          // Revealed中のjoinはdocs/planning-poker.mdのReconnect節が約束する
+          // とおり、他参加者が RoundRevealed で受け取ったのと同じ投票値を
+          // 受け取る（#407）。Voting中は常に空のまま(has_voted のみが真)。
+          let votes = case poker_state.phase {
+            poker.Revealed ->
+              poker.revealed_votes(poker_state)
+              |> list.map(to_wire_revealed_vote)
+            poker.Voting -> []
+          }
           send_server_message(
             connection,
             poker_protocol.State(
@@ -515,6 +524,7 @@ fn handle_join(
                     poker.has_voted(poker_state, p.id),
                   )
                 }),
+              votes: votes,
             ),
           )
           let next_state =

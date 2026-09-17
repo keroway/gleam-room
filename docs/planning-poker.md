@@ -112,7 +112,8 @@ The vote card set for the MVP is a fixed enumeration:
 Server messages:
 
 ```json
-{"type":"state","phase":"voting","participants":[{"participant_id":"...","display_name":"Alice","has_voted":true}]}
+{"type":"state","phase":"voting","participants":[{"participant_id":"...","display_name":"Alice","has_voted":true}],"votes":[]}
+{"type":"state","phase":"revealed","participants":[{"participant_id":"...","display_name":"Alice","has_voted":true}],"votes":[{"participant_id":"...","display_name":"Alice","value":"5"}]}
 {"type":"participant_joined","participant":{"participant_id":"...","display_name":"Alice","has_voted":false}}
 {"type":"participant_left","participant_id":"..."}
 {"type":"vote_registered","participant_id":"..."}
@@ -125,7 +126,11 @@ Note the deliberate asymmetry: `vote_registered` carries only
 `participant_id` (presence of a vote, not its value); `revealed` carries
 every participant's `value`, including participants who never voted
 (represented with an explicit `null` value rather than omitted from the
-list).
+list). `state`'s `votes` field is always `[]` while `phase` is `"voting"`
+(pre-reveal, only `has_voted` on each participant is visible); once `phase`
+is `"revealed"`, `votes` carries the same list a `revealed` message would,
+so a participant who joins after reveal sees the same result everyone else
+already has (#407).
 
 Error codes reuse the buzzer's shared codes where the underlying condition is
 identical, and add phase-specific ones:

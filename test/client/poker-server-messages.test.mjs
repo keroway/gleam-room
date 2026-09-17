@@ -10,12 +10,12 @@ import { startClient } from "./harness.mjs";
 
 const POKER_MODULE = { modulePath: "src/gleamroom/web_poker.gleam", functionName: "poker_html" };
 
-function joinAndConnect(client, participants = [], phase = "voting") {
+function joinAndConnect(client, participants = [], phase = "voting", votes = []) {
   client.submitJoin();
   const socket = client.latestSocket();
   socket.handlers.open?.();
   socket.handlers.message?.({
-    data: JSON.stringify({ type: "state", phase, participants }),
+    data: JSON.stringify({ type: "state", phase, participants, votes }),
   });
   return socket;
 }
@@ -202,6 +202,52 @@ test("revealed で未投票者(value: null)は votes 要素に (no vote) とし�
       client.childTextContents("votes"),
       ["Alice: 5", "Carol: (no vote)"],
       "未投票者の value: null が (no vote) として votes 要素に描画されていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("Revealed中にjoinしたclientは、state.votesから他参加者の確定済み投票値を受け取る（#407）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    joinAndConnect(
+      client,
+      [
+        { participant_id: "p1", display_name: "Alice", has_voted: true },
+        { participant_id: "p2", display_name: "Carol", has_voted: false },
+      ],
+      "revealed",
+      [
+        { participant_id: "p1", display_name: "Alice", value: "5" },
+        { participant_id: "p2", display_name: "Carol", value: null },
+      ],
+    );
+
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      ["Alice: 5", "Carol: (no vote)"],
+      "Revealed中にjoinした直後、state.votesの投票値がvotes要素に描画されていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("Voting中にjoinしたclientのvotesは常に空(has_votedのみが真)", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    joinAndConnect(
+      client,
+      [{ participant_id: "p1", display_name: "Alice", has_voted: true }],
+      "voting",
+      [],
+    );
+
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      [],
+      "Voting中のjoinでvotes要素に何か描画されている",
     );
   } finally {
     client.dispose();

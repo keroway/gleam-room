@@ -82,6 +82,61 @@ pub fn poker_ws_roundtrip_join_vote_reveal_reset_test() {
   tcp_close(socket)
 }
 
+/// `docs/planning-poker.md` の Reconnect 節が約束するとおり、Revealed 中に
+/// 新規 join した参加者は他参加者が `revealed` イベントで受け取ったのと
+/// 同じ投票値を `state.votes` から受け取る（#407）。
+pub fn poker_ws_join_during_revealed_receives_votes_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(alice_socket, alice_buffer) = handshake(port, 50)
+
+  send_client_message(
+    alice_socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(_join_reply, alice_buffer) =
+    recv_text_message(alice_socket, alice_buffer)
+
+  send_client_message(
+    alice_socket,
+    json.object([#("type", json.string("vote")), #("value", json.string("5"))]),
+  )
+  let #(_vote_reply, alice_buffer) =
+    recv_text_message(alice_socket, alice_buffer)
+  let #(_vote_echo, alice_buffer) =
+    recv_text_message(alice_socket, alice_buffer)
+
+  send_client_message(
+    alice_socket,
+    json.object([#("type", json.string("reveal"))]),
+  )
+  let #(_reveal_reply, alice_buffer) =
+    recv_text_message(alice_socket, alice_buffer)
+  let #(_reveal_echo, _alice_buffer) =
+    recv_text_message(alice_socket, alice_buffer)
+
+  // Bob が Revealed 中に新規 join する。
+  let #(bob_socket, bob_buffer) = handshake(port, 50)
+  send_client_message(
+    bob_socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Bob")),
+    ]),
+  )
+  let #(bob_join_reply, _bob_buffer) = recv_text_message(bob_socket, bob_buffer)
+  assert string.contains(bob_join_reply, "\"phase\":\"revealed\"")
+  assert string.contains(bob_join_reply, "\"display_name\":\"Alice\"")
+  assert string.contains(bob_join_reply, "\"value\":\"5\"")
+
+  tcp_close(alice_socket)
+  tcp_close(bob_socket)
+}
+
 /// poker room actor が join 後に死ぬと、接続は再 join できるようになる
 /// （`websocket_integration_test.gleam`'s `ws_rejoins_after_room_actor_dies_test`
 /// と同じ理由、#100）。

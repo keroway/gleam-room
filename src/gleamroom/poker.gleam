@@ -221,17 +221,25 @@ fn apply_vote(
 /// request naturally returns the same result without any extra branching.
 fn apply_reveal(state: PokerState) -> #(PokerState, PokerEvent) {
   let next = PokerState(..state, phase: Revealed)
-  let votes =
-    state.participants
-    |> list.reverse
-    |> list.map(fn(participant) {
-      RevealedVote(
-        participant.id,
-        participant.display_name,
-        dict.get(state.votes, participant.id) |> option.from_result,
-      )
-    })
-  #(next, RoundRevealed(votes))
+  #(next, RoundRevealed(revealed_votes(next)))
+}
+
+/// The revealed-vote list for the current state's participants, in
+/// snapshot order (oldest joined first). Meaningful only once
+/// `state.phase` is `Revealed`; used both to build the `RoundRevealed`
+/// event and to answer a `state` snapshot for a participant who joins
+/// after reveal (#407), so both delivery paths compute the same list the
+/// same way.
+pub fn revealed_votes(state: PokerState) -> List(RevealedVote) {
+  state.participants
+  |> list.reverse
+  |> list.map(fn(participant) {
+    RevealedVote(
+      participant.id,
+      participant.display_name,
+      dict.get(state.votes, participant.id) |> option.from_result,
+    )
+  })
 }
 
 fn apply_reset_round(state: PokerState) -> #(PokerState, PokerEvent) {

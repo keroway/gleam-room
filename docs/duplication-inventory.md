@@ -109,14 +109,14 @@ Duplicated infrastructure (not domain state machine):
 
 - `sessions: Dict(process.Pid, List(#(String, process.Monitor)))` and the
   `select_monitors`-based `SessionDown` wiring in `start`
-  (`room.gleam:277-308`, `poker.gleam:304-329`).
+  (`room.gleam:277-308`, `poker.gleam:312-337`).
 - `update_sessions` (register monitor on `ParticipantJoined`, demonitor +
-  remove on `ParticipantLeft`) (`room.gleam:437-498`, `poker.gleam:420-473`).
-- `broadcast_all` (`room.gleam:501-508`, `poker.gleam:476-483`).
-- `SessionDown` handler (`room.gleam:351-412`, `poker.gleam:357-403`) and
-  `ShutdownIfEmpty` handler (`room.gleam:413-424`, `poker.gleam:404-414`).
+  remove on `ParticipantLeft`) (`room.gleam:437-498`, `poker.gleam:428-481`).
+- `broadcast_all` (`room.gleam:501-508`, `poker.gleam:484-491`).
+- `SessionDown` handler (`room.gleam:351-412`, `poker.gleam:365-411`) and
+  `ShutdownIfEmpty` handler (`room.gleam:413-424`, `poker.gleam:412-422`).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
-  `call.try_call` (`room.gleam:572-619`, `poker.gleam:543-590`).
+  `call.try_call` (`room.gleam:572-619`, `poker.gleam:551-598`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
   (`room.gleam:109-140`, `poker.gleam:144-174`); `is_valid_display_name` is
@@ -172,16 +172,16 @@ Investigated (2026-09-17, #406):
 - `RoomId`/`ParticipantId` opaque types and accessors
   (`protocol.gleam:11-31`, `poker_protocol.gleam:14-34`).
 - `max_field_length = 64` and `is_valid_field` (trim, 1-64 char/byte check)
-  (`protocol.gleam:98-101,135-139`, `poker_protocol.gleam:187,224-228`).
+  (`protocol.gleam:98-101,135-139`, `poker_protocol.gleam:198,235-239`).
 - `validate_join` (room_id-first error precedence)
-  (`protocol.gleam:116-133`, `poker_protocol.gleam:205-222`, including the
+  (`protocol.gleam:116-133`, `poker_protocol.gleam:216-233`, including the
   comment).
 - `decode_client_message`'s `json.UnableToDecode`/error branching shape and
-  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:149-172`
+  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:160-183`
   for `decode_client_message`; `ProtocolError` itself is a separate range on
-  the `poker_protocol.gleam` side, `poker_protocol.gleam:132-136`).
+  the `poker_protocol.gleam` side, `poker_protocol.gleam:143-147`).
 - `encode_server_message`'s json-to-string skeleton
-  (`protocol.gleam:141-146`, `poker_protocol.gleam:241-246`).
+  (`protocol.gleam:141-146`, `poker_protocol.gleam:252-256`).
 
 This is pure string validation with no domain knowledge attached, which
 makes it the lowest-risk extraction candidate alongside the registry layer.
@@ -214,10 +214,10 @@ source as "same value, same reason"):
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:333-360`, `poker_websocket.gleam:286-308`).
 - `connection_tag` (PID-based log identifier) (`websocket.gleam:1037-1039`,
-  `poker_websocket.gleam:1018-1020`, byte-identical).
+  `poker_websocket.gleam:1028-1030`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
   the same "don't leak the PID" rationale comment) (`websocket.gleam:1057-1060`,
-  `poker_websocket.gleam:1023-1026`, byte-identical).
+  `poker_websocket.gleam:1033-1036`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -226,9 +226,9 @@ beyond moving code.
 Judgment-deferred, larger-scope duplication:
 
 - `release_room` (`websocket.gleam:757-772`,
-  `poker_websocket.gleam:730-748`) and the `with_room`/`with_join_reply`/
+  `poker_websocket.gleam:740-758`) and the `with_room`/`with_join_reply`/
   `with_room_reply` family (`websocket.gleam:798-911`,
-  `poker_websocket.gleam:767-847`) — these encode "how to talk to a room
+  `poker_websocket.gleam:777-857`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,

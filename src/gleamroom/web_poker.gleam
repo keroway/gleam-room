@@ -225,7 +225,10 @@ pub fn poker_html() -> String {
         participants = new Map(
           message.participants.map((p) => [p.participant_id, p]),
         );
-        votes = [];
+        // Revealed中にjoinした場合、他参加者が revealed イベントで受け取った
+        // のと同じ投票値を state.votes から受け取る(#407)。Voting中は常に
+        // 空配列で届く。
+        votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
         setConnected(true);
         renderParticipants();
