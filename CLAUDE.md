@@ -4,7 +4,7 @@
 
 This repository explores real-time multi-user applications using Gleam and the BEAM actor model.
 
-The first application is a multiplayer buzzer quiz. The long-term goal is to extract reusable room/session primitives from concrete applications after repeated patterns have been validated.
+The first application is a multiplayer buzzer quiz. The second, Planning Poker, is also implemented (see [`docs/planning-poker.md`](docs/planning-poker.md)). The long-term goal is to extract reusable room/session primitives from concrete applications after repeated patterns have been validated.
 
 ## Core principles
 
@@ -18,6 +18,9 @@ The first application is a multiplayer buzzer quiz. The long-term goal is to ext
 - Separate transport concerns from domain logic.
 
 ## MVP scope
+
+This scope describes the first application (buzzer). Planning Poker, the
+second application, has its own scope in [`docs/planning-poker.md`](docs/planning-poker.md).
 
 The MVP must support:
 
@@ -108,4 +111,4 @@ Do not combine unrelated issues in one PR unless explicitly requested.
 
 ## Generalization rule
 
-Do not create a generic room framework from the buzzer application alone. Reusable abstractions should be extracted only after at least one additional application (for example Planning Poker) demonstrates the same requirements.
+Do not create a generic room framework from the buzzer application alone. Reusable abstractions should be extracted only after at least one additional application demonstrates the same requirements. Planning Poker is now that second application, but no generalized room framework has been extracted yet — evaluate that separately, on its own merits.
