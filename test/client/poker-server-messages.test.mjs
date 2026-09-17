@@ -45,6 +45,30 @@ test("participant_joined は participants に追加されログに残る", () =>
   }
 });
 
+test("handleServerMessage内で例外が発生すると、握り潰さずerrの内容をログに残す（#552）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+
+    // participant_joined は message.participant.participant_id を無条件に
+    // 参照するため、participant フィールド欠落は TypeError を投げる。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_joined" }),
+    });
+
+    const failureLog = client.logs.find((line) =>
+      line.includes("failed to handle server message"),
+    );
+    assert.ok(failureLog, "ハンドリング失敗ログが残っていない");
+    assert.ok(
+      /Cannot read propert/.test(failureLog),
+      `err の内容がログに含まれていない: ${failureLog}`,
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("participant_left はログに残る", () => {
   const client = startClient(POKER_MODULE);
   try {
