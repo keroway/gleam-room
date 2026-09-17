@@ -93,6 +93,50 @@ pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
   assert registry_subject_of(started.data, id) == current
 }
 
+/// 唯一の参加者の接続プロセスが死んだとき、poker room actor が自己終了し、
+/// その終了が実際に registry まで `RoomDown` として伝搬して登録が外れること（#504）。
+///
+/// `poker.gleam` の `SessionDown` ハンドラは `room.gleam` と同じ「無人になったら
+/// 自分で止まる」「正常停止でも RoomDown が発火することは実際に確かめた」という
+/// 前提に立っているが、その確認を固定するテストが無かった。
+pub fn the_last_participants_session_dying_stops_the_room_via_registry_test() {
+  let assert Ok(started) = poker_registry.start()
+  let id = poker_registry.room_id("room-last-participant-session-down")
+
+  let assert Ok(subject) = poker_registry.lookup(started.data, id)
+  let assert Ok(pid) = process.subject_owner(subject)
+
+  // 別プロセスから唯一の参加者として join させ、そのプロセスを殺す。
+  let doomed = poker.participant_id("doomed")
+  let doomed_pid =
+    process.spawn_unlinked(fn() {
+      let doomed_session = process.new_subject()
+      let _ =
+        poker.dispatch(subject, poker.Join(doomed, "Doomed"), doomed_session)
+      // room 側が監視を張るまで生きている必要がある。
+      process.sleep(500)
+    })
+
+  wait.until(
+    fn() {
+      poker.get_snapshot(subject) == Ok([poker.Participant(doomed, "Doomed")])
+    },
+    "唯一の参加者が join し終わる",
+  )
+
+  process.kill(doomed_pid)
+
+  // room actor 自身が終了する（SessionDown → 無人判定 → actor.stop()）。
+  wait.until_dead(pid, "唯一の参加者のセッション死亡で room actor が自己終了する")
+
+  // その終了が RoomDown として registry まで伝搬し、登録から外れて
+  // 新しい room actor に置き換わる。
+  wait.until(
+    fn() { registry_subject_of(started.data, id) != subject },
+    "room actor の終了が RoomDown として registry に伝搬する",
+  )
+}
+
 pub fn release_stops_the_room_actor_process_test() {
   let assert Ok(started) = poker_registry.start()
   let id = poker_registry.room_id("room-release-stops")
