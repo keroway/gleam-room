@@ -50,7 +50,7 @@ pub type Message {
   /// `Health` と同じ理由（#93, #138, #285）: `/health` が poker registry
   /// の停止・詰まりを検知できていなかった穴を塞ぐ。
   Health(reply_to: Subject(HealthSnapshot))
-  /// room 1 件分の probe（`poker.get_state`）の結果。`registry.gleam`'s
+  /// room 1 件分の probe（`poker.get_snapshot`）の結果。`registry.gleam`'s
   /// `RoomProbed` と同じ理由（#138）。probe 発火時点の `subject` を運び、
   /// 応答時に `dict.get(state.rooms, key)` の現在値と一致するかを確かめる
   /// （#471）。一致確認が無いと、probe 発火後に同じ key で room が
