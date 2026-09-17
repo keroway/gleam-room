@@ -3,7 +3,6 @@ import gleam/erlang/process
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
-import gleam/result
 import gleam/string
 import gleamroom/poker
 import gleamroom/wait
@@ -250,13 +249,11 @@ fn fill_room(count: Int) -> poker.PokerState {
   }
 }
 
-/// `poker.get_state` を経由した participants の読み出し。`room.gleam` の
-/// `get_snapshot` に相当する専用メッセージを poker actor は持たないため、
-/// テスト側でラップする（poker.gleam を変更しない範囲で完結させる）。
+/// `room_test.gleam` の `room.get_snapshot` 呼び出しに揃えた薄いラッパー。
 fn snapshot_of(
   subject: process.Subject(poker.Message),
 ) -> Result(List(poker.Participant), Nil) {
-  poker.get_state(subject) |> result.map(poker.snapshot)
+  poker.get_snapshot(subject)
 }
 
 pub fn independent_poker_room_actors_do_not_share_state_test() {
