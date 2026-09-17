@@ -140,6 +140,31 @@ To resolve before committing to an approach:
 - Estimate the actual line count this would remove (roughly 100 lines per
   module today) against the design cost of the injected conversion.
 
+Investigated (2026-09-17, #406):
+
+- **No drift found.** Every session-lifecycle-related fix in git/issue
+  history landed in both files in the same commit: the ghost-participant
+  rejoin fix (#507, commit `7a874a5`) and the `SessionDown` `Error(Nil)`
+  debug-log fix (#492, commit `18ffb10`) both touched `room.gleam` and
+  `poker.gleam` together. No case was found where a session-lifecycle
+  change landed in one room type without the corresponding update in the
+  other. `room.gleam`-only commits in this area either predate
+  `poker.gleam`'s creation (#287/#288, 2026-08-26) or are buzzer-domain-only
+  changes with no poker equivalent to drift against (e.g. `GetState`/#240's
+  atomic buzz-snapshot read, `GetBuzzSnapshot` removal/#362).
+- **LOC estimate was off.** Summing the cited ranges above gives ~256 lines
+  in `room.gleam` and ~225 lines in `poker.gleam`, not the "roughly 100
+  lines per module" this section previously estimated (~2.5x understated).
+- **Conclusion: stays 判断保留.** The absence of drift so far is evidence
+  the duplication hasn't caused a *maintenance* problem yet, but it doesn't
+  change the design cost argument above (a generic session-lifecycle module
+  still needs an injected `event -> Option(JoinedOrLeft)` conversion that
+  weakens Gleam's `case` exhaustiveness guarantee for future event
+  variants). The corrected, larger LOC count is a data point in favor of
+  extracting if/when someone does a dedicated design spike for the
+  conversion-function approach, but on its own it doesn't resolve the
+  question this section defers.
+
 ### 1.4 Wire protocol boundary — `protocol.gleam` vs `poker_protocol.gleam`
 
 **抽出すべき（部分的）**, for the parts listed below only.
