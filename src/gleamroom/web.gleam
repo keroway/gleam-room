@@ -271,7 +271,7 @@ pub fn index_html() -> String {
       try {
         handleServerMessage(message);
       } catch (err) {
-        log(`failed to handle server message: ${event.data}`);
+        log(`failed to handle server message: ${event.data} (${err?.message ?? err})`);
       }
     });
 
