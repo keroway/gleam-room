@@ -122,12 +122,12 @@ fn validate_join(
     False, _ ->
       Error(ProtocolError(
         code: "invalid_room_id",
-        message: "room_id must be 1-64 characters after trimming whitespace.",
+        message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
       ))
     True, False ->
       Error(ProtocolError(
         code: "invalid_display_name",
-        message: "display_name must be 1-64 characters after trimming whitespace.",
+        message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
       ))
   }
 }

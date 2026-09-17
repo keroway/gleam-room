@@ -137,6 +137,40 @@ for (const [roomId, displayName] of [
   });
 }
 
+// maxlength="64" は UTF-16 コード単位でのみ制限するが、サーバの
+// is_valid_field は UTF-8 バイト数(<=64)も要求する。マルチバイト文字は
+// maxlength を満たしても超過しうるため、送信前にクライアント側でも検知する
+// 回帰テスト（#549）。
+test("display nameがUTF-8で64バイトを超えると接続を試みずログに理由を出す", () => {
+  const client = startClient();
+  try {
+    // 23文字(maxlength=64は満たす) * UTF-8で1文字3バイト = 69バイト(>64)。
+    const displayName = "あ".repeat(23);
+    client.submitJoin("ROOM1", displayName);
+
+    assert.equal(client.sockets.length, 0, "64バイト超過の入力で接続を試みてはいけない");
+    assert.ok(
+      client.logs.some((line) => line.includes("64バイト以内")),
+      "バイト数超過の理由がログに出ていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("display nameがUTF-8で64バイト以内なら通常どおり接続を試みる", () => {
+  const client = startClient();
+  try {
+    // 21文字 * 3バイト = 63バイト(<=64)。
+    const displayName = "あ".repeat(21);
+    client.submitJoin("ROOM1", displayName);
+
+    assert.equal(client.sockets.length, 1, "64バイト以内の入力で接続を試みていない");
+  } finally {
+    client.dispose();
+  }
+});
+
 // socket確立中(open〜state受信前)の二重submitが無音で握りつぶされる問題の
 // 回帰テスト（#458）。
 test("socket確立中の二重submitはログを残して新規接続を開始しない", () => {

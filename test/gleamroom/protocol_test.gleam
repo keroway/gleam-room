@@ -39,7 +39,7 @@ pub fn decode_join_empty_display_name_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_display_name",
-      message: "display_name must be 1-64 characters after trimming whitespace.",
+      message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -59,7 +59,7 @@ pub fn decode_join_empty_room_id_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_room_id",
-      message: "room_id must be 1-64 characters after trimming whitespace.",
+      message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -69,7 +69,7 @@ pub fn decode_join_whitespace_only_display_name_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_display_name",
-      message: "display_name must be 1-64 characters after trimming whitespace.",
+      message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -80,7 +80,7 @@ pub fn decode_join_whitespace_only_room_id_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_room_id",
-      message: "room_id must be 1-64 characters after trimming whitespace.",
+      message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -90,7 +90,7 @@ pub fn decode_join_both_fields_empty_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_room_id",
-      message: "room_id must be 1-64 characters after trimming whitespace.",
+      message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -120,7 +120,7 @@ pub fn decode_join_display_name_over_max_length_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_display_name",
-      message: "display_name must be 1-64 characters after trimming whitespace.",
+      message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -134,7 +134,7 @@ pub fn decode_join_room_id_over_max_length_test() {
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_room_id",
-      message: "room_id must be 1-64 characters after trimming whitespace.",
+      message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 
@@ -161,7 +161,7 @@ pub fn decode_join_display_name_multibyte_within_grapheme_limit_but_over_byte_li
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
       code: "invalid_display_name",
-      message: "display_name must be 1-64 characters after trimming whitespace.",
+      message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
     ))
 }
 

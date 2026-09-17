@@ -257,9 +257,9 @@ literals, not Gleam code.
   `web_poker.gleam:150-160`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
   (`web.gleam:242-292`, `web_poker.gleam:320-367`).
-- `joinForm` submit handler (`web.gleam:294-311`, `web_poker.gleam:369-386`,
+- `joinForm` submit handler (`web.gleam:294-318`, `web_poker.gleam:372-396`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:313-319`, `web_poker.gleam:388-396`,
+- `sendIfOpen` (`web.gleam:324-330`, `web_poker.gleam:402-410`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
