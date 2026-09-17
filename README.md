@@ -78,6 +78,13 @@ gleam run     # start the HTTP server (default port 4000, override with PORT)
 node --test 'test/client/*.test.mjs'  # browser client behavior tests (reconnect, join UI, server messages, ...)
 ```
 
+This repo also has a `justfile` (`just --list` for the full recipe list). `just
+check` runs the same sequence as CI in one command (format check, build with
+warnings as errors, unit tests, client JS tests, and more) — prefer it over
+running the commands above individually. `lefthook install` enables local git
+hooks (`lefthook.yml`): a fast pre-commit check on staged files, and a
+pre-push hook that runs `just check`.
+
 Once running, `GET http://localhost:4000/health` asks **both** the buzzer and
 poker room registries whether they are responsive:
 
