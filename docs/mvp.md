@@ -132,12 +132,11 @@ Do not treat these examples as a reason to expose untyped maps throughout the co
 
 ## Health check
 
-`GET /health` reports whether the buzzer room registry (and, once Planning
-Poker is running alongside it, the poker room registry) are responsive. It
-returns `200 ok buzzer_rooms=<n> buzzer_stuck=<n> poker_rooms=<n>
-poker_stuck=<n>` when both answer, or `503` with a per-registry reason
-(`buzzer: ...` / `poker: ...`) when either does not. See README.md for the
-full response table.
+`GET /health` reports whether the buzzer room registry and the poker room
+registry are responsive. It returns `200 ok buzzer_rooms=<n> buzzer_stuck=<n>
+poker_rooms=<n> poker_stuck=<n>` when both answer, or `503` with a
+per-registry reason (`buzzer: ...` / `poker: ...`) when either does not. See
+README.md for the full response table.
 
 ## Non-functional requirements
 
