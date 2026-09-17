@@ -114,6 +114,13 @@ pub fn routing_serves_the_expected_paths_test() {
   assert health_body
     == "ok buzzer_rooms=0 buzzer_stuck=0 poker_rooms=0 poker_stuck=0"
 
+  // `/` `/poker` は明示的に content-type を設定しているのに `/health` だけ
+  // 設定漏れがあった（#574）。プレーンテキスト本文であることを示す。
+  let assert Ok(health_get_response) =
+    request_with_method(port, "/health", http.Get)
+  assert response.get_header(health_get_response, "content-type")
+    == Ok("text/plain; charset=utf-8")
+
   // 未知のパスは 404。
   let assert Ok(#(missing_status, _)) = get(port, "/nope")
   assert missing_status == 404
@@ -244,6 +251,12 @@ pub fn health_returns_503_actor_down_via_http_test() {
   let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
   assert body == "buzzer: registry down"
+
+  // 503 分岐も 200 分岐と同様に content-type 設定漏れがあった（#574）。
+  let assert Ok(health_response) =
+    request_with_method(port, "/health", http.Get)
+  assert response.get_header(health_response, "content-type")
+    == Ok("text/plain; charset=utf-8")
 }
 
 /// `Timeout` 分岐の実サーバ越し確認（#142）。誰も処理しない subject を渡し、
