@@ -194,22 +194,42 @@ fn list_all(items: List(a), check: fn(a) -> Nil) -> Nil {
 
 pub fn encode_state_test() {
   let message =
-    State(phase: Voting, participants: [
-      ParticipantView(ParticipantId("p1"), "Alice", True),
-    ])
+    State(
+      phase: Voting,
+      participants: [ParticipantView(ParticipantId("p1"), "Alice", True)],
+      votes: [],
+    )
 
   assert poker_protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"phase\":\"voting\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}]}"
+    == "{\"type\":\"state\",\"phase\":\"voting\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}],\"votes\":[]}"
 }
 
 pub fn encode_state_revealed_phase_test() {
   let message =
-    State(phase: Revealed, participants: [
-      ParticipantView(ParticipantId("p1"), "Alice", True),
-    ])
+    State(
+      phase: Revealed,
+      participants: [ParticipantView(ParticipantId("p1"), "Alice", True)],
+      votes: [],
+    )
 
   assert poker_protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"phase\":\"revealed\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}]}"
+    == "{\"type\":\"state\",\"phase\":\"revealed\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}],\"votes\":[]}"
+}
+
+/// Revealed中のjoinで、既に確定した投票値を受け取れることを固定する（#407）。
+pub fn encode_state_revealed_phase_with_votes_test() {
+  let message =
+    State(
+      phase: Revealed,
+      participants: [ParticipantView(ParticipantId("p1"), "Alice", True)],
+      votes: [
+        RevealedVote(ParticipantId("p1"), "Alice", Some(Five)),
+        RevealedVote(ParticipantId("p2"), "Bob", None),
+      ],
+    )
+
+  assert poker_protocol.encode_server_message(message)
+    == "{\"type\":\"state\",\"phase\":\"revealed\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"has_voted\":true}],\"votes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"value\":\"5\"},{\"participant_id\":\"p2\",\"display_name\":\"Bob\",\"value\":null}]}"
 }
 
 pub fn encode_participant_joined_test() {

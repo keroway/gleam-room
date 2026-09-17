@@ -119,8 +119,19 @@ pub type ClientMessage {
 }
 
 /// A message sent from the server to a client.
+///
+/// `State.votes` is always `[]` while `phase` is `Voting` (the
+/// presence-only asymmetry `docs/planning-poker.md` describes still holds
+/// pre-reveal via `participants`' `has_voted`). Once `phase` is `Revealed`,
+/// `votes` carries every already-cast vote so a participant who joins after
+/// reveal sees the same result other participants got from `RoundRevealed`
+/// (#407).
 pub type ServerMessage {
-  State(phase: RoundPhase, participants: List(ParticipantView))
+  State(
+    phase: RoundPhase,
+    participants: List(ParticipantView),
+    votes: List(RevealedVote),
+  )
   ParticipantJoined(participant: ParticipantView)
   ParticipantLeft(participant_id: ParticipantId)
   VoteRegistered(participant_id: ParticipantId)
@@ -246,11 +257,12 @@ pub fn encode_server_message(message: ServerMessage) -> String {
 
 fn server_message_to_json(message: ServerMessage) -> json.Json {
   case message {
-    State(phase, participants) ->
+    State(phase, participants, votes) ->
       json.object([
         #("type", json.string("state")),
         #("phase", json.string(round_phase_to_wire_string(phase))),
         #("participants", json.array(participants, participant_view_to_json)),
+        #("votes", json.array(votes, revealed_vote_to_json)),
       ])
     ParticipantJoined(participant) ->
       json.object([
