@@ -217,6 +217,63 @@ pub fn ws_closes_after_frame_too_large_while_rate_limited_test() {
   tcp_close(socket)
 }
 
+/// バイナリフレームもテキストフレームと同じフレームサイズ上限(#126)に
+/// 従うことを実ソケットで検証する(#500)。修正前は `mist.Binary` 分岐が
+/// `frame_size_outcome` を一切評価せず、上限超過分の `bit_array` を送り
+/// 続けてもサーバが無制限に受理していた。
+pub fn ws_closes_after_binary_frame_too_large_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_raw_binary_frame(socket, bit_array.from_string(string.repeat("a", 2049)))
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
+
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+
+  tcp_close(socket)
+}
+
+/// バイナリフレームもテキストフレームと同じメッセージレート上限(#156)の
+/// カウンタに計上されることを実ソケットで検証する(#500)。修正前は
+/// `mist.Binary` 分岐が `record_message` を一切呼ばず、バイナリフレームを
+/// 送り続けてもレート制限に一切引っかからなかった。
+pub fn ws_binary_frames_count_toward_rate_limit_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
+  // `max_messages_per_heartbeat_window` (30) に達するまで送って応答を捨てる。
+  // 各バイナリフレームは `binary_frame` エラーを返すが、それでもカウンタは
+  // 進む。
+  let buffer = send_and_drain_binary(socket, buffer, 30)
+
+  // 31件目は上限超過なので、`binary_frame` ではなく `rate_limited` を受け取る。
+  send_raw_binary_frame(socket, bit_array.from_string("x"))
+  let #(rate_limited_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(rate_limited_reply, "\"type\":\"error\"")
+  assert string.contains(rate_limited_reply, "\"code\":\"rate_limited\"")
+
+  tcp_close(socket)
+}
+
+/// バイナリフレームを `count` 件送り、応答を1件ずつ読み捨てる。
+fn send_and_drain_binary(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      send_raw_binary_frame(socket, bit_array.from_string("x"))
+      let #(_reply, buffer) = recv_text_message(socket, buffer)
+      send_and_drain_binary(socket, buffer, count - 1)
+    }
+  }
+}
+
 /// `buzz` メッセージを `count` 件送り、応答を1件ずつ読み捨てる。
 fn send_and_drain_buzz(
   socket: TcpSocket,
@@ -346,6 +403,15 @@ fn recv_close_frame(socket: TcpSocket, buffer: BitArray) -> BitArray {
 fn send_raw_text_frame(socket: TcpSocket, text: String) -> Nil {
   let mask = crypto.strong_random_bytes(4)
   let frame = ws.encode_text_frame(text, None, Some(mask))
+  let assert Ok(Nil) = tcp_send(socket, bytes_tree.to_bit_array(frame))
+  Nil
+}
+
+/// `send_raw_text_frame` と同じ理由・実装だが、`mist.Binary` 分岐を通す
+/// バイナリフレームを送る(#500)。
+fn send_raw_binary_frame(socket: TcpSocket, data: BitArray) -> Nil {
+  let mask = crypto.strong_random_bytes(4)
+  let frame = ws.encode_binary_frame(data, None, Some(mask))
   let assert Ok(Nil) = tcp_send(socket, bytes_tree.to_bit_array(frame))
   Nil
 }
