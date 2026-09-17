@@ -32,4 +32,10 @@ jobs:
       # opt-in してもスキャン対象の取りこぼしは発生しない。ADR-0028 の懸念
       # （実 lockfile を持つリポジトリでの検知漏れの黙殺）は Gleam/hex 専用の
       # このリポジトリには当てはまらない（keroway/beamsg と同じ位置づけ）。
+      #
+      # Dependabot security updates はリポジトリ設定で有効化されているが、
+      # GitHub の Dependency Graph（SBOM）が gleam.toml/manifest.toml の hex
+      # パッケージを検出できないため、実質的に機能していない
+      # （`dependabot/alerts` は常に空。#528 で確認・記録）。osv-scanner 同様
+      # Hex エコシステムが未対応という同種の制約であり、代替手段は未導入。
       allow-no-package-sources: true
