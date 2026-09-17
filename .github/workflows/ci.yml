@@ -49,6 +49,11 @@ jobs:
       - name: Test (client JS)
         run: node --test 'test/client/*.test.mjs'
 
+      # docs/duplication-inventory.md の `file:line` 引用がコード変更で
+      # ズレていないかを機械的に検証する(#387)。
+      - name: Check duplication-inventory.md citations
+        run: node scripts/check-duplication-inventory-refs.js
+
       # Stop hook 本体（.claude/README.md 参照）の唯一の静的解析（#343）。
       # 対象は現時点でこの1ファイルのみのため、汎用的な find | xargs 化はしない。
       - name: Shellcheck (post-stop-check.sh)

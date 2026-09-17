@@ -77,6 +77,11 @@ while IFS= read -r file; do
     # change what the tests actually verify (#186).
     src/*.gleam|test/*.gleam|gleam.toml|manifest.toml|test/client/*.test.mjs|test/client/harness.mjs|test/client/extract.mjs)
       CHECK_TRIGGERED=1 ;;
+    # docs/duplication-inventory.md の `file:line` 引用ドリフトを just check
+    # (scripts/check-duplication-inventory-refs.js) が検証する(#387)。文書
+    # 本体かチェッカー自身が変わったときだけローカルでも検知する。
+    docs/duplication-inventory.md|scripts/check-duplication-inventory-refs.js)
+      CHECK_TRIGGERED=1 ;;
   esac
 done <<EOF
 $CHANGED_FILES
