@@ -314,6 +314,7 @@ fn handle_request(
         Get | Head ->
           response.new(200)
           |> response.set_header("content-type", "text/html; charset=utf-8")
+          |> response.set_header("x-content-type-options", "nosniff")
           |> response.set_body(
             mist.Bytes(bytes_tree.from_string(web.index_html())),
           )
@@ -400,6 +401,7 @@ fn handle_request(
         Get | Head ->
           response.new(200)
           |> response.set_header("content-type", "text/html; charset=utf-8")
+          |> response.set_header("x-content-type-options", "nosniff")
           |> response.set_body(
             mist.Bytes(bytes_tree.from_string(web_poker.poker_html())),
           )

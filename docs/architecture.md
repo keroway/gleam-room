@@ -82,6 +82,22 @@ connection never reaches the wire protocol described in
 [`docs/mvp.md`](mvp.md#suggested-wire-protocol) or
 [`docs/planning-poker.md`](planning-poker.md#suggested-wire-protocol).
 
+#### HTTP response security headers
+
+HTML responses (the join UI for the buzzer and Planning Poker) set
+`x-content-type-options: nosniff` to prevent browsers from MIME-sniffing the
+response body into an unintended content type. This is a low-cost header
+with no functional downside, so there is no reason not to set it.
+
+A `Content-Security-Policy` header is **not** set. `web.gleam` and
+`web_poker.gleam` embed their JavaScript/CSS inline (`<style>`/`<script>`
+directly in the served HTML, per the "single static HTML document, no build
+tooling" design), so a meaningful CSP would need a nonce or hash-based
+`script-src`/`style-src` design — deliberately out of MVP scope (#550).
+Revisit if this repository ever grows a build step for the embedded client
+code (see `docs/duplication-inventory.md`'s §1.6 on the embedded-JS
+duplication for related context).
+
 #### Abuse controls
 
 Beyond the origin check above, the transport and room layers already enforce
