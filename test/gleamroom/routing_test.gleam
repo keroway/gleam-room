@@ -106,6 +106,16 @@ pub fn routing_serves_the_expected_paths_test() {
   assert poker_status == 200
   assert string.contains(poker_body, "<script>")
 
+  // `/` `/poker` の HTML レスポンスは MIME スニッフィング対策として
+  // `x-content-type-options: nosniff` を持つ（#550）。
+  let assert Ok(root_get_response) = request_with_method(port, "/", http.Get)
+  assert response.get_header(root_get_response, "x-content-type-options")
+    == Ok("nosniff")
+  let assert Ok(poker_get_response) =
+    request_with_method(port, "/poker", http.Get)
+  assert response.get_header(poker_get_response, "x-content-type-options")
+    == Ok("nosniff")
+
   // `/health` は buzzer / poker 両方の registry へ問い合わせた結果を返す
   // （#93 / #92 / #285）。room がまだ無いので 0 件。
   // **配線が繋がっていなければここで気づける。**
