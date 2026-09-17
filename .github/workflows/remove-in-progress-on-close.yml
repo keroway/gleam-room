@@ -25,6 +25,6 @@ jobs:
     # @main のままだと、共有側の変更が**レビューを経ずに全リポジトリへ即座に効く**。
     # zizmor の unpinned-uses はそれを検出するための検査で、ignore で黙らせると
     # 「同一アカウントだから安全」という前提が検査から外れたまま残る（#96）。
-    uses: keroway/.github/.github/workflows/reusable-remove-in-progress-on-close.yml@87813febcf248657d64f628f53f6c246969b6e7b # 2026-08-12 時点の main
+    uses: keroway/.github/.github/workflows/reusable-remove-in-progress-on-close.yml@f46116661fa12e4ff3911c40970cf0f8510e9823 # 2026-09-09 時点の main
     with:
       issue_number: ${{ github.event_name == 'workflow_dispatch' && fromJSON(inputs.issue_number) || 0 }}
