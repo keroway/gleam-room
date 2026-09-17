@@ -33,11 +33,13 @@ Each item below is marked:
 ## 1. Actually duplicated
 
 以下の行範囲は commit `9670769` 時点のもの。#352 のような後続変更で個々の
-節がズレることがあり、1.1・1.7 は #381 で、1.3・1.5 は #383 で、1.4 は #385 で、
-1.6 は #386・#424 でそのズレ(または baseline からの誤り)を確認し本コミットで再検証済みだが、
-他の節は未再検証のまま残っている可能性がある。次に着手する
-人は、引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲に
-あるか確認してから読むこと。
+節がズレることがあり、1.1 は #381・#382・#513・#524、1.2 は #531、1.3 は
+#383・#554、1.4 は #385・#556、1.5 は #542・#543・#544、1.6 は #386・#424・
+#555、1.7 は #568 でそのズレ(または baseline からの誤り)を確認しており、
+本コミット(2026-09-17)で全節(1.1〜1.7)を再検証・更新した。とはいえ #387 が
+指摘するとおり再発防止の自動チェックはまだ無いため、次に着手する人は、
+引用箇所を開いて `grep -n` 等で見出しの関数/型が今もその行範囲にあるか
+確認してから読むこと。
 
 ### 1.1 Registry layer — `registry.gleam` vs `poker_registry.gleam`
 
@@ -46,22 +48,22 @@ Each item below is marked:
 The two registries are the same actor logic with the room message type
 substituted:
 
-- `RoomId` opaque type and its accessors (`registry.gleam:16-28`,
-  `poker_registry.gleam:17-28`).
+- `RoomId` opaque type and its accessors (`registry.gleam:16-27`,
+  `poker_registry.gleam:18-28`).
 - Trapped-exit classification (`exit_to_message`,
-  `registry.gleam:189-198`, `poker_registry.gleam:120-130`).
+  `registry.gleam:195-205`, `poker_registry.gleam:122-132`).
 - Actor `build` (trap_exits, `select_trapped_exits`, initial `State`)
-  (`registry.gleam:207-237`, `poker_registry.gleam:134-160`).
+  (`registry.gleam:213-243`, `poker_registry.gleam:136-162`).
 - `Lookup` capacity check, room startup, and `subject_owner` monitored
-  registration (`registry.gleam:274-356`, `poker_registry.gleam:189-252`).
-- `RoomDown` ABA-safe dict cleanup (`registry.gleam:357-375`,
-  `poker_registry.gleam:254-267`).
+  registration (`registry.gleam:280-366`, `poker_registry.gleam:191-261`).
+- `RoomDown` ABA-safe dict cleanup (`registry.gleam:367-390`,
+  `poker_registry.gleam:262-281`).
 - `Release`/`RoomEmptyChecked` async-empty check with ABA guard
-  (`registry.gleam:428-487`, `poker_registry.gleam:269-303`).
+  (`registry.gleam:450-509`, `poker_registry.gleam:283-317`).
 - `Health`/`RoomProbed` probe tracking with the `probe_in_flight` guard from
-  #269 (`registry.gleam:376-421`, `poker_registry.gleam:304-343`).
+  #269 (`registry.gleam:391-443`, `poker_registry.gleam:318-364`).
 - Public `health`/`lookup` API delegating to `call.try_call*`
-  (`registry.gleam:501-532`, `poker_registry.gleam:351-376`).
+  (`registry.gleam:523-554`, `poker_registry.gleam:372-397`).
 
 The only differences are the room message type parameter and `poker `
 prefixes in log strings.
@@ -92,7 +94,7 @@ mixed up at the type level).
 
 **対象外（既に共有済み）.** `call.try_call`, `call.try_call_classified`,
 `classify`, and `Failure` live in one module and are imported by both sides
-(`registry.gleam:10`, `poker_registry.gleam:10`, `room.gleam:6`,
+(`registry.gleam:10`, `poker_registry.gleam:10`, `room.gleam:7`,
 `poker.gleam:7`). This is the existing precedent for how a shared boundary
 in this codebase looks; use it as the template when extracting the registry
 layer in 1.1.
@@ -105,14 +107,14 @@ Duplicated infrastructure (not domain state machine):
 
 - `sessions: Dict(process.Pid, List(#(String, process.Monitor)))` and the
   `select_monitors`-based `SessionDown` wiring in `start`
-  (`room.gleam:277-308`, `poker.gleam:300-325`).
+  (`room.gleam:277-308`, `poker.gleam:304-329`).
 - `update_sessions` (register monitor on `ParticipantJoined`, demonitor +
-  remove on `ParticipantLeft`) (`room.gleam:437-498`, `poker.gleam:412-465`).
-- `broadcast_all` (`room.gleam:501-508`, `poker.gleam:468-475`).
-- `SessionDown` handler (`room.gleam:351-412`, `poker.gleam:349-395`) and
-  `ShutdownIfEmpty` handler (`room.gleam:413-424`, `poker.gleam:396-406`).
+  remove on `ParticipantLeft`) (`room.gleam:437-498`, `poker.gleam:420-473`).
+- `broadcast_all` (`room.gleam:501-508`, `poker.gleam:476-483`).
+- `SessionDown` handler (`room.gleam:351-412`, `poker.gleam:357-403`) and
+  `ShutdownIfEmpty` handler (`room.gleam:413-424`, `poker.gleam:404-414`).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
-  `call.try_call` (`room.gleam:572-619`, `poker.gleam:535-568`).
+  `call.try_call` (`room.gleam:572-619`, `poker.gleam:543-590`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
   (`room.gleam:109-140`, `poker.gleam:144-174`); `is_valid_display_name` is
@@ -148,7 +150,9 @@ To resolve before committing to an approach:
   (`protocol.gleam:116-133`, `poker_protocol.gleam:205-222`, including the
   comment).
 - `decode_client_message`'s `json.UnableToDecode`/error branching shape and
-  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:149-172`).
+  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:149-172`
+  for `decode_client_message`; `ProtocolError` itself is a separate range on
+  the `poker_protocol.gleam` side, `poker_protocol.gleam:132-136`).
 - `encode_server_message`'s json-to-string skeleton
   (`protocol.gleam:141-146`, `poker_protocol.gleam:241-246`).
 
@@ -174,19 +178,19 @@ source as "same value, same reason"):
   `poker_websocket.gleam:85-102`).
 - `on_init` heartbeat subject + `send_after` scheduling
   (`websocket.gleam:121-138`, `poker_websocket.gleam:104-124`).
-- `mark_active`/`record_message` (`websocket.gleam:236-246`,
-  `poker_websocket.gleam:211-221`).
+- `mark_active`/`record_message` (`websocket.gleam:231-241`,
+  `poker_websocket.gleam:202-212`).
 - `heartbeat_outcome`/`handle_heartbeat_tick` idle-timeout logic
-  (`websocket.gleam:249-292`, `poker_websocket.gleam:224-238`).
+  (`websocket.gleam:244-287`, `poker_websocket.gleam:215-255`).
 - `max_text_frame_bytes = 2048` and `frame_size_outcome`
-  (`websocket.gleam:283-304`, `poker_websocket.gleam:252-263`).
+  (`websocket.gleam:295-307`, `poker_websocket.gleam:258-269`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
-  (`websocket.gleam:314-348`, `poker_websocket.gleam:275-294`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:974-976`,
-  `poker_websocket.gleam:970-972`, byte-identical).
+  (`websocket.gleam:333-360`, `poker_websocket.gleam:286-308`).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1037-1039`,
+  `poker_websocket.gleam:1018-1020`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:994-997`,
-  `poker_websocket.gleam:975-978`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1057-1060`,
+  `poker_websocket.gleam:1023-1026`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -194,10 +198,10 @@ beyond moving code.
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:694-709`,
-  `poker_websocket.gleam:682-700`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:735-848`,
-  `poker_websocket.gleam:719-799`) — these encode "how to talk to a room
+- `release_room` (`websocket.gleam:757-772`,
+  `poker_websocket.gleam:730-748`) and the `with_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:798-911`,
+  `poker_websocket.gleam:767-847`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,
@@ -221,9 +225,9 @@ literals, not Gleam code.
 
 - `cancelReconnect`/`scheduleReconnect`, including the shared
   `RECONNECT_DELAY_MS = 1500` / `MAX_RECONNECT_ATTEMPTS = 5` constants
-  (`web.gleam:85-113`, `web_poker.gleam:119-147`, byte-identical).
+  (`web.gleam:85-113`, `web_poker.gleam:120-148`, byte-identical).
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
-  `web_poker.gleam:149-159`, byte-identical).
+  `web_poker.gleam:150-160`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
   (`web.gleam:242-292`, `web_poker.gleam:320-367`).
 - `joinForm` submit handler (`web.gleam:294-311`, `web_poker.gleam:369-386`,
@@ -254,8 +258,9 @@ Poker-specific, no buzzer equivalent.
 
 **対象外（既に共有済み）** for `extract.mjs`/`harness.mjs` — already
 parameterized via `{modulePath, functionName}` and reused from both
-`reconnect.test.mjs` and `poker-reconnect.test.mjs` (`harness.mjs:8`,
-`poker-reconnect.test.mjs:8`'s `POKER_MODULE`). This is a second existing
+`reconnect.test.mjs` and `poker-reconnect.test.mjs` (`harness.mjs:25`'s
+`startClient({ modulePath, functionName })`, `poker-reconnect.test.mjs:8`'s
+`POKER_MODULE`). This is a second existing
 precedent for how a shared boundary should look.
 
 **解消済み**: the `flapWithoutJoining` helper was byte-identical between
@@ -288,7 +293,7 @@ for both (#295).
   (`poker.gleam:106-109`) — this asymmetry is the whole point of Planning
   Poker and has no buzzer equivalent to extract against.
 - **`RevealedVote.value: Option(Card)`** including non-voters as explicit
-  `None` (`poker_protocol.gleam:102-104`) — poker-only.
+  `None` (`poker_protocol.gleam:105-111`) — poker-only.
 - **`Card` type and its wire string mapping**
   (`poker_protocol.gleam:39-81`) — poker-only, 10 variants.
 
