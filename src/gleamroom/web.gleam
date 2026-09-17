@@ -304,11 +304,22 @@ pub fn index_html() -> String {
       log(\"room ID と display name を入力してください\");
       return;
     }
+    // maxlength=\"64\" は UTF-16 コード単位でのみ制限するが、サーバの
+    // is_valid_field は UTF-8 バイト数(<=64)も要求する。マルチバイト文字は
+    // maxlength を満たしても超過しうるため、送信前にここで検知する(#549)。
+    if (byteLength(roomId) > 64 || byteLength(displayName) > 64) {
+      log(\"room ID・display name は UTF-8 で64バイト以内にしてください（マルチバイト文字は文字数より少なく入力してください）\");
+      return;
+    }
 
     cancelReconnect();
     lastJoin = { roomId, displayName };
     connect(roomId, displayName);
   });
+
+  function byteLength(value) {
+    return new TextEncoder().encode(value).length;
+  }
 
   function sendIfOpen(message) {
     if (socket && socket.readyState === WebSocket.OPEN) {
