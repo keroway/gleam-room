@@ -100,7 +100,7 @@ registry matters because buzzer and poker rooms are independent supervised
 children — one being unhealthy says nothing about the other.
 
 `stuck` counts room actors that did not answer their registry's last
-lightweight probe (a `room.get_snapshot`/`poker.get_state` call fired after
+lightweight probe (a `room.get_snapshot`/`poker.get_snapshot` call fired after
 each `/health` request). This probe does not fire on every single `/health`
 request, though: if the previous probe round hasn't fully returned yet
 (`probe_in_flight` is non-zero), the registry skips firing a new round and
