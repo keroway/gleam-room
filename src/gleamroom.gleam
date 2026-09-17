@@ -343,6 +343,10 @@ fn handle_request(
               ))
             ->
               response.new(200)
+              |> response.set_header(
+                "content-type",
+                "text/plain; charset=utf-8",
+              )
               |> response.set_body(
                 mist.Bytes(bytes_tree.from_string(
                   "ok buzzer_rooms="
@@ -361,6 +365,10 @@ fn handle_request(
             // なら負荷やタイムアウト値）、両方失敗していれば両方載せる（#285）。
             _, _ ->
               response.new(503)
+              |> response.set_header(
+                "content-type",
+                "text/plain; charset=utf-8",
+              )
               |> response.set_body(
                 mist.Bytes(
                   bytes_tree.from_string(combined_health_failure_body(
