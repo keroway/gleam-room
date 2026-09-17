@@ -20,4 +20,5 @@ check:
     gleam build --warnings-as-errors
     gleam test
     node --test 'test/client/*.test.mjs'
+    node scripts/check-duplication-inventory-refs.js
     shellcheck .claude/hooks/post-stop-check.sh
