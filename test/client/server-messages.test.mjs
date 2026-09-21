@@ -121,6 +121,27 @@ test("round_reset はログに残る", () => {
   }
 });
 
+test("同じ round_reset が連続配信されても2回目はログに積まれない（自己エコー対策 #526）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "buzz_accepted",
+        participant_id: "p1",
+        position: 1,
+      }),
+    });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+
+    const resetLogs = client.logs.filter((line) => line.includes("round reset"));
+    assert.equal(resetLogs.length, 1, "自己エコーによる round_reset が二重にログされている");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("拒否以外のサーバー error はログに残るが接続は維持される", () => {
   const client = startClient();
   try {

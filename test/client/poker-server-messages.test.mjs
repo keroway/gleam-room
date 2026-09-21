@@ -147,6 +147,26 @@ test("vote_registered が未知の participant_id を受け取った場合、sil
   }
 });
 
+test("同じ vote_registered が連続配信されても2回目はログに積まれない（自己エコー対策 #526）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+
+    const registeredLogs = client.logs.filter((line) => line.includes("vote registered: p1"));
+    assert.equal(registeredLogs.length, 1, "自己エコーによる vote_registered が二重にログされている");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("reveal 前は投票ボタンが有効なままで、自分の投票は変更できる", () => {
   const client = startClient(POKER_MODULE);
   try {
@@ -200,6 +220,32 @@ test("revealed で votes がログに残り、round_reset で phase が voting �
       [],
       "round_reset 後も votes 要素に投票値が残っている",
     );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("同じ revealed / round_reset が連続配信されても2回目はログに積まれない（自己エコー対策 #526）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: true },
+    ]);
+    const revealedMessage = JSON.stringify({
+      type: "revealed",
+      votes: [{ participant_id: "p1", display_name: "Alice", value: "5" }],
+    });
+    socket.handlers.message?.({ data: revealedMessage });
+    socket.handlers.message?.({ data: revealedMessage });
+
+    const revealedLogs = client.logs.filter((line) => line.includes("revealed:"));
+    assert.equal(revealedLogs.length, 1, "自己エコーによる revealed が二重にログされている");
+
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+
+    const resetLogs = client.logs.filter((line) => line.includes("round reset"));
+    assert.equal(resetLogs.length, 1, "自己エコーによる round_reset が二重にログされている");
   } finally {
     client.dispose();
   }
