@@ -248,6 +248,13 @@ pub fn poker_html() -> String {
       case \"vote_registered\": {
         const participant = participants.get(message.participant_id);
         if (participant) {
+          // broadcast_all は発行者本人にも配信するため、同じ vote_registered
+          // が reply 経由と broadcast 経由の2回届く（#526）。has_voted は
+          // 投票のたびに毎回trueへ上書きされる一意キー相当の値なので、既に
+          // trueならこの配信は自己エコーとみなしてスキップする。
+          if (participant.has_voted) {
+            break;
+          }
           participant.has_voted = true;
           renderParticipants();
           log(`vote registered: ${message.participant_id}`);
@@ -256,14 +263,33 @@ pub fn poker_html() -> String {
         }
         break;
       }
-      case \"revealed\":
+      case \"revealed\": {
+        // 同じ理由（#526）で revealed も自己エコーが2回届く。round には
+        // position のような一意キーが無いため、直前の revealed と phase・
+        // votes 内容が両方一致するかどうかを冪等化キーとして使う。
+        const alreadyRevealed =
+          phase === \"revealed\" && JSON.stringify(votes) === JSON.stringify(message.votes);
+        if (alreadyRevealed) {
+          break;
+        }
         phase = \"revealed\";
         votes = message.votes;
         updateCardButtons();
         renderVotes();
         log(`revealed: ${message.votes.length} vote(s)`);
         break;
-      case \"round_reset\":
+      }
+      case \"round_reset\": {
+        // 同じ理由（#526）で round_reset も自己エコーが2回届く。リセット後
+        // の状態（voting フェーズ・votes 空・全員 has_voted=false）と現在の
+        // 状態が既に一致しているかどうかを冪等化キーとして使う。
+        const alreadyReset =
+          phase === \"voting\" &&
+          votes.length === 0 &&
+          ![...participants.values()].some((p) => p.has_voted);
+        if (alreadyReset) {
+          break;
+        }
         phase = \"voting\";
         votes = [];
         ownVote = null;
@@ -275,6 +301,7 @@ pub fn poker_html() -> String {
         renderVotes();
         log(\"round reset\");
         break;
+      }
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
         // room_full/invalid_room_id/invalid_display_name はソケットを閉じずに

@@ -200,6 +200,13 @@ pub fn index_html() -> String {
         }
         break;
       case \"round_reset\":
+        // broadcast_all は発行者本人にも配信するため、同じ round_reset が
+        // reply 経由と broadcast 経由の2回届く（#526）。round には position
+        // のような一意キーが無いため、リセット後の状態（buzzes が空）と
+        // 現在の状態が既に一致しているかどうかを冪等化キーとして使う。
+        if (buzzes.length === 0) {
+          break;
+        }
         buzzes = [];
         renderBuzzes();
         log(\"round reset\");
