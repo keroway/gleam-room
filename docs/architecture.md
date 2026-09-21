@@ -66,6 +66,14 @@ header. This guards against Cross-Site WebSocket Hijacking (CSWSH); see
 ADR/issue #124 and `origin_allowed` in `src/gleamroom/websocket.gleam` and
 `src/gleamroom/poker_websocket.gleam`.
 
+The match compares **hostname only** — `uri.parse(origin).host` never carries
+a scheme or port, so `Origin: http://example.com:4000` is accepted against
+`Host: example.com` regardless of scheme or port (see
+`origin_header_allowed_matching_origin_with_port_is_allowed_test` in
+`test/gleamroom/websocket_test.gleam`). On a host that serves multiple
+origins on different ports or schemes, this does not fully prevent CSWSH from
+another origin sharing the same hostname (#530).
+
 Requests with **no** `Origin` header are allowed through, not rejected.
 Browsers always send `Origin`, but non-browser clients (CLI tools, custom
 clients) often do not, and the MVP has no authentication layer to justify
