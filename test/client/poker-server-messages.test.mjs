@@ -50,10 +50,11 @@ test("handleServerMessage内で例外が発生すると、握り潰さずerrの�
   try {
     const socket = joinAndConnect(client);
 
-    // participant_joined は message.participant.participant_id を無条件に
-    // 参照するため、participant フィールド欠落は TypeError を投げる。
+    // 各 case はフィールド形状ガード済み（#527）のため、実際に例外を起こす
+    // には switch(message.type) 自体が失敗する必要がある。"null" は妥当な
+    // JSON だが message が null になり、.type 参照で TypeError を投げる。
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "participant_joined" }),
+      data: "null",
     });
 
     const failureLog = client.logs.find((line) =>
@@ -63,6 +64,28 @@ test("handleServerMessage内で例外が発生すると、握り潰さずerrの�
     assert.ok(
       /Cannot read propert/.test(failureLog),
       `err の内容がログに含まれていない: ${failureLog}`,
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("participant_joined メッセージが妥当なJSONだが participant フィールド欠落だと、participants を更新せず部分適用状態にならない（#527）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_joined" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("participant_joined message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      [],
+      "participant フィールド欠落なのに participants に描画されている",
     );
   } finally {
     client.dispose();
@@ -82,6 +105,30 @@ test("participant_left はログに残る", () => {
     assert.ok(
       client.logs.some((line) => line.includes("left: p1")),
       "退出ログが残っていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("participant_left message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "participant_id フィールド欠落なのに participants から削除されている",
     );
   } finally {
     client.dispose();
@@ -147,6 +194,30 @@ test("vote_registered が未知の participant_id を受け取った場合、sil
   }
 });
 
+test("vote_registered メッセージが妥当なJSONだが participant_id フィールド欠落だと、投票済み表示を更新しない（#527）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("vote_registered message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "participant_id フィールド欠落なのに投票済み表示が更新されている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("同じ vote_registered が連続配信されても2回目はログに積まれない（自己エコー対策 #526）", () => {
   const client = startClient(POKER_MODULE);
   try {
@@ -181,6 +252,30 @@ test("reveal 前は投票ボタンが有効なままで、自分の投票は変�
       sentVotes.map((m) => m.value),
       ["1", "5"],
       "reveal 前の投票変更が送信されていない",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("revealed メッセージが妥当なJSONだが votes フィールド欠落だと、phase・votes を更新せず部分適用状態にならない（#527）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: true },
+    ]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "revealed" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("revealed message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      [],
+      "votes フィールド欠落なのに votes 要素に描画されている",
     );
   } finally {
     client.dispose();

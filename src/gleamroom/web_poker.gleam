@@ -236,16 +236,35 @@ pub fn poker_html() -> String {
         log(`state: phase=${message.phase} ${message.participants.length} participant(s)`);
         break;
       case \"participant_joined\":
+        // state ケース（#478）と同じ理由。participant がオブジェクトでない/
+        // participant_id が文字列でないと、以降の描画・ログが部分適用状態で
+        // 固まるか例外を投げる（#527）。
+        if (
+          typeof message.participant !== \"object\" ||
+          message.participant === null ||
+          typeof message.participant.participant_id !== \"string\"
+        ) {
+          log(`participant_joined message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         participants.set(message.participant.participant_id, message.participant);
         renderParticipants();
         log(`joined: ${message.participant.display_name}`);
         break;
       case \"participant_left\":
+        if (typeof message.participant_id !== \"string\") {
+          log(`participant_left message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         participants.delete(message.participant_id);
         renderParticipants();
         log(`left: ${message.participant_id}`);
         break;
       case \"vote_registered\": {
+        if (typeof message.participant_id !== \"string\") {
+          log(`vote_registered message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         const participant = participants.get(message.participant_id);
         if (participant) {
           // broadcast_all は発行者本人にも配信するため、同じ vote_registered
@@ -264,6 +283,12 @@ pub fn poker_html() -> String {
         break;
       }
       case \"revealed\": {
+        // state ケース（#478）と同じ理由。votes が配列でないと updateCardButtons
+        // 実行済みのまま votes 描画・ログが例外か部分適用状態で固まる（#527）。
+        if (!Array.isArray(message.votes)) {
+          log(`revealed message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         // 同じ理由（#526）で revealed も自己エコーが2回届く。round には
         // position のような一意キーが無いため、直前の revealed と phase・
         // votes 内容が両方一致するかどうかを冪等化キーとして使う。
