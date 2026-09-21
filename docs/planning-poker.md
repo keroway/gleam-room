@@ -91,6 +91,12 @@ resumption of the previous connection's identity. On join/rejoin, the server
 sends the current room snapshot, including the current phase (`Voting` or
 `Revealed`) and, if `Revealed`, every already-cast vote.
 
+Same idle heartbeat timeout as the buzzer's "Idle heartbeat timeout" section
+in `docs/mvp.md`: a participant who has voted and is only waiting for reveal
+stays connected as long as another participant votes or the room otherwise
+broadcasts (#581); a room where nobody acts for 30+ seconds still disconnects
+and rejoins everyone in it.
+
 ## Suggested wire protocol
 
 The exact JSON shape can evolve during implementation. As with the buzzer,

@@ -85,6 +85,22 @@ reconnect recovers a current snapshot, not a durable event history.
   entered room ID and display name; it does not attempt to preserve or
   restore the previous `ParticipantId`.
 
+### Idle heartbeat timeout
+
+Each connection is closed if no frame arrives from its client and no room
+broadcast (another participant's join/buzz/reset) is delivered to it within a
+30-second heartbeat window (see `heartbeat_interval_ms` in
+`websocket.gleam`/`poker_websocket.gleam`). A participant who only watches —
+never sending a message — stays connected as long as *someone else* in the
+room is active, because receiving a broadcast counts as activity too (#581).
+
+There is currently no client-side keepalive ping. In a room where nobody
+sends anything for 30+ seconds (including a solo participant sitting alone in
+a room), every connection in it is closed on the next heartbeat tick; the
+browser client's reconnect strategy above then rejoins automatically, so this
+surfaces as a brief, repeating disconnect/rejoin rather than a permanent
+failure.
+
 ## Suggested wire protocol
 
 The exact JSON shape can evolve during implementation. The important requirement is that wire messages are decoded into typed domain commands/events immediately.

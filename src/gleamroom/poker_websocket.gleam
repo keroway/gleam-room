@@ -190,7 +190,8 @@ fn handle_message(
         Some(server_message) -> send_server_message(connection, server_message)
         None -> Nil
       }
-      mist.continue(state)
+      // `websocket.gleam`'s 同名の分岐と同じ理由（#581）。
+      mist.continue(mark_active(state))
     }
     mist.Custom(HeartbeatTick) -> handle_heartbeat_tick(state)
     mist.Closed -> mist.stop()
@@ -198,7 +199,7 @@ fn handle_message(
   }
 }
 
-/// `websocket.gleam`'s `mark_active` と同じ理由。
+/// `websocket.gleam`'s `mark_active` と同じ理由（#35, #581）。
 fn mark_active(state: ConnectionState) -> ConnectionState {
   ConnectionState(..state, active_since_heartbeat: True)
 }

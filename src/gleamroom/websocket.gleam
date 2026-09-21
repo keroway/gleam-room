@@ -219,7 +219,13 @@ fn handle_message(
         Some(server_message) -> send_server_message(connection, server_message)
         None -> Nil
       }
-      mist.continue(state)
+      // 他参加者の活動によるroom配信も「生きている」印として扱う（#581）。
+      // クライアントから何も送らず結果を眺めているだけの参加者が、部屋に
+      // 何らかの動きがある限りハートビートタイムアウトで蹴られないように
+      // するため。ただし他参加者の活動も一切無い部屋では、この配信自体が
+      // 発生しないため引き続き30〜60秒でタイムアウトする（未解決、要
+      // クライアント側keepalive）。
+      mist.continue(mark_active(state))
     }
     mist.Custom(HeartbeatTick) -> handle_heartbeat_tick(state)
     mist.Closed -> mist.stop()
@@ -227,7 +233,8 @@ fn handle_message(
   }
 }
 
-/// クライアントから届いたフレームを「生きている」印として記録する（#35）。
+/// クライアントから届いたフレーム、またはroom配信の受信を「生きている」
+/// 印として記録する（#35, #581）。
 fn mark_active(state: ConnectionState) -> ConnectionState {
   ConnectionState(..state, active_since_heartbeat: True)
 }
