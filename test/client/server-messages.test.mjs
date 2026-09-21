@@ -45,6 +45,50 @@ test("participant_joined は participants に追加されログに残る", () =>
   }
 });
 
+test("participant_joined メッセージが妥当なJSONだが participant フィールド欠落だと、participants を更新せず部分適用状態にならない（#527）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_joined" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("participant_joined message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      [],
+      "participant フィールド欠落なのに participants に描画されている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left" }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("participant_left message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("participants"),
+      ["Alice"],
+      "participant_id フィールド欠落なのに participants から削除されている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("participant_left はログに残る", () => {
   const client = startClient();
   try {
@@ -197,10 +241,11 @@ test("handleServerMessage内で例外が発生すると、握り潰さずerrの�
   try {
     const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
 
-    // participant_joined は message.participant.participant_id を無条件に
-    // 参照するため、participant フィールド欠落は TypeError を投げる。
+    // 各 case はフィールド形状ガード済み（#527）のため、実際に例外を起こす
+    // には switch(message.type) 自体が失敗する必要がある。"null" は妥当な
+    // JSON だが message が null になり、.type 参照で TypeError を投げる。
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "participant_joined" }),
+      data: "null",
     });
 
     const failureLog = client.logs.find((line) =>
