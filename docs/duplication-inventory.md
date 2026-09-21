@@ -213,11 +213,11 @@ source as "same value, same reason"):
   (`websocket.gleam:295-307`, `poker_websocket.gleam:258-269`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:333-360`, `poker_websocket.gleam:286-308`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1037-1039`,
-  `poker_websocket.gleam:1028-1030`, byte-identical).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1044-1046`,
+  `poker_websocket.gleam:1029-1031`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1057-1060`,
-  `poker_websocket.gleam:1033-1036`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1064-1067`,
+  `poker_websocket.gleam:1034-1037`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
