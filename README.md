@@ -172,9 +172,11 @@ with `gleam test`.
 real supervision tree with `gleamroom.start/1` and sends real HTTP requests to
 `/`, `/poker`, `/health`, `/ws`, `/poker/ws`, and an unknown path — including
 poker-registry health branches (registry down, timeout, stuck rooms) that get
-as much coverage as the buzzer path. mist's `Connection` is opaque, so a
-fabricated request cannot exercise the router — only a real server can. This is
-what `gleam_httpc` is a dev-dependency for.
+as much coverage as the buzzer path. It also verifies that unsupported methods
+on those routes get a 405 with an `Allow` header, and that `HEAD` returns the
+same status/headers as `GET` with an empty body (RFC 9110 §9.3.2). mist's
+`Connection` is opaque, so a fabricated request cannot exercise the router —
+only a real server can. This is what `gleam_httpc` is a dev-dependency for.
 
 ### Manual Planning Poker acceptance procedure
 
