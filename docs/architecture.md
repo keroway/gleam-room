@@ -213,6 +213,8 @@ The poker registry is a separate module (`poker_registry.gleam`) duplicating the
 
 Active room processes are not supervised children of the registry. The registry starts each room actor directly (linking to it) and traps its exit signal, then removes the dead entry from its own state; a new room actor is only started lazily on the next lookup. This means room crashes are not automatically restarted by the supervision tree — recovery is registry-driven and deferred.
 
+The link is bidirectional and only the registry traps exits, so the reverse also holds: a registry crash kills every room actor it started, not just its own bookkeeping. `OneForOne` (above) keeps a registry crash from force-closing unrelated WebSocket *connections*, but it does not protect room *state* — every active room's participants/votes/buzzes are lost and clients reconnect into brand-new, empty rooms (see ADR 0008's "Known limitation", #561).
+
 Exact supervision mechanics should follow the capabilities and idioms of the selected Gleam/OTP packages rather than forcing an abstraction before implementation.
 
 Rooms are ephemeral in the MVP. If a room process terminates and no persistence layer exists, its state is lost by design.
