@@ -139,7 +139,8 @@ pub fn poker_ws_join_during_revealed_receives_votes_test() {
 
 /// poker room actor が join 後に死ぬと、接続は再 join できるようになる
 /// （`websocket_integration_test.gleam`'s `ws_rejoins_after_room_actor_dies_test`
-/// と同じ理由、#100）。
+/// と同じ理由、#100）。エラーコードは #570 で `room_unavailable` から専用の
+/// `room_busy` へ変更された。
 pub fn poker_ws_rejoins_after_room_actor_dies_test() {
   let assert Ok(registry_started) = registry.start()
   let assert Ok(poker_registry_started) = poker_registry.start()
@@ -178,7 +179,7 @@ pub fn poker_ws_rejoins_after_room_actor_dies_test() {
   )
   let #(vote_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(vote_reply, "\"type\":\"error\"")
-  assert string.contains(vote_reply, "\"code\":\"room_unavailable\"")
+  assert string.contains(vote_reply, "\"code\":\"room_busy\"")
 
   send_client_message(
     socket,

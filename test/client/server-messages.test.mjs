@@ -341,6 +341,29 @@ for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "roo
   });
 }
 
+// room_busy（#570）は buzz/reset タイムアウト由来で、サーバは接続を閉じずに
+// 保持する。上の恒久拒否コードと違い、クライアントは close イベントを待たず
+// 即座に "未接続" 扱いにはしない — 自動再接続のために close イベントの
+// scheduleReconnect() を通す必要があるため（詳細な再接続の検証は
+// reconnect.test.mjs 側）。
+test("room_busy エラーは即座に接続状態をリセットしない（close イベントを待つ）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "room_busy", message: "busy" }),
+    });
+
+    assert.equal(
+      client.connectionState(),
+      "connected",
+      "room_busy 直後に接続状態がリセットされている（close イベントを待たずに切断扱いしている）",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 // already_joined はこの接続が既にroomへ参加済みであることを示すだけで
 // join失敗ではないため、room_full等の join拒否コードとは異なり接続状態・
 // UIを一切変更しない意図的な設計（#553）。

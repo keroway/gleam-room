@@ -87,7 +87,8 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
 /// buzz/reset は `room_unavailable` を返し続け、再 join も
 /// `already_joined` で拒否され続けて接続が永久にスタックしていた。
 /// 修正後は `room.dispatch` の失敗時に `state.room` を `None` へ戻すため、
-/// 同じ接続からの再 join が新しい room に参加できる。
+/// 同じ接続からの再 join が新しい room に参加できる。エラーコードは #570 で
+/// `room_unavailable` から専用の `room_busy` へ変更された。
 pub fn ws_rejoins_after_room_actor_dies_test() {
   let assert Ok(registry_started) = registry.start()
   let registry_subject = registry_started.data
@@ -120,7 +121,7 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   send_client_message(socket, json.object([#("type", json.string("buzz"))]))
   let #(buzz_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(buzz_reply, "\"type\":\"error\"")
-  assert string.contains(buzz_reply, "\"code\":\"room_unavailable\"")
+  assert string.contains(buzz_reply, "\"code\":\"room_busy\"")
 
   send_client_message(
     socket,
