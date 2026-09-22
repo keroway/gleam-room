@@ -84,6 +84,10 @@ reconnect recovers a current snapshot, not a durable event history.
   a fixed, small number of times after an unexpected close, reusing the last
   entered room ID and display name; it does not attempt to preserve or
   restore the previous `ParticipantId`.
+- A `room_busy` error (see the error code table below) also triggers this
+  same reconnect path: the client closes the connection itself instead of
+  waiting for the server to do so, but otherwise reuses the last entered
+  room ID/display name exactly like an unexpected close (#570).
 
 ### Idle heartbeat timeout
 
@@ -138,7 +142,8 @@ may vary for the same code.
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |
-| `room_unavailable` | The requested room could not be started or did not respond in time. Whether the connection is closed afterward depends on *when* this occurred (join timeout closes it; buzz/reset timeout keeps it open) and is **not** distinguishable from `code` alone — clients must rely on the actual close event, not this code, to detect disconnection. |
+| `room_unavailable` | The room could not be started, or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
+| `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |

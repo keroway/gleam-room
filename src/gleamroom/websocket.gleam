@@ -778,8 +778,9 @@ pub fn release_room(
   }
 }
 
-/// Why a `room_unavailable` error is being sent. Each call site fails for a
-/// different reason and thus owes the client a different explanation.
+/// Why a `room_unavailable`/`room_busy` error is being sent. Each call site
+/// fails for a different reason and thus owes the client a different
+/// explanation.
 pub type RoomUnavailableReason {
   /// `registry.lookup` could not resolve or start the room actor.
   RoomLookupFailed
@@ -893,6 +894,14 @@ fn with_join_reply(
 /// いない）場合は、この後の再 join で新しい room 状態に参加し直す形に
 /// なるが、応答不能を検知した時点でクライアントに再接続を促す方が、
 /// 詰まったままの handle を握り続けるより安全側に倒れる。
+///
+/// クライアントへは `room_unavailable` ではなく専用の `room_busy` コードを
+/// 送る（#570）。`room_unavailable` は join 前後どちらでも起こりうる
+/// `RoomLookupFailed`/`JoinTimedOut` と共有されており、クライアント側は
+/// code だけでは「まだ join していない」のか「join 済みの接続が一時的に
+/// 詰まった」のかを区別できなかった（README.md/docs/mvp.md 参照）。
+/// 後者専用の `room_busy` にすることで、クライアントは join 済みセッションの
+/// 情報（`lastJoin` 相当）を保持したまま自動再接続できる。
 fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -911,17 +920,17 @@ fn with_room_reply(
         }
           <> ", reason=reply_timed_out",
       )
-      send_room_unavailable(connection)
+      send_room_busy(connection)
       mist.continue(ConnectionState(..state, room: None))
     }
   }
 }
 
-fn send_room_unavailable(connection: WebsocketConnection) -> Nil {
+fn send_room_busy(connection: WebsocketConnection) -> Nil {
   send_server_message(
     connection,
     protocol.ProtocolErrorMessage(
-      "room_unavailable",
+      "room_busy",
       room_unavailable_message(ReplyTimedOut),
     ),
   )

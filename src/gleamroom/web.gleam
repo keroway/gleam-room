@@ -228,12 +228,12 @@ pub fn index_html() -> String {
         break;
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_room_id/invalid_display_name はソケットを閉じずに
-        // 返る（websocket.gleam の with_room/JoinRejected 分岐）。room_unavailable
-        // は理由により挙動が異なり、join タイムアウトでは接続が閉じられるが、
-        // buzz/reset タイムアウトでは維持される（README.md/docs/mvp.md の
-        // error code 表参照。code だけでは区別できない）。実接続の close
-        // イベントを待つと再joinまで時間差ができるため、ここで即座に
+        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
+        // 恒久的な拒否で、ソケットを閉じずに返る（websocket.gleam の
+        // with_room/JoinRejected/with_join_reply の各分岐。join タイムアウト
+        // 由来の room_unavailable はサーバ側が mist.stop() で接続自体を閉じる
+        // が、クライアントからは同じ error メッセージとして届く）。実接続の
+        // close イベントを待つと再joinまで時間差ができるため、ここで即座に
         // \"未接続・再度join可能\" な状態へ戻す。実ソケットも明示的に閉じ、
         // 以降そのソケットからのイベントは無視する（close は自然発火しても
         // ここでの状態は既にリセット済み）。
@@ -254,6 +254,15 @@ pub fn index_html() -> String {
           buzzes = [];
           renderParticipants();
           renderBuzzes();
+        } else if (message.code === \"room_busy\") {
+          // join 済みの接続で buzz/reset がタイムアウトしたときだけ届く
+          // （websocket.gleam の with_room_reply/ReplyTimedOut）。サーバは
+          // この接続を閉じずに保持する設計だが、以後の buzz/reset はサーバ側
+          // state がリセットされ not_joined で弾かれるため、クライアントは
+          // ソケットを閉じて再接続を起こす。ただし恒久拒否とは違い
+          // lastJoin はクリアしない — close イベントの scheduleReconnect() が
+          // lastJoin を使って自動的に再 join まで行う（#570）。
+          if (socket) socket.close();
         }
         break;
       default:
