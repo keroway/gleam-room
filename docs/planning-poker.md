@@ -73,8 +73,14 @@ generalizing anything.
 - Reveal transitions the room from `Voting` to `Revealed`.
 - On reveal, the room broadcasts every participant's vote, including
   participants who did not vote (represented explicitly, not omitted).
-- Reveal is idempotent while already `Revealed`: a repeat request has no
-  effect beyond returning the same result.
+- Reveal is idempotent while already `Revealed`: a repeat request never
+  changes `state.phase` or any cast vote, and does not accept new votes.
+  A repeat reveal's broadcast can still differ from the first one, though,
+  because `Join` is not rejected while `Revealed` (see Reconnect below): a
+  participant who joins between two reveal requests appears in the second
+  reveal's participant list, unvoted (its own `has_voted` reads `False`),
+  lengthening the list (participants are ordered oldest-joined-first
+  throughout).
 
 ### Reset
 
