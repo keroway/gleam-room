@@ -9,6 +9,7 @@ import gleam/string
 import gleamroom
 import gleamroom/poker_registry
 import gleamroom/registry
+import gleamroom/wait
 import gramps/websocket as ws
 
 /// `/ws` を実際に生ソケットでハンドシェイクし、join → buzz → reset を1往復
@@ -38,6 +39,14 @@ fn tcp_recv(socket: TcpSocket, timeout_ms: Int) -> Result(BitArray, String)
 
 @external(erlang, "gleamroom_ws_test_tcp", "close")
 fn tcp_close(socket: TcpSocket) -> Nil
+
+/// room actor を生かしたまま応答不能にする（#532）。詳細は
+/// `gleamroom_room_test_ffi.erl` を参照。
+@external(erlang, "gleamroom_room_test_ffi", "suspend")
+fn suspend_process(pid: process.Pid) -> Nil
+
+@external(erlang, "gleamroom_room_test_ffi", "resume")
+fn resume_process(pid: process.Pid) -> Nil
 
 pub fn ws_roundtrip_join_buzz_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
@@ -136,6 +145,87 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   assert !string.contains(rejoin_reply, "already_joined")
 
   tcp_close(socket)
+}
+
+/// buzz/reset のタイムアウトで `state.room` が `None` に戻った後、再joinせず
+/// 切断しても、room actor 自身の `SessionDown` 経由で参加者が正しく片付く
+/// こと（#532）。
+///
+/// `with_room_reply`（websocket.gleam）は room actor が `call.default_timeout`
+/// （1000ms）以内に応答しないと `state.room` を `None` へ戻す（#100）。この
+/// 状態のまま接続が閉じると `on_close` は `state.room == None` の枝に入り、
+/// `Leave` dispatch も `release_room` も呼ばない —— 後始末は room actor
+/// 自身が接続プロセスの死を検知する `SessionDown` だけに委ねられる。この
+/// 組み合わせを実サーバー越しに駆動する統合テストが無かった（#532 の指摘）。
+///
+/// `process.kill` で room actor を殺すと `ActorDown`（#100 と同じ経路だが
+/// 相手が死んでいる）になり、その room actor自体が居なくなるので後段の
+/// `SessionDown` を発火させる相手がいなくなる
+/// （`ws_rejoins_after_room_actor_dies_test` はその経路）。ここでは
+/// `erlang:suspend_process/1` で room actor のスケジューリングだけを止め、
+/// **生きたまま**応答不能にする —— `ReplyTimedOut` が実際に起こる状況
+/// （GC やメッセージ滞留で詰まっているだけで死んではいない）により近い。
+pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("STUCK1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(join_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(join_reply, "\"type\":\"state\"")
+
+  let room_id = registry.room_id("STUCK1")
+  let assert Ok(room_subject) = registry.lookup(registry_subject, room_id)
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+
+  // room actor を生かしたまま応答不能にする。
+  suspend_process(room_pid)
+
+  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  // `recv_text_message` は必要ならフレームが揃うまで `tcp_recv` を繰り返す
+  // ので、1000ms のタイムアウトが経過して `room_busy` が届くまで待てる。
+  let #(buzz_reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(buzz_reply, "\"type\":\"error\"")
+  assert string.contains(buzz_reply, "\"code\":\"room_busy\"")
+
+  // 再joinせずにここで切断する。on_close は state.room == None の枝に入り
+  // Leave dispatch も release_room も呼ばない。
+  tcp_close(socket)
+
+  // room actor を再開させ、キューに溜まっていた接続プロセスの `ProcessDown`
+  // （`SessionDown` へ変換される）を処理させる。無人になれば room actor は
+  // 自己停止し、registry からも外れる（room.gleam の `SessionDown` 分岐）。
+  resume_process(room_pid)
+
+  wait.until(
+    fn() { !process.is_alive(room_pid) },
+    "無人になった room actor が SessionDown 経由で自己停止する",
+  )
+  // `registry.lookup` は cache miss だと room を新規に起動してしまう
+  // （get-or-create）ため、片付いたことの確認には使えない。実数を返す
+  // `registry.health` で見る。
+  wait.until(
+    fn() {
+      case registry.health(registry_subject) {
+        Ok(registry.HealthSnapshot(rooms: 0, ..)) -> True
+        _ -> False
+      }
+    },
+    "room actor の自己停止後、registry からも外れる",
+  )
 }
 
 /// `docs/mvp.md`・`docs/planning-poker.md` が明示的に約束している
