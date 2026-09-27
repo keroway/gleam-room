@@ -22,4 +22,4 @@ jobs:
     # @main のままだと、共有側の変更が**レビューを経ずに全リポジトリへ即座に効く**。
     # zizmor の unpinned-uses はそれを検出するための検査で、ignore で黙らせると
     # 「同一アカウントだから安全」という前提が検査から外れたまま残る（#96）。
-    uses: keroway/.github/.github/workflows/reusable-workflow-lint.yml@f46116661fa12e4ff3911c40970cf0f8510e9823 # 2026-09-09 時点の main
+    uses: keroway/.github/.github/workflows/reusable-workflow-lint.yml@f46116661fa12e4ff3911c40970cf0f8510e9823 # v1.0.0
