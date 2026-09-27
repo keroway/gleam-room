@@ -92,6 +92,46 @@ test("error イベントはログに残るだけで例外を投げない", () =>
   }
 });
 
+test("room_busy エラーはソケットを閉じるが lastJoin を保持し、close イベントで自動再接続する（#570）", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+    });
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "error",
+        code: "room_busy",
+        message: "The room did not respond in time. Please try again.",
+      }),
+    });
+
+    // error ハンドラ自身は lastJoin をクリアしない・タイマーも予約しない
+    // （予約するのは close イベント側の scheduleReconnect()）。
+    assert.equal(client.pendingTimers(), 0, "room_busy 直後に自動再接続を予約してはいけない");
+
+    // 実ブラウザではここで close イベントが非同期に発火する。
+    socket.handlers.close?.();
+
+    assert.equal(client.connectionState(), "disconnected");
+    assert.equal(client.pendingTimers(), 1, "close 後に再接続タイマーが予約されていない");
+    assert.deepEqual(
+      client.timerDelays(),
+      [RECONNECT_DELAY_MS],
+      "再接続タイマーの delay が RECONNECT_DELAY_MS と一致していない",
+    );
+
+    const before = client.sockets.length;
+    client.runTimers();
+    assert.equal(client.sockets.length, before + 1, "room_busy 後に自動で再接続していない");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("接続中は保留中の再接続タイマーが残らない", () => {
   const client = startClient();
   try {

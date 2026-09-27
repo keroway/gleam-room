@@ -46,6 +46,54 @@ pub fn registry_is_restarted_and_reachable_by_name_test() {
   assert before != after
 }
 
+/// registry がクラッシュすると、参加者が join 済みの room actor も道連れで
+/// 終了することを検証する（#561）。
+///
+/// `registry_is_restarted_and_reachable_by_name_test` は誰も join させない
+/// まま registry を kill しており、その `get_snapshot(after) == Ok([])` は
+/// 「同じ room actor が生き残って空だった」のか「room actor ごと死んで、
+/// 再 lookup で新しい空 room が作られた」のかを区別できない。このテストは
+/// 参加者を1人 join させてから registry を kill し、**元の room actor の
+/// pid そのものが終了する**ことを直接検証する。
+///
+/// room は supervisor の子ではなく registry が `actor.start`（link）で
+/// 直接起動しており、registry 側だけが `process.trap_exits(True)` を呼んで
+/// いる（room.gleam には trap_exits の呼び出しが無い）。Erlang の link は
+/// 双方向で、trap していない側は link 相手の終了に道連れで終了するため、
+/// room → registry 方向のクラッシュ耐性は無い。ADR 0008 の Positive 節
+/// 「A registry crash restarts only the registry. Existing WebSocket
+/// connections and rooms are unaffected」という主張と矛盾することの裏取り。
+pub fn registry_crash_kills_joined_room_actor_test() {
+  let name = process.new_name("gleamroom_registry_room_crash_test")
+  let subject = process.named_subject(name)
+
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(supervision.worker(fn() { registry.start_named(name) }))
+    |> supervisor.start
+
+  let assert Ok(room_subject) =
+    registry.lookup(subject, registry.room_id("room-crash"))
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+
+  // 参加者を1人 join させ、「room に状態がある」ことを作る。
+  let session = process.new_subject()
+  let assert Ok(room.ParticipantJoined(_)) =
+    room.dispatch(
+      room_subject,
+      room.Join(room.participant_id("p1"), "Alice"),
+      session,
+    )
+  let assert Ok([_participant]) = room.get_snapshot(room_subject)
+
+  let assert Ok(registry_pid) = process.subject_owner(subject)
+  process.kill(registry_pid)
+
+  // room actor は registry へ link されており、registry の kill に道連れで
+  // 終了するはず（ADR 0008 の「rooms are unaffected」という主張への反証）。
+  wait.until_dead(room_pid, "join済みのroom actorがregistryのクラッシュに道連れで終了する")
+}
+
 /// もともとは #95 で「`RestForOne` を選んだ根拠（後ろに追加した子も
 /// 巻き添えで再起動される）」を検証する目的で追加されたが、その根拠自体が
 /// ADR 0008（2026-08-17、ADR 0004 を supersede）で否定され、本番構成は

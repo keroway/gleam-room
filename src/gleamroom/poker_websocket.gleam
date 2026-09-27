@@ -832,7 +832,9 @@ fn with_join_reply(
   }
 }
 
-/// `websocket.gleam`'s `with_room_reply` と同じ理由・実装（#33 / #100）。
+/// `websocket.gleam`'s `with_room_reply` と同じ理由・実装（#33 / #100 / #570）。
+/// クライアントへは `room_unavailable` ではなく専用の `room_busy` コードを送る
+/// （`websocket.gleam` の `send_room_busy` 参照）。
 fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -851,17 +853,17 @@ fn with_room_reply(
         }
           <> ", reason=reply_timed_out",
       )
-      send_room_unavailable(connection)
+      send_room_busy(connection)
       mist.continue(ConnectionState(..state, room: None))
     }
   }
 }
 
-fn send_room_unavailable(connection: WebsocketConnection) -> Nil {
+fn send_room_busy(connection: WebsocketConnection) -> Nil {
   send_server_message(
     connection,
     poker_protocol.ProtocolErrorMessage(
-      "room_unavailable",
+      "room_busy",
       room_unavailable_message(ReplyTimedOut),
     ),
   )
