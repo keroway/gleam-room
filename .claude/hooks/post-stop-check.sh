@@ -82,6 +82,11 @@ while IFS= read -r file; do
     # 本体かチェッカー自身が変わったときだけローカルでも検知する。
     docs/duplication-inventory.md|scripts/check-duplication-inventory-refs.js)
       CHECK_TRIGGERED=1 ;;
+    # justfile の check レシピ自身、またはこのフックスクリプト自身が変わった
+    # ターンも常に検証する。shell の case パターンはパス区切りを特別扱いしない
+    # ため、これらを含めておかないとフック/レシピの変更だけを検知漏れする(#560)。
+    justfile|.claude/hooks/post-stop-check.sh)
+      CHECK_TRIGGERED=1 ;;
   esac
 done <<EOF
 $CHANGED_FILES
