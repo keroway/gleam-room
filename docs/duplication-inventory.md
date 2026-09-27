@@ -213,11 +213,11 @@ source as "same value, same reason"):
   (`websocket.gleam:295-307`, `poker_websocket.gleam:258-269`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:333-360`, `poker_websocket.gleam:286-308`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1044-1046`,
-  `poker_websocket.gleam:1029-1031`, byte-identical).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1053-1055`,
+  `poker_websocket.gleam:1031-1033`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1064-1067`,
-  `poker_websocket.gleam:1034-1037`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1073-1076`,
+  `poker_websocket.gleam:1036-1039`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -227,8 +227,8 @@ Judgment-deferred, larger-scope duplication:
 
 - `release_room` (`websocket.gleam:757-772`,
   `poker_websocket.gleam:740-758`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:798-911`,
-  `poker_websocket.gleam:777-857`) — these encode "how to talk to a room
+  `with_room_reply` family (`websocket.gleam:806-926`,
+  `poker_websocket.gleam:778-858`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,
@@ -256,16 +256,18 @@ literals, not Gleam code.
 - `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
   `web_poker.gleam:150-160`, byte-identical).
 - `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:264-314`, `web_poker.gleam:375-422`).
-- `joinForm` submit handler (`web.gleam:316-340`, `web_poker.gleam:424-448`,
+  (`web.gleam:273-322`, `web_poker.gleam:382-429`).
+- `joinForm` submit handler (`web.gleam:324-347`, `web_poker.gleam:431-454`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:346-352`, `web_poker.gleam:454-462`,
+- `sendIfOpen` (`web.gleam:355-361`, `web_poker.gleam:461-469`,
   byte-identical).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
-  (`web.gleam:229-258`, `web_poker.gleam:330-352`). The poker-only
-  `round_already_revealed`/`voter_not_joined` `else if` branch
-  (`web_poker.gleam:353-368`) rolls back the optimistic `ownVote` and is
+  (`web.gleam:229-257`, `web_poker.gleam:330-353`), plus the `room_busy`
+  `else if` branch that closes the socket without clearing `lastJoin`
+  (`web.gleam:257-266`, `web_poker.gleam:353-359`, added by #570). The
+  poker-only `round_already_revealed`/`voter_not_joined` `else if` branch
+  (`web_poker.gleam:360-375`) rolls back the optimistic `ownVote` and is
   **not** part of this duplication — buzzer has no equivalent — so it
   should not be counted when comparing the two files' `error` handling.
 

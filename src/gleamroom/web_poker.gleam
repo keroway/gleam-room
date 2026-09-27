@@ -329,11 +329,11 @@ pub fn poker_html() -> String {
       }
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_room_id/invalid_display_name はソケットを閉じずに
-        // 返る（poker_websocket.gleam の同種の分岐）。room_unavailable は理由
-        // により挙動が異なり、join タイムアウトでは接続が閉じられるが、
-        // buzz/reset タイムアウトでは維持される（README.md/docs/mvp.md の
-        // error code 表参照。code だけでは区別できない）。
+        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
+        // 恒久的な拒否で、ソケットを閉じずに返る（poker_websocket.gleam の
+        // with_room/JoinRejected/with_join_reply の各分岐。join タイムアウト
+        // 由来の room_unavailable はサーバ側が接続自体を閉じるが、クライアント
+        // からは同じ error メッセージとして届く）。
         // web.gleam と同じ理由でここで即座に未接続・再join可能な状態へ戻す。
         if (
           message.code === \"room_full\" ||
@@ -350,6 +350,13 @@ pub fn poker_html() -> String {
           ownVote = null;
           renderParticipants();
           renderVotes();
+        } else if (message.code === \"room_busy\") {
+          // join 済みの接続で vote/reveal/reset がタイムアウトしたときだけ
+          // 届く（poker_websocket.gleam の with_room_reply/ReplyTimedOut）。
+          // web.gleam と同じ理由でソケットは閉じるが lastJoin は保持し、
+          // close イベントの scheduleReconnect() に自動再 join を任せる
+          // （#570）。
+          if (socket) socket.close();
         } else if (
           message.code === \"round_already_revealed\" ||
           message.code === \"voter_not_joined\" ||
