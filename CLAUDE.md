@@ -112,3 +112,9 @@ Do not combine unrelated issues in one PR unless explicitly requested.
 ## Generalization rule
 
 Do not create a generic room framework from the buzzer application alone. Reusable abstractions should be extracted only after at least one additional application demonstrates the same requirements. Planning Poker is now that second application, but no generalized room framework has been extracted yet — evaluate that separately, on its own merits.
+
+## Codex 向け運用ルール
+
+Codex 向けの横断運用ルールは `keroway/CLAUDE.md` ではなく
+[agent-assets `docs/codex-common-instructions.md`](https://github.com/keroway/agent-assets/blob/main/docs/codex-common-instructions.md)
+を正典とする（Codex は git ルートより上の AGENTS.md を読まないため）。
