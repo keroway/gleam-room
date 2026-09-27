@@ -182,6 +182,28 @@ pub fn repeat_reveal_is_idempotent_test() {
   assert second_reveal == first_reveal
 }
 
+pub fn repeat_reveal_reflects_a_join_that_happened_while_revealed_test() {
+  let alice_id = poker.participant_id("p1")
+  let bob_id = poker.participant_id("p2")
+  let #(state, _) =
+    poker.apply_command(poker.new_state(), poker.Join(alice_id, "Alice"))
+  let #(state, _) = poker.apply_command(state, poker.Vote(alice_id, poker.Five))
+  let #(state, first_reveal) = poker.apply_command(state, poker.Reveal)
+
+  let #(state, _) = poker.apply_command(state, poker.Join(bob_id, "Bob"))
+  let #(_, second_reveal) = poker.apply_command(state, poker.Reveal)
+
+  assert first_reveal
+    == poker.RoundRevealed([
+      poker.RevealedVote(alice_id, "Alice", Some(poker.Five)),
+    ])
+  assert second_reveal
+    == poker.RoundRevealed([
+      poker.RevealedVote(alice_id, "Alice", Some(poker.Five)),
+      poker.RevealedVote(bob_id, "Bob", None),
+    ])
+}
+
 pub fn reset_round_clears_votes_and_returns_to_voting_test() {
   let id = poker.participant_id("p1")
   let #(state, _) =

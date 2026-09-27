@@ -216,9 +216,12 @@ fn apply_vote(
   }
 }
 
-/// Idempotent while already `Revealed`: since neither `votes` nor
-/// `participants` change here, recomputing the revealed list on a repeat
-/// request naturally returns the same result without any extra branching.
+/// Idempotent in the sense that a repeat request never mutates `votes` or
+/// `phase`. It is not idempotent in its broadcast result, though:
+/// `participants` can grow between two reveal requests (`Join` is not
+/// rejected while `Revealed`, see docs/planning-poker.md's Reconnect
+/// section), so `revealed_votes` below can return a different list on the
+/// second call (see #564).
 fn apply_reveal(state: PokerState) -> #(PokerState, PokerEvent) {
   let next = PokerState(..state, phase: Revealed)
   #(next, RoundRevealed(revealed_votes(next)))
