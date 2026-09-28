@@ -138,6 +138,33 @@ test("buzz_accepted はログに残り、同じ position の再配信は無視�
   }
 });
 
+test("buzz_accepted メッセージが妥当なJSONだが position/participant_id/display_name のいずれか欠落だと、buzzes を更新せず部分適用状態にならない（#609）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "buzz_accepted",
+        participant_id: "p1",
+        display_name: "Alice",
+        // position 欠落
+      }),
+    });
+
+    assert.ok(
+      client.logs.some((line) => line.includes("buzz_accepted message missing expected fields")),
+      "形状不正を示すログが残っていない",
+    );
+    assert.deepEqual(
+      client.childTextContents("buzzes"),
+      [],
+      "position フィールド欠落なのに buzzes に描画されている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("round_reset はログに残る", () => {
   const client = startClient();
   try {
@@ -146,6 +173,7 @@ test("round_reset はログに残る", () => {
       data: JSON.stringify({
         type: "buzz_accepted",
         participant_id: "p1",
+        display_name: "Alice",
         position: 1,
       }),
     });
@@ -173,6 +201,7 @@ test("同じ round_reset が連続配信されても2回目はログに積まれ
       data: JSON.stringify({
         type: "buzz_accepted",
         participant_id: "p1",
+        display_name: "Alice",
         position: 1,
       }),
     });
