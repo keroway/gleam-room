@@ -334,8 +334,26 @@ fn handle_request(
     ["health"] ->
       case req.method {
         Get | Head -> {
+          // buzzer / poker への問い合わせを並列化する（#566）。逐次のままだと
+          // 一方がちょうど call.default_timeout いっぱいまで詰まった場合、
+          // /health 自体の応答が最大 ~2000ms（1000ms + 1000ms）まで伸び、
+          // ロードバランサやオーケストレータの health check タイムアウト
+          // （1〜2秒が一般的）と衝突しうる。poker 側だけ spawn_unlinked した
+          // 別プロセスに投げて buzzer 側と待ち時間を重ねる。
+          let poker_reply = process.new_subject()
+          process.spawn_unlinked(fn() {
+            process.send(
+              poker_reply,
+              poker_registry.health(poker_registry_subject),
+            )
+          })
           let buzzer_health = registry.health(registry_subject)
-          let poker_health = poker_registry.health(poker_registry_subject)
+          // poker_registry.health は call.default_timeout 以内に必ず
+          // （詰まっていても Error で）返るので、ここでの受信タイムアウトは
+          // メッセージ配送分の余裕を足すだけでよい。
+          let poker_health =
+            process.receive(poker_reply, call.default_timeout + 200)
+            |> result.unwrap(Error(call.Timeout))
           case buzzer_health, poker_health {
             Ok(registry.HealthSnapshot(rooms: buzzer_rooms, stuck: buzzer_stuck)),
               Ok(poker_registry.HealthSnapshot(
