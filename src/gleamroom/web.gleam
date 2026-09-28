@@ -204,6 +204,14 @@ pub fn index_html() -> String {
         log(`left: ${message.participant_id}`);
         break;
       case \"buzz_accepted\":
+        if (
+          typeof message.participant_id !== \"string\" ||
+          typeof message.position !== \"number\" ||
+          typeof message.display_name !== \"string\"
+        ) {
+          log(`buzz_accepted message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
         // join直後の狭い時間窓で、room 側の subscribers 登録と selector 設定の
         // 間にメールボックスへ滞留したイベントが、state 受信後に再配送され
         // 重複表示されうる（#43）。position は round 内で一意なので、
