@@ -148,7 +148,9 @@ match `Host` (CSWSH protection, see
 this matters when deploying behind a reverse proxy that rewrites `Host`. The
 browser client above is the easiest way to exercise it manually. To validate
 the full MVP acceptance scenario from
-[`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running:
+[`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running
+(room IDs are case-insensitive — `abcd`, `ABCD`, and `AbCd` all join the same
+room):
 
 1. Open `http://localhost:4000/` in three browser tabs/windows.
 2. Join room `ABCD` in each with a different display name (e.g. Alice, Bob,
@@ -188,7 +190,7 @@ see `src/gleamroom/poker_protocol.gleam` and
 serves the browser client (`src/gleamroom/web_poker.gleam`), the easiest way
 to exercise it manually. To validate the full acceptance scenario from
 [`docs/planning-poker.md`](docs/planning-poker.md#acceptance-scenario) with
-the server running:
+the server running (room IDs are case-insensitive, same as the buzzer):
 
 1. Open `http://localhost:4000/poker` in three browser tabs/windows.
 2. Join room `PLAN` in each with a different display name (e.g. Alice, Bob,

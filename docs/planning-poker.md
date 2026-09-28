@@ -109,6 +109,10 @@ The exact JSON shape can evolve during implementation. As with the buzzer,
 wire messages must be decoded into typed domain commands/events immediately,
 not passed through as untyped maps.
 
+As with the buzzer, `room_id` is trimmed and uppercased server-side before
+use as the room identifier, so `"abcd"`, `"ABCD"`, and `"AbCd"` all resolve
+to the same room.
+
 Client messages:
 
 ```json
