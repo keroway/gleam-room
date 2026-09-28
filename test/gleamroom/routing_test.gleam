@@ -1,3 +1,4 @@
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/http
 import gleam/http/request
@@ -328,6 +329,51 @@ pub fn health_returns_503_poker_timeout_via_http_test() {
   let assert Ok(#(status, body)) = get(port, "/health")
   assert status == 503
   assert body == "poker: registry not responding"
+}
+
+/// buzzer / poker の両方が詰まった最悪ケースでも、`/health` の応答が
+/// 並列化（#566）で ~call.default_timeout に収まり、逐次実行時の
+/// ~2 * call.default_timeout まで伸びないことを固定する。`Timeout` 分岐の
+/// 個別確認は `health_returns_503_timeout_via_http_test` /
+/// `health_returns_503_poker_timeout_via_http_test` が既に持っているので、
+/// ここでは応答時間だけを見る。
+pub fn health_stays_near_single_timeout_when_both_registries_are_stuck_test() {
+  let unresponsive_registry: process.Subject(registry.Message) =
+    process.new_subject()
+  let unresponsive_poker_registry: process.Subject(poker_registry.Message) =
+    process.new_subject()
+
+  let port =
+    start_web_only_server(unresponsive_registry, unresponsive_poker_registry)
+
+  let started_at = erlang_monotonic_time_ms()
+  let assert Ok(#(status, _body)) = get(port, "/health")
+  let elapsed_ms = erlang_monotonic_time_ms() - started_at
+
+  assert status == 503
+  // 逐次実行なら ~2 * call.default_timeout（2000ms）かかる。並列化後は
+  // 片方の default_timeout（1000ms）+ 受信の余裕分（200ms）+ HTTP往復の
+  // 余裕を見て 1500ms を閾値にする。CI の遅い実行環境でも安定させるため、
+  // 「2000msにほぼ張り付く」ことだけは確実に排除できる余裕を持たせている。
+  assert elapsed_ms < 1500
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn erlang_monotonic_time_native() -> Int
+
+@external(erlang, "erlang", "convert_time_unit")
+fn erlang_convert_time_unit(
+  time: Int,
+  from_unit: atom.Atom,
+  to_unit: atom.Atom,
+) -> Int
+
+fn erlang_monotonic_time_ms() -> Int {
+  erlang_convert_time_unit(
+    erlang_monotonic_time_native(),
+    atom.create("native"),
+    atom.create("millisecond"),
+  )
 }
 
 /// `/health` の200成功時本文（`buzzer_rooms=`/`buzzer_stuck=`/`poker_rooms=`/
