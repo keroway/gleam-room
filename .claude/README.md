@@ -83,7 +83,7 @@ ln -s ../../.claude/hooks/post-stop-check.sh .codex/hooks/post-stop-check.sh
   担っているので不要」として意図的に未導入だったが、その二重管理自体が
   検知漏れバグ（#305, #466）の温床になっていたため方針を変更した。
 - `lefthook.yml`: pre-commit で `gleam format --check`（変更 .gleam のみ）と
-  `typos`、pre-push で `gleam test` を実行する（導入: `lefthook install`）。
+  `typos`、pre-push で `just check`（`ci.yml` と同じ手順の直列実行）を実行する（導入: `lefthook install`）。
 
 ## 意図的に未導入の設定
 
