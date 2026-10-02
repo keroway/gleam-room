@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/bytes_tree
 import gleam/crypto
 import gleam/erlang/process
+import gleam/http/request.{type Request}
 import gleam/int
 import gleam/json
 import gleam/option.{None, Some}
@@ -10,7 +11,9 @@ import gleamroom
 import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/wait
+import gleamroom/websocket
 import gramps/websocket as ws
+import mist.{type Connection}
 
 /// `/ws` を実際に生ソケットでハンドシェイクし、join → buzz → reset を1往復
 /// させる統合テスト（#158）。
@@ -523,6 +526,112 @@ fn recv_text_message(
     Error(_) -> {
       let assert Ok(chunk) = tcp_recv(socket, 2000)
       recv_text_message(socket, <<buffer:bits, chunk:bits>>)
+    }
+  }
+}
+
+/// ハートビート間隔（実時間では30秒）を差し替えたサーバを起動し、実ポートを返す。
+/// 短い間隔にすることで、`RoomBroadcast` 受信による延命（#581）を gleeunit の
+/// テスト時間上限（約50秒）内で検証できる（#613）。
+fn start_server_with_heartbeat_interval(interval_ms: Int) -> Int {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let bound_port = process.new_subject()
+  let assert Ok(_) =
+    fn(req: Request(Connection)) {
+      websocket.upgrade_with_heartbeat_interval(
+        req,
+        registry_subject,
+        interval_ms,
+      )
+    }
+    |> mist.new
+    |> mist.port(0)
+    |> mist.after_start(fn(port, _scheme, _ip_address) {
+      process.send(bound_port, port)
+    })
+    |> mist.start
+  let assert Ok(port) = process.receive(bound_port, 1000)
+  port
+}
+
+/// join だけして以後は何も送らない接続は、他参加者の操作による room 配信を
+/// 受け取り続ける限りハートビートで切断されない（#581 / #613）。
+///
+/// 間隔は300ms。Bob が100msごとに `reset` を送り、Alice は5窓分（1.5秒）の間
+/// 一切何も送らずに配信だけを受け取る。`RoomBroadcast` 分岐の `mark_active`
+/// が落ちると Alice は2回目の tick（600ms）で閉じられ、以降のフレームを
+/// 受け取れなくなる。
+pub fn ws_room_broadcast_keeps_silent_connection_alive_test() {
+  let port = start_server_with_heartbeat_interval(300)
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
+  let _bob_buffer = join_and_drain(bob, bob_buffer, "Bob")
+  // Bob の join は Alice にも配信される。以降の assert を単純にするため読み捨てる。
+  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(joined, "\"type\":\"participant_joined\"")
+
+  let alice_buffer = relay_resets(bob, alice, alice_buffer, 15)
+
+  // 1.5秒後（tick 5回分）でも Alice は生きていて、最後の配信も届く。
+  send_client_message(bob, json.object([#("type", json.string("reset"))]))
+  let #(reply, _buffer) = recv_text_message(alice, alice_buffer)
+  assert reply == "{\"type\":\"round_reset\"}"
+
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// 上のテストの対照実験。何も送らず、room 配信も無い接続は、同じ間隔設定で
+/// 2回目の tick に閉じられる。これが成り立つから、上のテストが「延命された」
+/// ことを意味する（間隔の差し替えが効いている証拠にもなる）。
+pub fn ws_silent_connection_without_broadcast_times_out_test() {
+  let port = start_server_with_heartbeat_interval(300)
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
+
+  let _rest = recv_close_frame(alice, alice_buffer)
+  tcp_close(alice)
+}
+
+fn join_and_drain(
+  socket: TcpSocket,
+  buffer: BitArray,
+  display_name: String,
+) -> BitArray {
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("HEARTBEAT")),
+      #("display_name", json.string(display_name)),
+    ]),
+  )
+  let #(join_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(join_reply, "\"type\":\"state\"")
+  buffer
+}
+
+/// `sender` が100msごとに `reset` を `count` 回送り、`receiver` はそのたびに
+/// 届く `round_reset` 配信を読み捨てる。`receiver` 側は何も送らない。
+fn relay_resets(
+  sender: TcpSocket,
+  receiver: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      process.sleep(100)
+      send_client_message(
+        sender,
+        json.object([#("type", json.string("reset"))]),
+      )
+      let #(reply, buffer) = recv_text_message(receiver, buffer)
+      assert reply == "{\"type\":\"round_reset\"}"
+      relay_resets(sender, receiver, buffer, count - 1)
     }
   }
 }

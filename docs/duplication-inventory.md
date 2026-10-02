@@ -199,25 +199,25 @@ actual domain and are the reason the two protocols exist separately.
 Domain-independent and duplicated near-exactly (already commented in the
 source as "same value, same reason"):
 
-- `heartbeat_interval_ms = 30_000` (`websocket.gleam:56`,
-  `poker_websocket.gleam:47`).
-- `origin_allowed`/`origin_header_allowed` (`websocket.gleam:100-119`,
-  `poker_websocket.gleam:85-102`).
+- `default_heartbeat_interval_ms = 30_000` (`websocket.gleam:59`,
+  `poker_websocket.gleam:50`).
+- `origin_allowed`/`origin_header_allowed` (`websocket.gleam:120-139`,
+  `poker_websocket.gleam:105-122`).
 - `on_init` heartbeat subject + `send_after` scheduling
-  (`websocket.gleam:121-138`, `poker_websocket.gleam:104-124`).
-- `mark_active`/`record_message` (`websocket.gleam:231-241`,
-  `poker_websocket.gleam:202-212`).
+  (`websocket.gleam:141-160`, `poker_websocket.gleam:124-146`).
+- `mark_active`/`record_message` (`websocket.gleam:253-263`,
+  `poker_websocket.gleam:224-234`).
 - `heartbeat_outcome`/`handle_heartbeat_tick` idle-timeout logic
-  (`websocket.gleam:244-287`, `poker_websocket.gleam:215-255`).
+  (`websocket.gleam:266-309`, `poker_websocket.gleam:237-277`).
 - `max_text_frame_bytes = 2048` and `frame_size_outcome`
-  (`websocket.gleam:295-307`, `poker_websocket.gleam:258-269`).
+  (`websocket.gleam:317-329`, `poker_websocket.gleam:280-291`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
-  (`websocket.gleam:333-360`, `poker_websocket.gleam:286-308`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1053-1055`,
-  `poker_websocket.gleam:1031-1033`, byte-identical).
+  (`websocket.gleam:355-382`, `poker_websocket.gleam:308-330`).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1075-1077`,
+  `poker_websocket.gleam:1053-1055`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1073-1076`,
-  `poker_websocket.gleam:1036-1039`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1095-1098`,
+  `poker_websocket.gleam:1058-1061`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -225,10 +225,10 @@ beyond moving code.
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:757-772`,
-  `poker_websocket.gleam:740-758`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:806-926`,
-  `poker_websocket.gleam:778-858`) — these encode "how to talk to a room
+- `release_room` (`websocket.gleam:779-794`,
+  `poker_websocket.gleam:762-780`) and the `with_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:828-948`,
+  `poker_websocket.gleam:800-880`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,

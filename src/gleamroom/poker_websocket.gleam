@@ -27,6 +27,9 @@ type ConnectionState {
     registry: Subject(poker_registry.Message),
     room: Option(RoomHandle),
     heartbeat_subject: Subject(ConnectionEvent),
+    // tick の間隔。本番は常に `default_heartbeat_interval_ms`。`upgrade_with_heartbeat_interval`
+    // 経由でのみ差し替えられる（テストが30秒待たずにハートビートを検証するため、#613）。
+    heartbeat_interval_ms: Int,
     // クライアントから何か受け取るたびに True へ戻す（`websocket.gleam`'s
     // `active_since_heartbeat` と同じ理由、#35）。
     active_since_heartbeat: Bool,
@@ -44,7 +47,7 @@ pub type ConnectionEvent {
 }
 
 /// `websocket.gleam`'s `heartbeat_interval_ms` と同じ値・同じ理由。
-const heartbeat_interval_ms = 30_000
+const default_heartbeat_interval_ms = 30_000
 
 type RoomHandle {
   RoomHandle(
@@ -61,12 +64,29 @@ pub fn upgrade(
   req: Request(Connection),
   registry_subject: Subject(poker_registry.Message),
 ) -> Response(ResponseData) {
+  upgrade_with_heartbeat_interval(
+    req,
+    registry_subject,
+    default_heartbeat_interval_ms,
+  )
+}
+
+/// `upgrade` と同じだが、ハートビート間隔を差し替えられる。ハートビートの
+/// 挙動（room配信による延命、#581）を、実時間30秒を待たずに統合テストする
+/// ためだけの入口で、本番の配線は `upgrade` を使う（#613）。
+pub fn upgrade_with_heartbeat_interval(
+  req: Request(Connection),
+  registry_subject: Subject(poker_registry.Message),
+  heartbeat_interval_ms: Int,
+) -> Response(ResponseData) {
   case origin_allowed(req) {
     True ->
       mist.websocket(
         request: req,
         handler: handle_message,
-        on_init: fn(_connection) { on_init(registry_subject) },
+        on_init: fn(_connection) {
+          on_init(registry_subject, heartbeat_interval_ms)
+        },
         on_close: on_close,
       )
     False -> {
@@ -103,6 +123,7 @@ pub fn origin_header_allowed(
 
 fn on_init(
   registry_subject: Subject(poker_registry.Message),
+  heartbeat_interval_ms: Int,
 ) -> #(ConnectionState, Option(Selector(ConnectionEvent))) {
   logging.log(
     logging.Info,
@@ -116,6 +137,7 @@ fn on_init(
       registry: registry_subject,
       room: None,
       heartbeat_subject: heartbeat_subject,
+      heartbeat_interval_ms: heartbeat_interval_ms,
       active_since_heartbeat: True,
       messages_since_heartbeat: 0,
     ),
@@ -241,7 +263,7 @@ fn handle_heartbeat_tick(
     HeartbeatContinues -> {
       process.send_after(
         state.heartbeat_subject,
-        heartbeat_interval_ms,
+        state.heartbeat_interval_ms,
         HeartbeatTick,
       )
       mist.continue(
