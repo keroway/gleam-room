@@ -8,7 +8,7 @@ build:
 
 test:
     gleam test
-    node --test 'test/client/*.test.mjs'
+    node --test 'test/client/*.test.mjs' 'test/scripts/*.test.mjs'
 
 format:
     gleam format src test
@@ -22,7 +22,7 @@ check:
     gleam format --check src test
     gleam build --warnings-as-errors
     gleam test
-    node --test 'test/client/*.test.mjs'
+    node --test 'test/client/*.test.mjs' 'test/scripts/*.test.mjs'
     node scripts/check-duplication-inventory-refs.js
     shellcheck .claude/hooks/post-stop-check.sh
     typos

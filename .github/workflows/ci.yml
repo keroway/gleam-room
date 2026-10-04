@@ -54,6 +54,10 @@ jobs:
       - name: Check duplication-inventory.md citations
         run: node scripts/check-duplication-inventory-refs.js
 
+      # 上記ゲートスクリプト自身の単体テスト(#611)。
+      - name: Test (scripts)
+        run: node --test 'test/scripts/*.test.mjs'
+
       # Stop hook 本体（.claude/README.md 参照）の唯一の静的解析（#343）。
       # 対象は現時点でこの1ファイルのみのため、汎用的な find | xargs 化はしない。
       - name: Shellcheck (post-stop-check.sh)
