@@ -469,7 +469,7 @@ pub fn start_actually_enforces_the_given_max_rooms_test() {
       registry_subject,
       registry.room_id("room-437-buzzer-b"),
     )
-    == Error(Nil)
+    == Error(registry.CapacityReached)
 
   let assert Ok(_) =
     poker_registry.lookup(
@@ -480,7 +480,7 @@ pub fn start_actually_enforces_the_given_max_rooms_test() {
       poker_registry_subject,
       poker_registry.room_id("room-437-poker-b"),
     )
-    == Error(Nil)
+    == Error(registry.CapacityReached)
 }
 
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")

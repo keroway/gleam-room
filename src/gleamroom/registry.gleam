@@ -27,8 +27,23 @@ pub fn room_id_to_string(id: RoomId) -> String {
   value
 }
 
+/// `lookup` が room を返せなかった理由（#569）。
+///
+/// クライアントへの案内が逆になるので区別する: `CapacityReached` は他の room が
+/// 終了するまで再試行しても直らず、`Unavailable` は一時的でありうる。
+/// `poker_registry.gleam` も同じ型を使う。
+pub type LookupError {
+  /// `max_rooms` に達しており、新しい room を作れない（#127）。
+  CapacityReached
+  /// room actor の起動失敗、または registry が応答しなかった。
+  Unavailable
+}
+
 pub type Message {
-  Lookup(id: RoomId, reply_to: Subject(Result(Subject(room.Message), Nil)))
+  Lookup(
+    id: RoomId,
+    reply_to: Subject(Result(Subject(room.Message), LookupError)),
+  )
   /// 最後の参加者が抜けた room を登録から外す（#26）。
   ///
   /// `subject` を一緒に受け取り、**登録中のものと一致するときだけ削除する**。
@@ -298,7 +313,7 @@ fn handle_message(
               <> ", max_rooms="
               <> string.inspect(state.max_rooms),
           )
-          process.send(reply_to, Error(Nil))
+          process.send(reply_to, Error(CapacityReached))
           actor.continue(state)
         }
         Error(Nil) ->
@@ -345,7 +360,7 @@ fn handle_message(
                     "subject_owner failed for started room, treating as start failure: id="
                       <> key,
                   )
-                  process.send(reply_to, Error(Nil))
+                  process.send(reply_to, Error(Unavailable))
                   actor.continue(state)
                 }
               }
@@ -358,7 +373,7 @@ fn handle_message(
                   <> ", reason="
                   <> string.inspect(reason),
               )
-              process.send(reply_to, Error(Nil))
+              process.send(reply_to, Error(Unavailable))
               actor.continue(state)
             }
           }
@@ -548,7 +563,8 @@ pub fn health(
 pub fn lookup(
   subject: Subject(Message),
   id: RoomId,
-) -> Result(Subject(room.Message), Nil) {
+) -> Result(Subject(room.Message), LookupError) {
   call.try_call(subject, call.default_timeout, Lookup(id, _), "registry.lookup")
+  |> result.replace_error(Unavailable)
   |> result.flatten
 }

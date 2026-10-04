@@ -29,7 +29,10 @@ pub fn room_id_to_string(id: RoomId) -> String {
 }
 
 pub type Message {
-  Lookup(id: RoomId, reply_to: Subject(Result(Subject(poker.Message), Nil)))
+  Lookup(
+    id: RoomId,
+    reply_to: Subject(Result(Subject(poker.Message), registry.LookupError)),
+  )
   /// 最後の参加者が抜けた room を登録から外す。`registry.gleam`'s `Release`
   /// と同じ理由（#26）: 登録中のものと一致するときだけ削除する ABA ガード。
   Release(id: RoomId, subject: Subject(poker.Message))
@@ -206,7 +209,7 @@ fn handle_message(
               <> ", max_rooms="
               <> string.inspect(state.max_rooms),
           )
-          process.send(reply_to, Error(Nil))
+          process.send(reply_to, Error(registry.CapacityReached))
           actor.continue(state)
         }
         Error(Nil) ->
@@ -240,7 +243,7 @@ fn handle_message(
                     "subject_owner failed for started poker room, treating as start failure: id="
                       <> key,
                   )
-                  process.send(reply_to, Error(Nil))
+                  process.send(reply_to, Error(registry.Unavailable))
                   actor.continue(state)
                 }
               }
@@ -253,7 +256,7 @@ fn handle_message(
                   <> ", reason="
                   <> string.inspect(reason),
               )
-              process.send(reply_to, Error(Nil))
+              process.send(reply_to, Error(registry.Unavailable))
               actor.continue(state)
             }
           }
@@ -386,12 +389,13 @@ pub fn health(
 pub fn lookup(
   subject: Subject(Message),
   id: RoomId,
-) -> Result(Subject(poker.Message), Nil) {
+) -> Result(Subject(poker.Message), registry.LookupError) {
   call.try_call(
     subject,
     call.default_timeout,
     Lookup(id, _),
     "poker_registry.lookup",
   )
+  |> result.replace_error(registry.Unavailable)
   |> result.flatten
 }

@@ -244,6 +244,7 @@ pub fn poker_ws_keeps_connection_after_room_lookup_failed_test() {
   let #(rejected, bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(rejected, "\"type\":\"error\"")
   assert string.contains(rejected, "\"code\":\"room_unavailable\"")
+  assert string.contains(rejected, "The server is at room capacity.")
 
   send_client_message(
     bob,

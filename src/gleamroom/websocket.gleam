@@ -806,6 +806,9 @@ pub fn release_room(
 pub type RoomUnavailableReason {
   /// `registry.lookup` could not resolve or start the room actor.
   RoomLookupFailed
+  /// `registry.lookup` rejected a new room because `max_rooms` was reached
+  /// (#569). Retrying cannot help until another room ends.
+  RoomCapacityReached
   /// `Join` was dispatched but no reply arrived in time.
   JoinTimedOut
   /// `Buzz`/`ResetRound` was dispatched but no reply arrived in time.
@@ -818,6 +821,8 @@ pub type RoomUnavailableReason {
 pub fn room_unavailable_message(reason: RoomUnavailableReason) -> String {
   case reason {
     RoomLookupFailed -> "The room could not be started. Please try again."
+    RoomCapacityReached ->
+      "The server is at room capacity. Try an existing room or wait until another room ends."
     JoinTimedOut -> "The room did not respond in time. Reconnect to try again."
     ReplyTimedOut -> "The room did not respond in time. Please try again."
   }
@@ -833,16 +838,20 @@ fn with_room(
 ) -> Next(ConnectionState, ConnectionEvent) {
   case registry.lookup(state.registry, room_id) {
     Ok(room_subject) -> next(room_subject)
-    Error(Nil) -> {
+    Error(lookup_error) -> {
       logging.log(
         logging.Warning,
         "room unavailable: room=" <> registry.room_id_to_string(room_id),
       )
+      let reason = case lookup_error {
+        registry.CapacityReached -> RoomCapacityReached
+        registry.Unavailable -> RoomLookupFailed
+      }
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
           "room_unavailable",
-          room_unavailable_message(RoomLookupFailed),
+          room_unavailable_message(reason),
         ),
       )
       mist.continue(state)

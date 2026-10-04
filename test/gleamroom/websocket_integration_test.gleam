@@ -150,7 +150,7 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   tcp_close(socket)
 }
 
-/// room を引けない（MAX_ROOMS 到達で `registry.lookup` が `Error(Nil)`）join は
+/// room を引けない（MAX_ROOMS 到達で `registry.lookup` が `CapacityReached`）join は
 /// `room_unavailable` を返すが、接続は切らない（`with_room`、#32 / #572）。
 ///
 /// `with_join_reply` の `JoinTimedOut` は `mist.stop()` で接続を切るのと正反対の
@@ -191,6 +191,7 @@ pub fn ws_keeps_connection_after_room_lookup_failed_test() {
   let #(rejected, bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(rejected, "\"type\":\"error\"")
   assert string.contains(rejected, "\"code\":\"room_unavailable\"")
+  assert string.contains(rejected, "The server is at room capacity.")
 
   // 接続は維持されている: 既存の ROOM1 へは同じ接続から join できる。
   send_client_message(

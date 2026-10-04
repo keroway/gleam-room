@@ -263,14 +263,14 @@ pub fn a_room_start_failure_does_not_crash_the_registry_test() {
 
   // 起動に失敗した lookup は Error を返す（パニックしない）。
   assert registry.lookup(started.data, registry.room_id("room-fails"))
-    == Error(Nil)
+    == Error(registry.Unavailable)
 
   // registry は生きている。
   assert process.is_alive(registry_pid)
 
   // 別の RoomId の lookup も引き続き処理される（巻き添えになっていない）。
   assert registry.lookup(started.data, registry.room_id("room-other"))
-    == Error(Nil)
+    == Error(registry.Unavailable)
   assert process.is_alive(registry_pid)
 }
 
@@ -317,7 +317,7 @@ pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
 
   // 素の actor.call ならここで呼び出し元（このテストプロセス）が死ぬ。
   assert registry.lookup(unresponsive, registry.room_id("stalled"))
-    == Error(Nil)
+    == Error(registry.Unavailable)
 
   // 生き残っているので後続の検証ができる。これが #58 の要点。
   let assert Ok(started) = registry.start()
@@ -376,14 +376,16 @@ pub fn a_room_emptied_by_a_dead_session_is_removed_from_the_registry_test() {
 ///
 /// 単一クライアントが room_id を変え続けるだけで BEAM プロセスを無制限に
 /// 起動できないよう、上限超過は既存の「room を起動できなかった」経路
-/// （#32）と同じ Error(Nil) で呼び出し側へ伝わる。
+/// （#32）と同じ `Error` で呼び出し側へ伝わる。理由は起動失敗の
+/// `Unavailable` と区別した `CapacityReached`（#569）。
 pub fn lookup_rejects_new_rooms_once_max_rooms_is_reached_test() {
   let assert Ok(started) = registry.start_with_max_rooms(1)
   let reg = started.data
 
   let assert Ok(_) = registry.lookup(reg, registry.room_id("room-a"))
 
-  assert registry.lookup(reg, registry.room_id("room-b")) == Error(Nil)
+  assert registry.lookup(reg, registry.room_id("room-b"))
+    == Error(registry.CapacityReached)
 }
 
 /// 上限に達していても、**既存** room の lookup は引き続き成功すること
@@ -394,7 +396,8 @@ pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
   let reg = started.data
 
   let assert Ok(first) = registry.lookup(reg, registry.room_id("room-a"))
-  assert registry.lookup(reg, registry.room_id("room-b")) == Error(Nil)
+  assert registry.lookup(reg, registry.room_id("room-b"))
+    == Error(registry.CapacityReached)
 
   assert registry.lookup(reg, registry.room_id("room-a")) == Ok(first)
 }
