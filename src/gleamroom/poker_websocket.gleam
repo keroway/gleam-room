@@ -259,7 +259,7 @@ fn handle_heartbeat_tick(
         logging.Info,
         "poker websocket idle timeout: " <> connection_tag(),
       )
-      mist.stop()
+      mist.stop_abnormal("idle_timeout")
     }
     HeartbeatContinues -> {
       process.send_after(
@@ -350,7 +350,7 @@ fn handle_text(
         connection,
         poker_protocol.ProtocolErrorMessage(code, message),
       )
-      mist.stop()
+      mist.stop_abnormal(code)
     }
     FrameSizeAccepted ->
       case message_rate_outcome(state.messages_since_heartbeat) {
@@ -408,7 +408,7 @@ fn handle_binary(
         connection,
         poker_protocol.ProtocolErrorMessage(code, message),
       )
-      mist.stop()
+      mist.stop_abnormal(code)
     }
     FrameSizeAccepted ->
       case message_rate_outcome(state.messages_since_heartbeat) {

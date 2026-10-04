@@ -408,12 +408,16 @@ pub fn poker_ws_closes_after_frame_too_large_test() {
   assert string.contains(error_reply, "\"type\":\"error\"")
   assert string.contains(error_reply, "\"code\":\"frame_too_large\"")
 
-  // `mist.stop()` makes mist send a standard WebSocket close frame (RFC
-  // 6455 §5.5.1) before it actually closes the underlying TCP socket; the
-  // close frame and the TCP close may or may not land in the same `recv`
-  // depending on scheduling, so consume the close frame explicitly before
-  // asserting the socket itself is closed.
-  let assert <<>> = recv_close_frame(socket, buffer)
+  // `mist.stop_abnormal(code)` makes mist send a close frame (RFC 6455
+  // §5.5.1) with code 4000 and the error code as the reason (#567) before it
+  // actually closes the underlying TCP socket; the close frame and the TCP
+  // close may or may not land in the same `recv` depending on scheduling, so
+  // consume the close frame explicitly before asserting the socket itself is
+  // closed.
+  let #(reason, rest) = recv_close_reason(socket, buffer)
+  assert reason
+    == ws.CustomCloseReason(4000, bit_array.from_string("frame_too_large"))
+  assert rest == <<>>
   let assert Error(_) = tcp_recv(socket, 2000)
 
   tcp_close(socket)
@@ -636,12 +640,24 @@ fn send_client_message(socket: TcpSocket, body: json.Json) -> Nil {
 /// Reads until a WebSocket close frame (RFC 6455 §5.5.1) is decoded, then
 /// returns whatever bytes followed it (normally none).
 fn recv_close_frame(socket: TcpSocket, buffer: BitArray) -> BitArray {
+  let #(_reason, rest) = recv_close_reason(socket, buffer)
+  rest
+}
+
+/// `recv_close_frame` と同じだが、close frame の code/reason も返す(#567)。
+fn recv_close_reason(
+  socket: TcpSocket,
+  buffer: BitArray,
+) -> #(ws.CloseReason, BitArray) {
   case ws.decode_frame(buffer, None) {
-    Ok(#(ws.Complete(ws.Control(ws.CloseFrame(_))), rest)) -> rest
+    Ok(#(ws.Complete(ws.Control(ws.CloseFrame(reason))), rest)) -> #(
+      reason,
+      rest,
+    )
     Ok(#(_, _)) -> panic as "close frame を期待したが別のフレームを受信した"
     Error(_) -> {
       let assert Ok(chunk) = tcp_recv(socket, 2000)
-      recv_close_frame(socket, <<buffer:bits, chunk:bits>>)
+      recv_close_reason(socket, <<buffer:bits, chunk:bits>>)
     }
   }
 }
@@ -745,7 +761,9 @@ pub fn poker_ws_silent_connection_without_broadcast_times_out_test() {
   let #(alice, alice_buffer) = handshake(port, 50)
   let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
 
-  let _rest = recv_close_frame(alice, alice_buffer)
+  let #(reason, _rest) = recv_close_reason(alice, alice_buffer)
+  assert reason
+    == ws.CustomCloseReason(4000, bit_array.from_string("idle_timeout"))
   tcp_close(alice)
 }
 

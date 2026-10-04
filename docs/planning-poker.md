@@ -168,7 +168,7 @@ identical, and add phase-specific ones:
 | `room_busy` | An already-joined connection's `vote`/`reveal`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `vote`/`reveal`/`reset` (see the buzzer's Reconnect section in `docs/mvp.md`, #570). |
 | `binary_frame` | The connection sent a binary WebSocket frame. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
-| `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward. |
+| `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
 Do not treat these examples as a reason to expose untyped maps throughout the
 codebase.

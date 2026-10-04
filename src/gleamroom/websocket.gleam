@@ -287,8 +287,8 @@ pub fn heartbeat_outcome(active_since_heartbeat: Bool) -> HeartbeatOutcome {
   }
 }
 
-/// `heartbeat_outcome` の判定を実行に反映する。`mist.stop()` は `on_close` を
-/// 経由するので、room に参加済みなら通常の切断経路（`room.Leave` の dispatch
+/// `heartbeat_outcome` の判定を実行に反映する。`mist.stop_abnormal()` も
+/// `mist.stop()` と同じく `on_close` を経由するので、room に参加済みなら通常の切断経路（`room.Leave` の dispatch
 /// と registry への `Release`）がそのまま走る。
 fn handle_heartbeat_tick(
   state: ConnectionState,
@@ -296,7 +296,7 @@ fn handle_heartbeat_tick(
   case heartbeat_outcome(state.active_since_heartbeat) {
     HeartbeatTimedOut -> {
       logging.log(logging.Info, "websocket idle timeout: " <> connection_tag())
-      mist.stop()
+      mist.stop_abnormal("idle_timeout")
     }
     HeartbeatContinues -> {
       process.send_after(
@@ -410,7 +410,7 @@ fn handle_text(
         connection,
         protocol.ProtocolErrorMessage(code, message),
       )
-      mist.stop()
+      mist.stop_abnormal(code)
     }
     FrameSizeAccepted ->
       case message_rate_outcome(state.messages_since_heartbeat) {
@@ -470,7 +470,7 @@ fn handle_binary(
         connection,
         protocol.ProtocolErrorMessage(code, message),
       )
-      mist.stop()
+      mist.stop_abnormal(code)
     }
     FrameSizeAccepted ->
       case message_rate_outcome(state.messages_since_heartbeat) {
