@@ -11,7 +11,10 @@
 const fs = require("fs");
 const path = require("path");
 
-const repoRoot = path.resolve(__dirname, "..");
+// テストが fixture ツリーに向けられるよう、環境変数で root を上書きできる(#611)。
+const repoRoot = process.env.DUPLICATION_REFS_ROOT
+  ? path.resolve(process.env.DUPLICATION_REFS_ROOT)
+  : path.resolve(__dirname, "..");
 const docPath = process.argv[2] || "docs/duplication-inventory.md";
 const docAbsPath = path.isAbsolute(docPath)
   ? docPath
