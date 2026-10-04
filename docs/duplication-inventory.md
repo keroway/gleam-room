@@ -259,7 +259,7 @@ literals, not Gleam code.
   (`web.gleam:273-322`, `web_poker.gleam:382-429`).
 - `joinForm` submit handler (`web.gleam:356-379`, `web_poker.gleam:431-454`,
   byte-identical).
-- `sendIfOpen` (`web.gleam:386-393`, `web_poker.gleam:461-469`,
+- `sendIfOpen` (`web.gleam:386-393`, `web_poker.gleam:478-486`,
   byte-identical except that the poker one also records `lastSentType`).
 - Server `error` message handling for
   `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
