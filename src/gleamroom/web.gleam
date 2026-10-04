@@ -78,6 +78,11 @@ pub fn index_html() -> String {
   let socket = null;
   let participants = new Map();
   let buzzes = [];
+  // 自分が buzz 済みかどうか。サーバーは buzz_accepted を全員に配るだけで
+  // 自分の参加者IDも渡さないため、クリック時に楽観的に立て、already_buzzed で
+  // 確定させる。round_reset・state・切断で戻す（#576）。
+  let hasBuzzed = false;
+  let isConnected = false;
 
   // A reconnect always re-joins as a brand new, server-assigned participant
   // identity (see docs/mvp.md, \"Reconnect\"); this client does not attempt
@@ -125,13 +130,19 @@ pub fn index_html() -> String {
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  function updateBuzzButton() {
+    buzzButton.disabled = !isConnected || hasBuzzed;
+  }
+
   function setConnected(connected) {
     statusEl.textContent = connected ? \"connected\" : \"disconnected\";
     statusEl.dataset.state = connected ? \"connected\" : \"disconnected\";
     joinButton.disabled = connected;
     roomInput.disabled = connected;
     nameInput.disabled = connected;
-    buzzButton.disabled = !connected;
+    isConnected = connected;
+    if (!connected) hasBuzzed = false;
+    updateBuzzButton();
     resetButton.disabled = !connected;
   }
 
@@ -171,6 +182,7 @@ pub fn index_html() -> String {
         }
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
         reconnectAttempts = 0;
+        hasBuzzed = false;
         setConnected(true);
         participants = new Map(message.participants.map((p) => [p.participant_id, p]));
         buzzes = message.buzzes;
@@ -223,6 +235,8 @@ pub fn index_html() -> String {
         }
         break;
       case \"round_reset\":
+        hasBuzzed = false;
+        updateBuzzButton();
         // broadcast_all は発行者本人にも配信するため、同じ round_reset が
         // reply 経由と broadcast 経由の2回届く（#526）。round には position
         // のような一意キーが無いため、リセット後の状態（buzzes が空）と
@@ -271,6 +285,15 @@ pub fn index_html() -> String {
           // lastJoin はクリアしない — close イベントの scheduleReconnect() が
           // lastJoin を使って自動的に再 join まで行う（#570）。
           if (socket) socket.close();
+        } else if (message.code === \"already_buzzed\") {
+          // 楽観的に立てた hasBuzzed をサーバーの判定で確定させる（#576）。
+          hasBuzzed = true;
+          updateBuzzButton();
+        } else if (hasBuzzed) {
+          // buzz が rate_limited 等で拒否された場合に備えて楽観状態を戻す。
+          // 取り違えても、次のクリックで already_buzzed が返って再び確定する。
+          hasBuzzed = false;
+          updateBuzzButton();
         }
         break;
       default:
@@ -363,13 +386,16 @@ pub fn index_html() -> String {
   function sendIfOpen(message) {
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
-    } else {
-      log(\"not connected, ignoring \" + message.type);
+      return true;
     }
+    log(\"not connected, ignoring \" + message.type);
+    return false;
   }
 
   buzzButton.addEventListener(\"click\", () => {
-    sendIfOpen({ type: \"buzz\" });
+    if (!sendIfOpen({ type: \"buzz\" })) return;
+    hasBuzzed = true;
+    updateBuzzButton();
   });
 
   resetButton.addEventListener(\"click\", () => {
