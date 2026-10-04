@@ -288,8 +288,8 @@ Poker-specific, no buzzer equivalent.
 **対象外（既に共有済み）** for `extract.mjs`/`harness.mjs` — already
 parameterized via `{modulePath, functionName}` and reused from both
 `reconnect.test.mjs` and `poker-reconnect.test.mjs` (`harness.mjs:25`'s
-`startClient({ modulePath, functionName })`, `poker-reconnect.test.mjs:8`'s
-`POKER_MODULE`). This is a second existing
+`startClient({ modulePath, functionName })`, `POKER_MODULE` at
+`poker-reconnect.test.mjs:8`). This is a second existing
 precedent for how a shared boundary should look.
 
 **解消済み**: the `flapWithoutJoining` helper was byte-identical between

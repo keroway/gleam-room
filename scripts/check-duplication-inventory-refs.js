@@ -15,11 +15,21 @@ const path = require("path");
 const repoRoot = process.env.DUPLICATION_REFS_ROOT
   ? path.resolve(process.env.DUPLICATION_REFS_ROOT)
   : path.resolve(__dirname, "..");
-const docPath = process.argv[2] || "docs/duplication-inventory.md";
-const docAbsPath = path.isAbsolute(docPath)
-  ? docPath
-  : path.join(repoRoot, docPath);
-const doc = fs.readFileSync(docAbsPath, "utf8");
+// 引数なしなら inventory 本体と docs/adr/*.md を対象にする(#605)。ADR 内の
+// 散文中の `file:line` 引用も、過去にドリフトした(#473)ため同じ検証にかける。
+function defaultDocPaths() {
+  const adrDir = path.join(repoRoot, "docs/adr");
+  const adrs = fs.existsSync(adrDir)
+    ? fs
+        .readdirSync(adrDir)
+        .filter((f) => f.endsWith(".md"))
+        .sort()
+        .map((f) => path.join("docs/adr", f))
+    : [];
+  return ["docs/duplication-inventory.md", ...adrs];
+}
+const docPaths =
+  process.argv.length > 2 ? process.argv.slice(2) : defaultDocPaths();
 
 const CITATION_SINGLE_RE = /^([A-Za-z0-9_.\-\/]+\.(?:gleam|mjs)):([0-9,\-]+)$/;
 const SOURCE_FILE_RE = /\.(gleam|mjs|md)$/;
@@ -59,20 +69,32 @@ function leadingIdentifier(token) {
   return m ? m[0] : null;
 }
 
-// bullet単位に分割する: "- " で始まる行から、次の "- " / 見出し / 空行までを1bulletとする
+// bullet単位に分割する: "- " で始まる行から、次の "- " / 見出し / 空行までを1bulletとする。
+// インデント無しの散文行(見出し・"- "以外)の連続も1段落として同様に扱う(#605)。
 function extractBullets(text) {
   const lines = text.split("\n");
   const bullets = [];
   let current = null;
+  let currentIsParagraph = false;
   for (const line of lines) {
     if (/^- /.test(line)) {
       if (current) bullets.push(current);
       current = line;
+      currentIsParagraph = false;
     } else if (current && /^  \S/.test(line)) {
       current += " " + line.trim();
+    } else if (/^[^\s#\-]/.test(line)) {
+      if (current && !currentIsParagraph) {
+        bullets.push(current);
+        current = line;
+      } else {
+        current = current ? current + " " + line.trim() : line;
+      }
+      currentIsParagraph = true;
     } else {
       if (current) bullets.push(current);
       current = null;
+      currentIsParagraph = false;
     }
   }
   if (current) bullets.push(current);
@@ -97,7 +119,12 @@ const GENERIC_SYMBOLS = new Set([
   "Bool", "String", "Int", "List", "Dict", "Option",
 ]);
 
-let errors = [];
+function checkDoc(docPath) {
+const docAbsPath = path.isAbsolute(docPath)
+  ? docPath
+  : path.join(repoRoot, docPath);
+const doc = fs.readFileSync(docAbsPath, "utf8");
+const errors = [];
 let checked = 0;
 
 for (const bullet of extractBullets(doc)) {
@@ -160,7 +187,12 @@ for (const bullet of extractBullets(doc)) {
 if (errors.length > 0) {
   console.error(`${docPath}: ${errors.length} citation drift(s) found:\n`);
   for (const e of errors) console.error("  - " + e);
-  process.exit(1);
+  return false;
 }
 
 console.log(`${docPath}: ${checked} citations checked, no drift detected.`);
+return true;
+}
+
+const results = docPaths.map(checkDoc);
+if (results.includes(false)) process.exit(1);

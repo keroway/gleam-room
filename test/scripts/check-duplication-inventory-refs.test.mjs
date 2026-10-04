@@ -102,6 +102,21 @@ test("複数行にまたがるbulletは1つとして扱い、空行で区切ら�
   assert.match(split.out, /0 citations checked/);
 });
 
+test("bulletでない散文段落内の引用も検証する(#605)", () => {
+  const ok = run(
+    { "src/a.gleam": FILE },
+    "本文で `beta` を呼ぶ\n(`a.gleam:5-7`)。\n"
+  );
+  assert.equal(ok.code, 0, ok.err);
+  assert.match(ok.out, /1 citations checked/);
+  const drift = run(
+    { "src/a.gleam": FILE },
+    "本文で `beta` を呼ぶ\n(`a.gleam:1-3`)。\n"
+  );
+  assert.equal(drift.code, 1);
+  assert.match(drift.err, /does not contain any of \[beta\]/);
+});
+
 test("カンマ区切りの複数範囲を個別に検証する", () => {
   const r = run(
     { "src/a.gleam": FILE },
