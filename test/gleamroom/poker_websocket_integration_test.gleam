@@ -338,6 +338,61 @@ pub fn poker_ws_cleans_up_via_session_down_after_reply_timeout_test() {
   )
 }
 
+/// join のディスパッチがタイムアウトした場合（`poker_websocket.gleam` の
+/// `with_join_reply` の `Error(Nil)` 分岐、#571）の契約を実ソケットで検証する。
+/// `websocket_integration_test.gleam`'s
+/// `ws_closes_and_cleans_up_after_join_timeout_test` の poker 版で、
+/// `release_room` を単独では分離できない理由もそちらを参照。
+pub fn poker_ws_closes_and_cleans_up_after_join_timeout_test() {
+  let assert Ok(registry_started) = registry.start()
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let poker_registry_subject = poker_registry_started.data
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_started.data,
+      poker_registry_subject,
+    )
+
+  let room_id = poker_registry.room_id("JSTUCKP1")
+  let assert Ok(room_subject) =
+    poker_registry.lookup(poker_registry_subject, room_id)
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  suspend_process(room_pid)
+
+  let #(socket, buffer) = handshake(port, 50)
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("JSTUCKP1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"room_unavailable\"")
+
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+  tcp_close(socket)
+
+  resume_process(room_pid)
+
+  wait.until(
+    fn() { !process.is_alive(room_pid) },
+    "join タイムアウト後、無人の poker room actor が自己停止する",
+  )
+  wait.until(
+    fn() {
+      case poker_registry.health(poker_registry_subject) {
+        Ok(poker_registry.HealthSnapshot(rooms: 0, ..)) -> True
+        _ -> False
+      }
+    },
+    "poker room actor の自己停止後、poker_registry からも外れる",
+  )
+}
+
 /// `docs/mvp.md`・`docs/planning-poker.md` が明示的に約束している
 /// 「`frame_too_large` の後は接続が閉じる」というクライアント可視の契約を、
 /// 実ソケットで検証する。`websocket_integration_test.gleam`'s

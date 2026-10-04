@@ -289,6 +289,67 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
   )
 }
 
+/// join のディスパッチがタイムアウトした場合（`with_join_reply` の
+/// `Error(Nil)` 分岐、#571）のクライアント可視の契約を実ソケットで検証する。
+/// `room_unavailable` を返して**接続を閉じ**、遅れて成立した Join の参加者が
+/// 残っても room actor は registry から外れる。
+///
+/// 事前に `registry.lookup` で room を作って suspend しておき、join が応答
+/// 不能な room へ向かうようにする。`release_room` の呼び出し自体は
+/// `SessionDown` による自己停止と結果が重なるため、ここでは分離して検証
+/// できない（room が詰まっている間は `shutdown_if_empty` も応答しない）。
+/// 検証しているのは、この経路の終端状態（エラー・切断・registry の空き）である。
+pub fn ws_closes_and_cleans_up_after_join_timeout_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+
+  let room_id = registry.room_id("JSTUCK1")
+  let assert Ok(room_subject) = registry.lookup(registry_subject, room_id)
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  suspend_process(room_pid)
+
+  let #(socket, buffer) = handshake(port, 50)
+  send_client_message(
+    socket,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("JSTUCK1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(error_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(error_reply, "\"type\":\"error\"")
+  assert string.contains(error_reply, "\"code\":\"room_unavailable\"")
+
+  // 結果不明のタイムアウトでは再試行を促さず、接続を閉じる。
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+  tcp_close(socket)
+
+  // 遅れて成立する Join と、その接続プロセスの `SessionDown` を処理させる。
+  resume_process(room_pid)
+
+  wait.until(
+    fn() { !process.is_alive(room_pid) },
+    "join タイムアウト後、無人の room actor が自己停止する",
+  )
+  wait.until(
+    fn() {
+      case registry.health(registry_subject) {
+        Ok(registry.HealthSnapshot(rooms: 0, ..)) -> True
+        _ -> False
+      }
+    },
+    "room actor の自己停止後、registry からも外れる",
+  )
+}
+
 /// `docs/mvp.md`・`docs/planning-poker.md` が明示的に約束している
 /// 「`frame_too_large` の後は接続が閉じる」というクライアント可視の契約を、
 /// 実ソケットで検証する（#445）。これまでは `frame_too_large_code_and_message`
