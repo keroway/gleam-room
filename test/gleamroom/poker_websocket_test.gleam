@@ -138,6 +138,13 @@ pub fn room_unavailable_message_lookup_failed_test() {
     == "The room could not be started. Please try again."
 }
 
+pub fn room_unavailable_message_capacity_reached_test() {
+  assert poker_websocket.room_unavailable_message(
+      poker_websocket.RoomCapacityReached,
+    )
+    == "The server is at room capacity. Try an existing room or wait until another room ends."
+}
+
 pub fn room_unavailable_message_join_timed_out_test() {
   assert poker_websocket.room_unavailable_message(poker_websocket.JoinTimedOut)
     == "The room did not respond in time. Reconnect to try again."

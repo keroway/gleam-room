@@ -145,7 +145,7 @@ may vary for the same code.
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |
-| `room_unavailable` | The room could not be started, or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
+| `room_unavailable` | The room could not be started, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
 | `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |

@@ -53,19 +53,19 @@ substituted:
 - `RoomId` opaque type and its accessors (`registry.gleam:16-27`,
   `poker_registry.gleam:18-28`).
 - Trapped-exit classification (`exit_to_message`,
-  `registry.gleam:195-205`, `poker_registry.gleam:122-132`).
+  `registry.gleam:210-220`, `poker_registry.gleam:125-135`).
 - Actor `build` (trap_exits, `select_trapped_exits`, initial `State`)
-  (`registry.gleam:213-243`, `poker_registry.gleam:136-162`).
+  (`registry.gleam:228-258`, `poker_registry.gleam:139-165`).
 - `Lookup` capacity check, room startup, and `subject_owner` monitored
-  registration (`registry.gleam:280-366`, `poker_registry.gleam:191-261`).
-- `RoomDown` ABA-safe dict cleanup (`registry.gleam:367-390`,
-  `poker_registry.gleam:262-281`).
+  registration (`registry.gleam:295-381`, `poker_registry.gleam:194-264`).
+- `RoomDown` ABA-safe dict cleanup (`registry.gleam:382-405`,
+  `poker_registry.gleam:265-284`).
 - `Release`/`RoomEmptyChecked` async-empty check with ABA guard
-  (`registry.gleam:450-509`, `poker_registry.gleam:283-317`).
+  (`registry.gleam:465-524`, `poker_registry.gleam:286-320`).
 - `Health`/`RoomProbed` probe tracking with the `probe_in_flight` guard from
-  #269 (`registry.gleam:391-443`, `poker_registry.gleam:318-364`).
+  #269 (`registry.gleam:406-458`, `poker_registry.gleam:321-367`).
 - Public `health`/`lookup` API delegating to `call.try_call*`
-  (`registry.gleam:523-554`, `poker_registry.gleam:372-397`).
+  (`registry.gleam:538-570`, `poker_registry.gleam:375-401`).
 
 The only differences are the room message type parameter and `poker `
 prefixes in log strings.
@@ -74,7 +74,7 @@ Update (#391 / PR #399): this section originally assumed the two registries
 have no dependency on each other. That is no longer true for the default
 capacity value — `poker_registry.gleam` now does `import gleamroom/registry`
 and calls `registry.get_default_max_rooms()` directly
-(`poker_registry.gleam:12,99,107,170`) instead of keeping its own copy of the
+(`poker_registry.gleam:12,102,110,173`) instead of keeping its own copy of the
 default. This is a narrow, one-value dependency (default max rooms), not a
 general one: the actor logic duplication described above is unchanged, and
 the function-value-injection need below still applies to the rest of the
@@ -200,7 +200,7 @@ Domain-independent and duplicated near-exactly (already commented in the
 source as "same value, same reason"):
 
 - `default_heartbeat_interval_ms = 30_000` (`websocket.gleam:59`,
-  `poker_websocket.gleam:50`).
+  `poker_websocket.gleam:51`).
 - `origin_allowed`/`origin_header_allowed` (`websocket.gleam:120-139`,
   `poker_websocket.gleam:105-122`).
 - `on_init` heartbeat subject + `send_after` scheduling
@@ -213,11 +213,11 @@ source as "same value, same reason"):
   (`websocket.gleam:317-329`, `poker_websocket.gleam:280-291`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
   (`websocket.gleam:355-382`, `poker_websocket.gleam:308-330`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1075-1077`,
-  `poker_websocket.gleam:1053-1055`, byte-identical).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1084-1086`,
+  `poker_websocket.gleam:1061-1063`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1095-1098`,
-  `poker_websocket.gleam:1058-1061`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1104-1107`,
+  `poker_websocket.gleam:1066-1069`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -227,8 +227,8 @@ Judgment-deferred, larger-scope duplication:
 
 - `release_room` (`websocket.gleam:779-794`,
   `poker_websocket.gleam:762-780`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:828-948`,
-  `poker_websocket.gleam:800-880`) — these encode "how to talk to a room
+  `with_room_reply` family (`websocket.gleam:833-957`,
+  `poker_websocket.gleam:804-889`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,

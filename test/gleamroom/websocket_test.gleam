@@ -114,6 +114,13 @@ pub fn room_unavailable_message_lookup_failed_test() {
     == "The room could not be started. Please try again."
 }
 
+/// MAX_ROOMS 到達で新規 room を作れなかった場合のメッセージ（#569）。
+/// 再試行しても直らないので "try again" とは言わない。
+pub fn room_unavailable_message_capacity_reached_test() {
+  assert websocket.room_unavailable_message(websocket.RoomCapacityReached)
+    == "The server is at room capacity. Try an existing room or wait until another room ends."
+}
+
 /// `Join` の応答がタイムアウトした場合のメッセージ。再試行ではなく再接続を
 /// 促す（#33 のコメント参照: 再試行は二重参加を招くため）。
 pub fn room_unavailable_message_join_timed_out_test() {
