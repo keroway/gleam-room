@@ -12,6 +12,7 @@ import gleamroom/poker
 import gleamroom/poker_protocol
 import gleamroom/poker_registry
 import gleamroom/registry
+import gleamroom/wire
 import logging
 import mist.{
   type Connection, type Next, type ResponseData, type WebsocketConnection,
@@ -463,7 +464,7 @@ pub fn join_reject_code_and_message(
 fn handle_join(
   state: ConnectionState,
   connection: WebsocketConnection,
-  wire_room_id: poker_protocol.RoomId,
+  wire_room_id: wire.RoomId,
   display_name: String,
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
@@ -483,8 +484,7 @@ fn handle_join(
       mist.continue(state)
     }
     None -> {
-      let room_id =
-        poker_registry.room_id(poker_protocol.room_id_to_string(wire_room_id))
+      let room_id = poker_registry.room_id(wire.room_id_to_string(wire_room_id))
       // `websocket.gleam`'s `handle_join` と同じ理由（#32）: room の起動に
       // 失敗しても接続は生かす。
       use room_subject <- with_room(state, connection, room_id)
@@ -982,10 +982,8 @@ pub fn to_wire_participant_view(
 
 /// Converts a domain `ParticipantId` to its wire representation. Mirrors
 /// `websocket.gleam`'s `to_wire_participant_id` (#24).
-pub fn to_wire_participant_id(
-  id: poker.ParticipantId,
-) -> poker_protocol.ParticipantId {
-  poker_protocol.participant_id(poker.participant_id_to_string(id))
+pub fn to_wire_participant_id(id: poker.ParticipantId) -> wire.ParticipantId {
+  wire.participant_id(poker.participant_id_to_string(id))
 }
 
 /// The state sent to a joining client when `poker.get_state` times out right

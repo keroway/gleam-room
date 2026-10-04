@@ -1,11 +1,11 @@
 import gleam/option.{None, Some}
 import gleam/string
 import gleamroom/poker_protocol.{
-  Coffee, Eight, Five, Join, ParticipantId, ParticipantJoined, ParticipantLeft,
-  ParticipantView, ProtocolError, ProtocolErrorMessage, Reset, Reveal, Revealed,
-  RevealedVote, RoomId, RoundReset, RoundRevealed, State, Vote, VoteRegistered,
-  Voting,
+  Coffee, Eight, Five, Join, ParticipantJoined, ParticipantLeft, ParticipantView,
+  ProtocolErrorMessage, Reset, Reveal, Revealed, RevealedVote, RoundReset,
+  RoundRevealed, State, Vote, VoteRegistered, Voting,
 }
+import gleamroom/wire.{ParticipantId, ProtocolError, RoomId}
 
 pub fn decode_join_test() {
   let json =

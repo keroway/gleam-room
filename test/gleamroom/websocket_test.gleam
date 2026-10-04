@@ -5,6 +5,7 @@ import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
 import gleamroom/websocket
+import gleamroom/wire
 
 pub fn room_event_to_server_message_participant_joined_test() {
   let participant = room.Participant(room.participant_id("p1"), "Alice")
@@ -14,7 +15,7 @@ pub fn room_event_to_server_message_participant_joined_test() {
     ))
     == Some(
       protocol.ParticipantJoined(protocol.Participant(
-        protocol.participant_id("p1"),
+        wire.participant_id("p1"),
         "Alice",
       )),
     )
@@ -24,7 +25,7 @@ pub fn room_event_to_server_message_participant_left_test() {
   assert websocket.room_event_to_server_message(
       room.ParticipantLeft(room.participant_id("p1")),
     )
-    == Some(protocol.ParticipantLeft(protocol.participant_id("p1")))
+    == Some(protocol.ParticipantLeft(wire.participant_id("p1")))
 }
 
 pub fn room_event_to_server_message_buzz_accepted_test() {
@@ -33,7 +34,7 @@ pub fn room_event_to_server_message_buzz_accepted_test() {
       "Alice",
       1,
     ))
-    == Some(protocol.BuzzAccepted(protocol.participant_id("p1"), "Alice", 1))
+    == Some(protocol.BuzzAccepted(wire.participant_id("p1"), "Alice", 1))
 }
 
 pub fn room_event_to_server_message_round_reset_test() {
@@ -158,19 +159,19 @@ pub fn to_wire_participant_test() {
   let participant = room.Participant(room.participant_id("p1"), "Alice")
 
   assert websocket.to_wire_participant(participant)
-    == protocol.Participant(protocol.participant_id("p1"), "Alice")
+    == protocol.Participant(wire.participant_id("p1"), "Alice")
 }
 
 pub fn to_wire_participant_id_test() {
   assert websocket.to_wire_participant_id(room.participant_id("p1"))
-    == protocol.participant_id("p1")
+    == wire.participant_id("p1")
 }
 
 pub fn to_wire_buzz_result_test() {
   let result = room.BuzzResult(room.participant_id("p1"), "Alice", 3)
 
   assert websocket.to_wire_buzz_result(result)
-    == protocol.BuzzResult(protocol.participant_id("p1"), "Alice", 3)
+    == protocol.BuzzResult(wire.participant_id("p1"), "Alice", 3)
 }
 
 /// `get_state` タイムアウト後のフォールバック状態は空の participants/buzzes

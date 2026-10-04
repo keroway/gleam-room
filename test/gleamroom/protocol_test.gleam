@@ -1,9 +1,9 @@
 import gleam/string
 import gleamroom/protocol.{
-  BuzzAccepted, BuzzResult, Participant, ParticipantId, ParticipantJoined,
-  ParticipantLeft, ProtocolError, ProtocolErrorMessage, RoomId, RoundReset,
-  State,
+  BuzzAccepted, BuzzResult, Participant, ParticipantJoined, ParticipantLeft,
+  ProtocolErrorMessage, RoundReset, State,
 }
+import gleamroom/wire.{ParticipantId, ProtocolError, RoomId}
 
 pub fn decode_join_test() {
   let json =

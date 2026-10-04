@@ -12,6 +12,7 @@ import gleam/uri
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/wire
 import logging
 import mist.{
   type Connection, type Next, type ResponseData, type WebsocketConnection,
@@ -527,7 +528,7 @@ pub fn join_reject_code_and_message(
 fn handle_join(
   state: ConnectionState,
   connection: WebsocketConnection,
-  wire_room_id: protocol.RoomId,
+  wire_room_id: wire.RoomId,
   display_name: String,
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
@@ -547,7 +548,7 @@ fn handle_join(
       mist.continue(state)
     }
     None -> {
-      let room_id = registry.room_id(protocol.room_id_to_string(wire_room_id))
+      let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
       // room の起動に失敗したら、その旨を返して接続は生かす（#32）。
       // 以前は registry が `let assert` でクラッシュしており、1 ルームの
       // 起動失敗が無関係な全ルームの lookup を巻き添えにしていた。
@@ -1047,10 +1048,8 @@ pub fn to_wire_participant(
 
 /// Converts a domain `ParticipantId` to its wire representation. Pure and
 /// unit-testable without a live connection (#24).
-pub fn to_wire_participant_id(
-  id: room.ParticipantId,
-) -> protocol.ParticipantId {
-  protocol.participant_id(room.participant_id_to_string(id))
+pub fn to_wire_participant_id(id: room.ParticipantId) -> wire.ParticipantId {
+  wire.participant_id(room.participant_id_to_string(id))
 }
 
 /// Converts a domain `BuzzResult` to its wire representation. Pure and
