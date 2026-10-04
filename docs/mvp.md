@@ -141,7 +141,7 @@ may vary for the same code.
 | `malformed_json` | The payload was not valid JSON. |
 | `invalid_room_id` | A `join` request's `room_id` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. Takes priority over `invalid_display_name` when both fields are invalid. |
 | `invalid_display_name` | A `join` request's `display_name` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. |
-| `already_joined` | This connection sent `join` after it had already joined a room (checked at the connection layer), or the room's domain layer rejected a `join` for a `ParticipantId` already present in its state. |
+| `already_joined` | This connection sent `join` after it had already joined a room (checked at the connection layer), or the room's domain layer rejected a `join` for a `ParticipantId` already present in its state (that domain-layer branch is a defensive one, unreachable from the current websocket layer because each connection gets a fresh `ParticipantId`). |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |

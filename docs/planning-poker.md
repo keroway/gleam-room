@@ -157,7 +157,7 @@ identical, and add phase-specific ones:
 | `malformed_json` | The payload was not valid JSON. |
 | `invalid_room_id` | A `join` request's `room_id` was empty/whitespace-only after trimming, or exceeded 64 characters/bytes. |
 | `invalid_display_name` | A `join` request's `display_name` was empty/whitespace-only after trimming, or exceeded 64 characters/bytes. |
-| `already_joined` | This connection sent `join` after already joining, or the domain layer rejected a `join` for a `ParticipantId` already present. |
+| `already_joined` | This connection sent `join` after already joining, or the domain layer rejected a `join` for a `ParticipantId` already present (that domain-layer branch is a defensive one, unreachable from the current websocket layer because each connection gets a fresh `ParticipantId`). |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `not_joined` | This connection sent `vote`, `reveal`, or `reset` before joining a room. |
 | `invalid_card` | The `vote` message's `value` is not a member of the fixed card set. |
