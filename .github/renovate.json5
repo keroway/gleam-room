@@ -1,14 +1,28 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["github>keroway/.github"],
+  // 共有プリセット `github>keroway/.github` は Renovate(Mend App) が解決できず
+  // "Cannot find preset's package" で PR が止まっていた（#342）。beamsg /
+  // homebrew-tap と同じく、共有プリセットと同等の設定をここへ直接書く。
+  // Mend 側の実行モードは 2026-09-04 に silent から interactive へ変更済み
+  // （agent-assets/docs/renovate-configuration.md）。
+  extends: [
+    "config:recommended",
+    "schedule:weekly",
+    ":semanticCommitTypeAll(chore)",
+  ],
+  timezone: "Asia/Tokyo",
+  labels: ["dependencies"],
+  prConcurrentLimit: 5,
   packageRules: [
-    // gleam.toml/manifest.toml は bootstrap 時点から実依存(gleam_stdlib 等10件)を
-    // 持ち、Renovate の gleam manager は既定で対応済み(公式ドキュメントで確認済み、
-    // https://docs.renovatebot.com/modules/manager/gleam/)。PR/Dependency
-    // Dashboard が一件も無いのは manager 非対応ではなく、keroway ワークスペースの
-    // Renovate(Mend App) が "mode": "silent" で運用されているため(組織側の設定
-    // であり本リポジトリの renovate.json5 からは変更できない)。npm/github-actions
-    // と同じ方針でグルーピングだけ先に用意しておく。
+    {
+      description: "GitHub Actions: マイナー / パッチはまとめて 1 PR にしてノイズを抑える（major は個別 PR）",
+      matchManagers: ["github-actions"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "github-actions",
+    },
+    // gleam.toml/manifest.toml は実依存(gleam_stdlib 等)を持ち、Renovate の gleam
+    // manager は既定で対応済み
+    // (https://docs.renovatebot.com/modules/manager/gleam/)。
     {
       description: "gleam(hex): マイナー / パッチはまとめて 1 PR にしてノイズを抑える（major は個別 PR）",
       matchManagers: ["gleam"],
