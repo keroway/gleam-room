@@ -182,3 +182,22 @@ test("切断されると全カードが無効化される", () => {
     client.dispose();
   }
 });
+
+test("2回目の vote が拒否されると、送信前の ownVote へロールバックする（#575）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    client.click("card-8");
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "true", "楽観的反映で card-8 が選択されていない");
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected" }),
+    });
+
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "false", "拒否された card-8 の aria-pressed=true が残っている");
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "確定済みの前回投票 card-5 に戻っていない");
+  } finally {
+    client.dispose();
+  }
+});

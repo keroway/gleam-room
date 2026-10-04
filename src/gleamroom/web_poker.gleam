@@ -112,6 +112,8 @@ pub fn poker_html() -> String {
   let phase = \"voting\";
   let votes = [];
   let ownVote = null;
+  // 直近の vote 送信前の ownVote。拒否時は null ではこの値へ戻す（#575）。
+  let ownVoteBeforeSend = null;
   let lastSentType = null;
 
   // Same transient-identity reconnect model as the buzzer (docs/mvp.md's
@@ -230,6 +232,7 @@ pub fn poker_html() -> String {
         // 空配列で届く。
         votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
+        ownVoteBeforeSend = null;
         setConnected(true);
         renderParticipants();
         renderVotes();
@@ -318,6 +321,7 @@ pub fn poker_html() -> String {
         phase = \"voting\";
         votes = [];
         ownVote = null;
+        ownVoteBeforeSend = null;
         for (const participant of participants.values()) {
           participant.has_voted = false;
         }
@@ -348,6 +352,7 @@ pub fn poker_html() -> String {
           participants = new Map();
           votes = [];
           ownVote = null;
+          ownVoteBeforeSend = null;
           renderParticipants();
           renderVotes();
         } else if (message.code === \"room_busy\") {
@@ -370,7 +375,9 @@ pub fn poker_html() -> String {
           // 直前に送信したメッセージ種別が vote のときだけロールバックする
           // （WebSocket はメッセージ順序を保証し、サーバーは受信順に1件ずつ
           // 処理するため、直前送信と直後に届くエラーは対応する）。
-          ownVote = null;
+          // 戻し先は null ではなく送信前の値（2回目以降の vote が拒否されても、
+          // サーバーに残っている前回の投票を見失わない。#575）。
+          ownVote = ownVoteBeforeSend;
           updateCardButtons();
         }
         break;
@@ -416,6 +423,7 @@ pub fn poker_html() -> String {
       participants = new Map();
       votes = [];
       ownVote = null;
+      ownVoteBeforeSend = null;
       renderParticipants();
       renderVotes();
       socket = null;
@@ -471,6 +479,7 @@ pub fn poker_html() -> String {
   for (const card of cards) {
     card.el.addEventListener(\"click\", () => {
       if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
+      ownVoteBeforeSend = ownVote;
       ownVote = card.value;
       updateCardButtons();
     });
