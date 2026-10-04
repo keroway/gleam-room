@@ -208,6 +208,58 @@ pub fn poker_ws_rejoins_after_room_actor_dies_test() {
   tcp_close(socket)
 }
 
+/// poker room を引けない（MAX_ROOMS 到達）join は `room_unavailable` を返すが
+/// 接続は切らない（`websocket_integration_test.gleam`'s
+/// `ws_keeps_connection_after_room_lookup_failed_test` と同じ理由、#572）。
+pub fn poker_ws_keeps_connection_after_room_lookup_failed_test() {
+  let assert Ok(registry_started) = registry.start()
+  let assert Ok(poker_registry_started) = poker_registry.start_with_max_rooms(1)
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_started.data,
+      poker_registry_started.data,
+    )
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+
+  send_client_message(
+    alice,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Alice")),
+    ]),
+  )
+  let #(alice_reply, _alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(alice_reply, "\"type\":\"state\"")
+
+  send_client_message(
+    bob,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM2")),
+      #("display_name", json.string("Bob")),
+    ]),
+  )
+  let #(rejected, bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(rejected, "\"type\":\"error\"")
+  assert string.contains(rejected, "\"code\":\"room_unavailable\"")
+
+  send_client_message(
+    bob,
+    json.object([
+      #("type", json.string("join")),
+      #("room_id", json.string("ROOM1")),
+      #("display_name", json.string("Bob")),
+    ]),
+  )
+  let #(joined, _bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(joined, "\"type\":\"state\"")
+
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
 /// vote のタイムアウトで `state.room` が `None` に戻った後、再joinせず
 /// 切断しても、poker room actor 自身の `SessionDown` 経由で参加者が正しく
 /// 片付くこと（`websocket_integration_test.gleam`'s
