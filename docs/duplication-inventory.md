@@ -194,39 +194,30 @@ actual domain and are the reason the two protocols exist separately.
 **抽出すべき** for the domain-independent transport-guard functions;
 **判断保留** for the room-interaction skeleton.
 
-Domain-independent and duplicated near-exactly (already commented in the
-source as "same value, same reason"):
+Extracted in #588 into `src/gleamroom/ws_guard.gleam` (pure functions and
+constants only, no `ConnectionState`): `default_heartbeat_interval_ms`,
+`origin_allowed`/`origin_header_allowed`, `heartbeat_outcome`,
+`frame_size_outcome`/`frame_size_outcome_for_byte_size` (`max_text_frame_bytes
+= 2048`), `message_rate_outcome` (`max_messages_per_heartbeat_window = 30`),
+the `binary_frame`/`frame_too_large`/`rate_limited` code-and-message pairs,
+`connection_tag`, and `new_participant_id`.
 
-- `default_heartbeat_interval_ms = 30_000` (`websocket.gleam:60`,
-  `poker_websocket.gleam:52`).
-- `origin_allowed`/`origin_header_allowed` (`websocket.gleam:121-140`,
-  `poker_websocket.gleam:106-123`).
+Still duplicated because they read or update `ConnectionState` (whose
+`ConnectionEvent`/registry types differ per app), left in place by #588:
+
 - `on_init` heartbeat subject + `send_after` scheduling
-  (`websocket.gleam:142-161`, `poker_websocket.gleam:125-147`).
-- `mark_active`/`record_message` (`websocket.gleam:254-264`,
-  `poker_websocket.gleam:225-235`).
-- `heartbeat_outcome`/`handle_heartbeat_tick` idle-timeout logic
-  (`websocket.gleam:267-310`, `poker_websocket.gleam:238-278`).
-- `max_text_frame_bytes = 2048` and `frame_size_outcome`
-  (`websocket.gleam:318-330`, `poker_websocket.gleam:281-292`).
-- `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
-  (`websocket.gleam:356-383`, `poker_websocket.gleam:309-331`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1083-1085`,
-  `poker_websocket.gleam:1059-1061`, byte-identical).
-- `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1103-1106`,
-  `poker_websocket.gleam:1064-1067`, byte-identical).
-
-None of the above touch `ConnectionState`'s room-specific fields, so they can
-move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
-beyond moving code.
+  (`websocket.gleam:114-133`, `poker_websocket.gleam:109-131`).
+- `mark_active`/`record_message` (`websocket.gleam:225-238`,
+  `poker_websocket.gleam:204-215`).
+- `handle_heartbeat_tick` (`websocket.gleam:240-263`,
+  `poker_websocket.gleam:217-243`).
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:779-794`,
-  `poker_websocket.gleam:763-781`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:833-957`,
-  `poker_websocket.gleam:804-890`) — these encode "how to talk to a room
+- `release_room` (`websocket.gleam:660-693`,
+  `poker_websocket.gleam:674-701`) and the `with_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:707-832`,
+  `poker_websocket.gleam:714-800`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,

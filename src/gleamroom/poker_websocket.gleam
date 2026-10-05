@@ -1,18 +1,24 @@
 import gleam/bit_array
 import gleam/bytes_tree
-import gleam/crypto
 import gleam/erlang/process.{type Selector, type Subject}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
-import gleam/uri
 import gleamroom/poker
 import gleamroom/poker_protocol
 import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/wire
+import gleamroom/ws_guard.{
+  FrameSizeAccepted, FrameTooLarge, HeartbeatContinues, HeartbeatTimedOut,
+  MessageRateAccepted, MessageRateLimited, binary_frame_code_and_message,
+  connection_tag, default_heartbeat_interval_ms, frame_size_outcome,
+  frame_size_outcome_for_byte_size, frame_too_large_code_and_message,
+  heartbeat_outcome, message_rate_outcome, new_participant_id, origin_allowed,
+  rate_limited_code_and_message,
+}
 import logging
 import mist.{
   type Connection, type Next, type ResponseData, type WebsocketConnection,
@@ -47,9 +53,6 @@ pub type ConnectionEvent {
   RoomBroadcast(poker.PokerEvent)
   HeartbeatTick
 }
-
-/// `websocket.gleam`'s `heartbeat_interval_ms` と同じ値・同じ理由。
-const default_heartbeat_interval_ms = 30_000
 
 type RoomHandle {
   RoomHandle(
@@ -100,26 +103,6 @@ pub fn upgrade_with_heartbeat_interval(
       response.new(403)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
     }
-  }
-}
-
-/// `websocket.gleam`'s `origin_allowed` と同じ理由（#124）。
-fn origin_allowed(req: Request(Connection)) -> Bool {
-  origin_header_allowed(request.get_header(req, "origin"), req.host)
-}
-
-/// `websocket.gleam`'s `origin_header_allowed` と同じ理由・実装。
-pub fn origin_header_allowed(
-  origin_header: Result(String, Nil),
-  host: String,
-) -> Bool {
-  case origin_header {
-    Error(Nil) -> True
-    Ok(origin) ->
-      case uri.parse(origin) {
-        Ok(parsed) -> parsed.host == Some(host)
-        Error(Nil) -> False
-      }
   }
 }
 
@@ -193,12 +176,6 @@ fn on_close(state: ConnectionState) -> Nil {
   }
 }
 
-/// `websocket.gleam`'s `binary_frame_code_and_message` と同じ理由・値。
-pub const binary_frame_code_and_message = #(
-  "binary_frame",
-  "Binary frames are not supported.",
-)
-
 fn handle_message(
   state: ConnectionState,
   message: WebsocketMessage(ConnectionEvent),
@@ -236,20 +213,6 @@ fn record_message(state: ConnectionState) -> ConnectionState {
   )
 }
 
-/// `websocket.gleam`'s `HeartbeatOutcome` と同じ理由・実装。
-pub type HeartbeatOutcome {
-  HeartbeatTimedOut
-  HeartbeatContinues
-}
-
-/// `websocket.gleam`'s `heartbeat_outcome` と同じ理由・実装（#35）。
-pub fn heartbeat_outcome(active_since_heartbeat: Bool) -> HeartbeatOutcome {
-  case active_since_heartbeat {
-    False -> HeartbeatTimedOut
-    True -> HeartbeatContinues
-  }
-}
-
 /// `websocket.gleam`'s `handle_heartbeat_tick` と同じ理由・実装。
 fn handle_heartbeat_tick(
   state: ConnectionState,
@@ -276,59 +239,6 @@ fn handle_heartbeat_tick(
         ),
       )
     }
-  }
-}
-
-/// `websocket.gleam`'s `max_text_frame_bytes` と同じ値・同じ理由（#126）。
-const max_text_frame_bytes = 2048
-
-/// `websocket.gleam`'s `FrameSizeOutcome` と同じ理由・実装。
-pub type FrameSizeOutcome {
-  FrameSizeAccepted
-  FrameTooLarge
-}
-
-/// `websocket.gleam`'s `frame_size_outcome` と同じ理由・実装。
-pub fn frame_size_outcome(text: String) -> FrameSizeOutcome {
-  frame_size_outcome_for_byte_size(string.byte_size(text))
-}
-
-/// `websocket.gleam`'s `frame_size_outcome_for_byte_size` と同じ理由・実装（#500）。
-fn frame_size_outcome_for_byte_size(size: Int) -> FrameSizeOutcome {
-  case size > max_text_frame_bytes {
-    True -> FrameTooLarge
-    False -> FrameSizeAccepted
-  }
-}
-
-/// `websocket.gleam`'s `frame_too_large_code_and_message` と同じ理由・値。
-pub const frame_too_large_code_and_message = #(
-  "frame_too_large",
-  "Message exceeds the maximum allowed size.",
-)
-
-/// `websocket.gleam`'s `max_messages_per_heartbeat_window` と同じ値・同じ理由（#156）。
-const max_messages_per_heartbeat_window = 30
-
-/// `websocket.gleam`'s `MessageRateOutcome` と同じ理由・実装。
-pub type MessageRateOutcome {
-  MessageRateAccepted
-  MessageRateLimited
-}
-
-/// `websocket.gleam`'s `rate_limited_code_and_message` と同じ理由・値。
-pub const rate_limited_code_and_message = #(
-  "rate_limited",
-  "Too many messages. Please slow down.",
-)
-
-/// `websocket.gleam`'s `message_rate_outcome` と同じ理由・実装。
-pub fn message_rate_outcome(
-  count_after_this_message: Int,
-) -> MessageRateOutcome {
-  case count_after_this_message > max_messages_per_heartbeat_window {
-    True -> MessageRateLimited
-    False -> MessageRateAccepted
   }
 }
 
@@ -1053,15 +963,4 @@ pub fn to_domain_card(card: poker_protocol.Card) -> poker.Card {
     poker_protocol.QuestionMark -> poker.QuestionMark
     poker_protocol.Coffee -> poker.Coffee
   }
-}
-
-/// `websocket.gleam`'s `connection_tag` と同じ理由・実装（#28）。
-fn connection_tag() -> String {
-  "pid=" <> string.inspect(process.self())
-}
-
-/// `websocket.gleam`'s `new_participant_id` と同じ理由・実装（#28）。
-pub fn new_participant_id() -> String {
-  crypto.strong_random_bytes(16)
-  |> bit_array.base64_url_encode(False)
 }

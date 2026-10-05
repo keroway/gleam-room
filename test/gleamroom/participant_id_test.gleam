@@ -1,7 +1,6 @@
 import gleam/list
 import gleam/string
-import gleamroom/poker_websocket
-import gleamroom/websocket
+import gleamroom/ws_guard
 
 /// 参加者 ID が BEAM の PID 文字列表現を含まないこと（#28）。
 ///
@@ -12,14 +11,10 @@ import gleamroom/websocket
 /// PID を外に出すと (1) サーバー内部のプロセス構造が漏れ、(2) PID は
 /// **プロセス終了後に再利用される**ため再接続で別人に同じ ID が割り当たり、
 /// (3) 公開プロトコルが実装詳細に固定される。
+///
+/// buzzer / poker は共有の `ws_guard.new_participant_id` を使う（#588）。
 pub fn participant_id_does_not_leak_a_beam_pid_test() {
-  assert_does_not_leak_a_beam_pid(websocket.new_participant_id())
-}
-
-/// buzzer と同じ実装（#28 コメント参照）を持つ poker 側の同名関数にも、
-/// 同じ不変条件を検証する（#448）。
-pub fn poker_participant_id_does_not_leak_a_beam_pid_test() {
-  assert_does_not_leak_a_beam_pid(poker_websocket.new_participant_id())
+  assert_does_not_leak_a_beam_pid(ws_guard.new_participant_id())
 }
 
 fn assert_does_not_leak_a_beam_pid(id: String) {
@@ -34,11 +29,7 @@ fn assert_does_not_leak_a_beam_pid(id: String) {
 /// 同じ値が返ると、同一ルームの参加者が互いに区別できなくなる。
 /// 暗号論的乱数 16 バイトなので、この回数で衝突すれば実装が壊れている。
 pub fn participant_ids_are_unique_across_calls_test() {
-  assert_unique_across_calls(websocket.new_participant_id)
-}
-
-pub fn poker_participant_ids_are_unique_across_calls_test() {
-  assert_unique_across_calls(poker_websocket.new_participant_id)
+  assert_unique_across_calls(ws_guard.new_participant_id)
 }
 
 fn assert_unique_across_calls(new_participant_id: fn() -> String) {
@@ -53,11 +44,7 @@ fn assert_unique_across_calls(new_participant_id: fn() -> String) {
 /// `/`（パスセグメントの区切りになる）を含みうる。100 回生成して一度も
 /// 出現しなければ、URL安全アルファベットを使えている強い根拠になる。
 pub fn participant_ids_are_url_safe_test() {
-  assert_url_safe(websocket.new_participant_id)
-}
-
-pub fn poker_participant_ids_are_url_safe_test() {
-  assert_url_safe(poker_websocket.new_participant_id)
+  assert_url_safe(ws_guard.new_participant_id)
 }
 
 fn assert_url_safe(new_participant_id: fn() -> String) {
