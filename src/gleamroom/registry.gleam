@@ -1,48 +1,30 @@
-import gleam/dict.{type Dict}
-import gleam/dynamic/decode
-import gleam/erlang/atom
+import gleam/dict
 import gleam/erlang/process.{type Subject}
-import gleam/int
+import gleam/list
 import gleam/otp/actor
 import gleam/result
-import gleam/set.{type Set}
-import gleam/string
+import gleam/set
 import gleamroom/call
 import gleamroom/room
-import logging
+import gleamroom/room_registry.{type Core}
 
-/// Opaque so callers cannot construct a `RoomId` except through `room_id`,
-/// keeping lookups keyed on a single explicit constructor.
-pub opaque type RoomId {
-  RoomId(String)
-}
+/// 実体は `room_registry` が持つ（#586）。`poker_registry.RoomId` と同じ型。
+pub type RoomId =
+  room_registry.RoomId
 
 pub fn room_id(value: String) -> RoomId {
-  RoomId(value)
+  room_registry.room_id(value)
 }
 
 /// websocket.gleam のライフサイクルログ（#25）が RoomId の中身を文字列化するのに使う。
 pub fn room_id_to_string(id: RoomId) -> String {
-  let RoomId(value) = id
-  value
-}
-
-/// `lookup` が room を返せなかった理由（#569）。
-///
-/// クライアントへの案内が逆になるので区別する: `CapacityReached` は他の room が
-/// 終了するまで再試行しても直らず、`Unavailable` は一時的でありうる。
-/// `poker_registry.gleam` も同じ型を使う。
-pub type LookupError {
-  /// `max_rooms` に達しており、新しい room を作れない（#127）。
-  CapacityReached
-  /// room actor の起動失敗、または registry が応答しなかった。
-  Unavailable
+  room_registry.room_id_to_string(id)
 }
 
 pub type Message {
   Lookup(
     id: RoomId,
-    reply_to: Subject(Result(Subject(room.Message), LookupError)),
+    reply_to: Subject(Result(Subject(room.Message), room_registry.LookupError)),
   )
   /// 最後の参加者が抜けた room を登録から外す（#26）。
   ///
@@ -117,39 +99,18 @@ pub type HealthSnapshot {
   HealthSnapshot(rooms: Int, stuck: Int)
 }
 
-/// room を起動する関数と、起動済み room の対応表。
+/// room 管理状態（`core`、`room_registry` 参照）と registry 自身の subject。
 ///
-/// 起動関数を状態に持つのは**テストのため**（#32）。BEAM のプロセス生成は
+/// 起動関数を `core` に持つのは**テストのため**（#32）。BEAM のプロセス生成は
 /// 資源が尽きない限り成功するので、失敗経路は注入しないと踏めない。
 /// 「失敗しても registry がクラッシュしない」ことは型では保証できず、
 /// 実際に失敗させて確かめる必要がある。
 type State {
   State(
-    rooms: Dict(String, Subject(room.Message)),
-    /// 監視中の room actor の pid → 登録時の room 情報（#39）。
-    /// Down メッセージは pid しか運ばないため、逆引きが要る。key だけでなく
-    /// subject も保持し、遅れて届いた古い Down が同じ key の新しい room を
-    /// 削除しないようにする（#160）。
-    monitored: Dict(process.Pid, MonitoredRoom),
-    start_room: fn() -> actor.StartResult(Subject(room.Message)),
-    /// 新規 room actor（BEAMプロセス）を起動できる上限（#127）。
-    /// 未知の room_id へ join するたびに無条件で起動すると、単一クライアントが
-    /// room_id を変え続けるだけで無制限にプロセスを増やせてしまう。
-    max_rooms: Int,
+    core: Core(room.Message),
     /// registry 自身の subject（#71）。`Release` が空判定を別プロセスへ
     /// 投げるとき、結果（`RoomEmptyChecked`）の返送先として渡す。
     self: Subject(Message),
-    /// 直近の `Health` probe で応答が無かった room の key（#138）。
-    /// `Health` を受けるたびに全 room へ probe を再実行し置き換える
-    /// 「前回の結果」であり、リアルタイムの状態ではない。
-    stuck_rooms: Set(String),
-    /// 前回発火した probe のうち、まだ `RoomProbed` が返っていない件数
-    /// （#269）。`/health` は認証なしで公開されており、連打されるたびに
-    /// 登録 room 全件へ probe を仕掛け直すと、直前の probe 群が結果を
-    /// 返し終える前に次の probe 群が重ねて発火し、room actor のメールボックスが
-    /// 際限なく積み上がる。0 のときだけ新しい probe 群を発火し、全件の
-    /// `RoomProbed` が揃うまで次の `Health` では発火を見送るガードに使う。
-    probe_in_flight: Int,
   )
 }
 
@@ -164,10 +125,6 @@ const default_max_rooms = 1000
 /// できない。
 pub fn get_default_max_rooms() -> Int {
   default_max_rooms
-}
-
-type MonitoredRoom {
-  MonitoredRoom(key: String, subject: Subject(room.Message))
 }
 
 /// Starts one registry actor with no known rooms. Lookups are handled
@@ -200,22 +157,11 @@ pub fn start_with_max_rooms(
   |> actor.start
 }
 
-/// trapped exit を `RoomDown`（room のクラッシュ）と `ParentShutdown`
-/// （親からの shutdown 要求）に振り分ける（#117）。
-///
-/// reason が `Abnormal` にラップされた atom `shutdown` のときだけ
-/// `ParentShutdown` とみなす。room のクラッシュ理由は通常タプル
-/// （`{badmatch, ...}` 等）で atom ではないため、`decode.run` で
-/// atom へのデコードに失敗し `RoomDown` 側に安全に落ちる。
-fn exit_to_message(exit: process.ExitMessage) -> Message {
-  let shutdown = atom.create("shutdown")
-  case exit.reason {
-    process.Abnormal(reason) ->
-      case decode.run(reason, atom.decoder()) {
-        Ok(reason_atom) if reason_atom == shutdown -> ParentShutdown
-        _ -> RoomDown(exit.pid)
-      }
-    process.Normal | process.Killed -> RoomDown(exit.pid)
+/// `room_registry` の exit 分類を、この registry の `Message` へ写す（#117）。
+fn exit_to_message(kind: room_registry.ExitKind) -> Message {
+  case kind {
+    room_registry.RoomExited(pid) -> RoomDown(pid)
+    room_registry.ParentShutdownRequested -> ParentShutdown
   }
 }
 
@@ -229,32 +175,14 @@ fn build(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
   max_rooms: Int,
 ) -> actor.Builder(State, Message, Subject(Message)) {
-  actor.new_with_initialiser(1000, fn(subject) {
-    let selector =
-      process.new_selector()
-      |> process.select(subject)
-      |> process.select_trapped_exits(exit_to_message)
-    // link された room の死を signal ではなくメッセージとして受け取る。
-    // これを外すと room のクラッシュが registry を道連れにする。
-    process.trap_exits(True)
-    let initial =
-      State(
-        rooms: dict.new(),
-        monitored: dict.new(),
-        start_room:,
-        max_rooms:,
-        // `subject` は初期化中の自分自身の subject（#71）。ここでしか
-        // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
-        self: subject,
-        stuck_rooms: set.new(),
-        probe_in_flight: 0,
-      )
-    actor.initialised(initial)
-    |> actor.selecting(selector)
-    |> actor.returning(subject)
-    |> Ok
-  })
-  |> actor.on_message(handle_message)
+  room_registry.build(
+    room_registry.new(start_room, max_rooms),
+    exit_to_message,
+    handle_message,
+    // `subject` は初期化中の自分自身の subject（#71）。ここでしか
+    // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
+    fn(core, subject) { State(core:, self: subject) },
+  )
 }
 
 /// 名前付きで起動する（#23）。
@@ -293,124 +221,23 @@ fn handle_message(
 ) -> actor.Next(State, Message) {
   case message {
     Lookup(id, reply_to) -> {
-      let key = room_id_to_string(id)
-      let room_count = dict.size(state.rooms)
-      case dict.get(state.rooms, key) {
-        Ok(subject) -> {
-          process.send(reply_to, Ok(subject))
-          actor.continue(state)
-        }
-        Error(Nil) if room_count >= state.max_rooms -> {
-          // room 数の上限に達している（#127）。単一クライアントが room_id を
-          // 変え続けるだけで BEAM プロセスを無制限に起動できてしまうのを防ぐ。
-          // 既存 room の lookup はここを通らない（上の Ok 分岐で先に処理済み）。
-          logging.log(
-            logging.Warning,
-            "room capacity reached, rejecting lookup: id="
-              <> key
-              <> ", rooms="
-              <> string.inspect(room_count)
-              <> ", max_rooms="
-              <> string.inspect(state.max_rooms),
-          )
-          process.send(reply_to, Error(CapacityReached))
-          actor.continue(state)
-        }
-        Error(Nil) ->
-          // `let assert` で受けると room 1 つの起動失敗が registry ごと
-          // クラッシュさせる（#32）。registry は全ルーム共通の単一プロセスで
-          // すべての Lookup を直列に処理するため、無関係な既存ルームの
-          // lookup まで巻き添えになる。docs/architecture.md の
-          // "One room should be isolated from failures/state in other rooms."
-          // に真っ向から反する。
-          //
-          // 失敗は呼び出し側へ返し、registry は動き続ける。
-          case state.start_room() {
-            Ok(started) -> {
-              let subject = started.data
-              // 監視しておかないと、クラッシュした room の subject が
-              // Dict に残り続ける（#39）。
-              // link は actor.start が張るので、ここでは pid → 登録時の
-              // subject の逆引きを持つ。exit メッセージは pid しか運ばないため。
-              //
-              // subject_owner が引けない場合、room を state.rooms に登録すると
-              // 監視表に載らないままクラッシュしたときに RoomDown で回収できず、
-              // その room_id が永久に使用不能になる（#467）。想定外の事態
-              // （BEAM の実装上通常は起きない）なので、追跡できない room は
-              // 起動失敗として扱い registry には一切残さない。
-              case process.subject_owner(subject) {
-                Ok(pid) -> {
-                  logging.log(logging.Info, "room created: id=" <> key)
-                  process.send(reply_to, Ok(subject))
-                  actor.continue(
-                    State(
-                      ..state,
-                      rooms: dict.insert(state.rooms, key, subject),
-                      monitored: dict.insert(
-                        state.monitored,
-                        pid,
-                        MonitoredRoom(key:, subject:),
-                      ),
-                    ),
-                  )
-                }
-                Error(Nil) -> {
-                  logging.log(
-                    logging.Warning,
-                    "subject_owner failed for started room, treating as start failure: id="
-                      <> key,
-                  )
-                  process.send(reply_to, Error(Unavailable))
-                  actor.continue(state)
-                }
-              }
-            }
-            Error(reason) -> {
-              logging.log(
-                logging.Warning,
-                "room failed to start: id="
-                  <> key
-                  <> ", reason="
-                  <> string.inspect(reason),
-              )
-              process.send(reply_to, Error(Unavailable))
-              actor.continue(state)
-            }
-          }
-      }
+      let #(result, core) =
+        room_registry.lookup(state.core, room_id_to_string(id), "room")
+      process.send(reply_to, result)
+      actor.continue(State(..state, core:))
     }
     RoomDown(pid) ->
-      case dict.get(state.monitored, pid) {
-        // 死んだ room を Dict から外す。残すと以後の lookup が死んだ
-        // subject を返し続け、その RoomId は再起動まで使用不能になる。
-        Ok(MonitoredRoom(key, subject)) -> {
-          logging.log(logging.Warning, "room crashed: id=" <> key)
-          let rooms = case dict.get(state.rooms, key) {
-            // Release 後の subject_owner 失敗により古い監視記録だけが残り、
-            // 同じ key に新しい room が登録済みでも、古い Down では消さない。
-            Ok(current) if current == subject -> dict.delete(state.rooms, key)
-            _ -> state.rooms
-          }
-          actor.continue(
-            State(
-              ..state,
-              rooms:,
-              monitored: dict.delete(state.monitored, pid),
-              stuck_rooms: set.delete(state.stuck_rooms, key),
-            ),
-          )
-        }
-        // 既に Release 済みなど、監視表に無い pid は無視する。
-        Error(Nil) -> actor.continue(state)
-      }
+      actor.continue(
+        State(..state, core: room_registry.room_down(state.core, pid, "room")),
+      )
     Health(reply_to) -> {
       // 返事が来ること自体が「registry が詰まっていない」証拠。
       // `stuck` は前回の probe 結果を即座に返し、待たせない（#138）。
       process.send(
         reply_to,
         HealthSnapshot(
-          rooms: dict.size(state.rooms),
-          stuck: set.size(state.stuck_rooms),
+          rooms: dict.size(state.core.rooms),
+          stuck: set.size(state.core.stuck_rooms),
         ),
       )
       // 次回の `Health` 用に、今の登録済み room 全件へ非同期で probe を
@@ -421,41 +248,29 @@ fn handle_message(
       // 前回の probe 群がまだ全件返り終えていなければ発火を見送る（#269）。
       // `/health` の連打で room actor のメールボックスへ probe が
       // 際限なく積み上がるのを防ぐ。
-      case state.probe_in_flight {
-        0 -> {
-          dict.each(state.rooms, fn(key, subject) {
-            process.spawn_unlinked(fn() {
-              let ok = case room.get_snapshot(subject) {
-                Ok(_) -> True
-                Error(Nil) -> False
-              }
-              process.send(state.self, RoomProbed(key, subject, ok))
-            })
-          })
-          actor.continue(
-            State(..state, probe_in_flight: dict.size(state.rooms)),
-          )
-        }
-        _ -> actor.continue(state)
-      }
-    }
-    RoomProbed(key, subject, ok) -> {
-      // probe 発火後に同じ key で room が入れ替わっていないか確かめる（#471）。
-      // 一致しなければ、遅れて届いたこの結果は既に無関係な room のものなので、
-      // stuck_rooms は書き換えない（probe_in_flight のカウントダウンだけ行う）。
-      let stuck_rooms = case dict.get(state.rooms, key) {
-        Ok(current) if current == subject ->
-          case ok {
-            True -> set.delete(state.stuck_rooms, key)
-            False -> set.insert(state.stuck_rooms, key)
+      let #(targets, core) = room_registry.begin_probes(state.core)
+      list.each(targets, fn(target) {
+        let #(key, subject) = target
+        process.spawn_unlinked(fn() {
+          let ok = case room.get_snapshot(subject) {
+            Ok(_) -> True
+            Error(Nil) -> False
           }
-        _ -> state.stuck_rooms
-      }
-      // 0 未満にはならない: probe_in_flight は発火時に room 数で設定され、
-      // 各発火につき `RoomProbed` はちょうど1回だけ返る。
-      let probe_in_flight = int.max(0, state.probe_in_flight - 1)
-      actor.continue(State(..state, stuck_rooms:, probe_in_flight:))
+          process.send(state.self, RoomProbed(key, subject, ok))
+        })
+      })
+      actor.continue(State(..state, core:))
     }
+    RoomProbed(key, subject, ok) ->
+      // probe 発火後に同じ key で room が入れ替わっていないか確かめる（#471）。
+      // 一致しなければ stuck_rooms は書き換えず、probe_in_flight の
+      // カウントダウンだけ行う。
+      actor.continue(
+        State(
+          ..state,
+          core: room_registry.record_probe(state.core, key, subject, ok),
+        ),
+      )
     ParentShutdown -> {
       // 親（supervisor）からの shutdown 要求。無視して生き続けると
       // supervisor は既定の shutdown タイムアウト（5秒）を待ってから
@@ -464,10 +279,10 @@ fn handle_message(
     }
     Release(id, subject) -> {
       let key = room_id_to_string(id)
-      case dict.get(state.rooms, key) {
-        // 登録中のものと同一の actor のときだけ対象にする。ABA 問題への対処で、
-        // 理由は `Release` のドキュメントコメントを参照。
-        Ok(current) if current == subject -> {
+      // 登録中のものと同一の actor のときだけ対象にする。ABA 問題への対処で、
+      // 理由は `Release` のドキュメントコメントを参照。
+      case room_registry.is_registered(state.core, key, subject) {
+        True -> {
           // **空かどうかの判定は room 自身に任せる**（#36）。
           // ここで get_snapshot して空を確かめてから止めると、その隙に
           // join した参加者ごと停止させてしまう。room のメールボックスは
@@ -485,43 +300,29 @@ fn handle_message(
           // 返しうる（その場合は再送で room_unavailable エラーになる程度の
           // 影響に留まる）。
           process.spawn_unlinked(fn() {
-            let empty = room.shutdown_if_empty(current)
-            process.send(state.self, RoomEmptyChecked(id, current, empty))
+            let empty = room.shutdown_if_empty(subject)
+            process.send(state.self, RoomEmptyChecked(id, subject, empty))
           })
           actor.continue(state)
         }
-        _ -> actor.continue(state)
+        False -> actor.continue(state)
       }
     }
-    RoomEmptyChecked(id, subject, empty) -> {
-      let key = room_id_to_string(id)
-      case empty, dict.get(state.rooms, key) {
-        // 判定結果を待つ間に別の actor が同じ key で登録し直されていないか、
-        // `Release` と同じガードで確かめる（#160 と同じ ABA 対処）。
-        True, Ok(current) if current == subject -> {
-          logging.log(logging.Info, "room closed (empty): id=" <> key)
-          // subject_owner がまだ引ける場合だけ、その pid の記録を直接消す。
-          // subject も一致を確かめるので、pid が再利用されても別 room の監視を
-          // 消さない。既に終了して owner を引けない場合は、後続の RoomDown が
-          // 古い記録を消す。その際も subject 一致ガードが新しい room を守る
-          // （#160）。
-          let monitored = case process.subject_owner(subject) {
-            Ok(pid) ->
-              case dict.get(state.monitored, pid) {
-                Ok(MonitoredRoom(subject: monitored_subject, ..))
-                  if monitored_subject == subject
-                -> dict.delete(state.monitored, pid)
-                _ -> state.monitored
-              }
-            Error(Nil) -> state.monitored
-          }
-          actor.continue(
-            State(..state, rooms: dict.delete(state.rooms, key), monitored:),
-          )
-        }
-        _, _ -> actor.continue(state)
-      }
-    }
+    RoomEmptyChecked(id, subject, empty) ->
+      // 判定結果を待つ間に別の actor が同じ key で登録し直されていないか、
+      // `Release` と同じガードで確かめる（#160 と同じ ABA 対処）。
+      actor.continue(
+        State(
+          ..state,
+          core: room_registry.close_if_empty(
+            state.core,
+            room_id_to_string(id),
+            subject,
+            empty,
+            "room",
+          ),
+        ),
+      )
   }
 }
 
@@ -563,8 +364,8 @@ pub fn health(
 pub fn lookup(
   subject: Subject(Message),
   id: RoomId,
-) -> Result(Subject(room.Message), LookupError) {
+) -> Result(Subject(room.Message), room_registry.LookupError) {
   call.try_call(subject, call.default_timeout, Lookup(id, _), "registry.lookup")
-  |> result.replace_error(Unavailable)
+  |> result.replace_error(room_registry.Unavailable)
   |> result.flatten
 }

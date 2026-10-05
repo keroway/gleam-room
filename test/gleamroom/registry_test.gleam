@@ -5,6 +5,7 @@ import gleam/otp/actor
 import gleamroom/call
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/room_registry
 import gleamroom/wait
 
 pub fn repeated_lookup_resolves_to_same_room_test() {
@@ -263,14 +264,14 @@ pub fn a_room_start_failure_does_not_crash_the_registry_test() {
 
   // 起動に失敗した lookup は Error を返す（パニックしない）。
   assert registry.lookup(started.data, registry.room_id("room-fails"))
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
 
   // registry は生きている。
   assert process.is_alive(registry_pid)
 
   // 別の RoomId の lookup も引き続き処理される（巻き添えになっていない）。
   assert registry.lookup(started.data, registry.room_id("room-other"))
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
   assert process.is_alive(registry_pid)
 }
 
@@ -317,7 +318,7 @@ pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
 
   // 素の actor.call ならここで呼び出し元（このテストプロセス）が死ぬ。
   assert registry.lookup(unresponsive, registry.room_id("stalled"))
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
 
   // 生き残っているので後続の検証ができる。これが #58 の要点。
   let assert Ok(started) = registry.start()
@@ -385,7 +386,7 @@ pub fn lookup_rejects_new_rooms_once_max_rooms_is_reached_test() {
   let assert Ok(_) = registry.lookup(reg, registry.room_id("room-a"))
 
   assert registry.lookup(reg, registry.room_id("room-b"))
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 }
 
 /// 上限に達していても、**既存** room の lookup は引き続き成功すること
@@ -397,7 +398,7 @@ pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
 
   let assert Ok(first) = registry.lookup(reg, registry.room_id("room-a"))
   assert registry.lookup(reg, registry.room_id("room-b"))
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 
   assert registry.lookup(reg, registry.room_id("room-a")) == Ok(first)
 }

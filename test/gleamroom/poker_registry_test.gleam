@@ -5,7 +5,7 @@ import gleam/otp/actor
 import gleamroom/call
 import gleamroom/poker
 import gleamroom/poker_registry
-import gleamroom/registry
+import gleamroom/room_registry
 import gleamroom/wait
 
 pub fn repeated_lookup_resolves_to_same_room_test() {
@@ -213,7 +213,7 @@ pub fn a_room_start_failure_does_not_crash_the_registry_test() {
       started.data,
       poker_registry.room_id("room-fails"),
     )
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
 
   assert process.is_alive(registry_pid)
 
@@ -221,7 +221,7 @@ pub fn a_room_start_failure_does_not_crash_the_registry_test() {
       started.data,
       poker_registry.room_id("room-other"),
     )
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
   assert process.is_alive(registry_pid)
 }
 
@@ -249,7 +249,7 @@ pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
     process.new_subject()
 
   assert poker_registry.lookup(unresponsive, poker_registry.room_id("stalled"))
-    == Error(registry.Unavailable)
+    == Error(room_registry.Unavailable)
 
   let assert Ok(started) = poker_registry.start()
   let assert Ok(_) =
@@ -291,7 +291,7 @@ pub fn lookup_rejects_new_rooms_once_max_rooms_is_reached_test() {
     poker_registry.lookup(reg, poker_registry.room_id("room-a"))
 
   assert poker_registry.lookup(reg, poker_registry.room_id("room-b"))
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 }
 
 pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
@@ -301,7 +301,7 @@ pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
   let assert Ok(first) =
     poker_registry.lookup(reg, poker_registry.room_id("room-a"))
   assert poker_registry.lookup(reg, poker_registry.room_id("room-b"))
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 
   assert poker_registry.lookup(reg, poker_registry.room_id("room-a"))
     == Ok(first)

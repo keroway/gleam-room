@@ -47,56 +47,42 @@ Each item below is marked:
 
 **抽出すべき.**
 
-The two registries are the same actor logic with the room message type
-substituted:
+The two registries were the same actor logic with the room message type
+substituted. **Extracted in #586** into `room_registry.gleam`, generic over the
+room message type `m`; `registry.gleam` / `poker_registry.gleam` keep only
+their own `Message` type, `State` (`core` + `self`), the `Health`/`Release`
+spawn glue (which calls the room-specific `get_snapshot` /
+`shutdown_if_empty`), and the public `health`/`lookup` API:
 
-- `RoomId` opaque type and its accessors (`registry.gleam:16-27`,
-  `poker_registry.gleam:18-28`).
-- Trapped-exit classification (`exit_to_message`,
-  `registry.gleam:210-220`, `poker_registry.gleam:125-135`).
-- Actor `build` (trap_exits, `select_trapped_exits`, initial `State`)
-  (`registry.gleam:228-258`, `poker_registry.gleam:139-165`).
+- `RoomId` opaque type, its accessors, and `LookupError` — now one shared type
+  (`registry.RoomId` / `poker_registry.RoomId` are aliases).
+- Trapped-exit classification (`classify_exit`).
+- Actor `build` (trap_exits, `select_trapped_exits`).
 - `Lookup` capacity check, room startup, and `subject_owner` monitored
-  registration (`registry.gleam:295-381`, `poker_registry.gleam:194-264`).
-- `RoomDown` ABA-safe dict cleanup (`registry.gleam:382-405`,
-  `poker_registry.gleam:265-284`).
-- `Release`/`RoomEmptyChecked` async-empty check with ABA guard
-  (`registry.gleam:465-524`, `poker_registry.gleam:286-320`).
+  registration (`room_registry.lookup`).
+- `RoomDown` ABA-safe dict cleanup (`room_registry.room_down`).
+- `Release`/`RoomEmptyChecked` ABA guard (`is_registered`, `close_if_empty`).
 - `Health`/`RoomProbed` probe tracking with the `probe_in_flight` guard from
-  #269 (`registry.gleam:406-458`, `poker_registry.gleam:321-367`).
-- Public `health`/`lookup` API delegating to `call.try_call*`
-  (`registry.gleam:538-570`, `poker_registry.gleam:375-401`).
+  #269 (`begin_probes`, `record_probe`).
 
-The only differences are the room message type parameter and `poker `
-prefixes in log strings.
+Log strings keep their `poker ` prefix via a `label` argument.
 
-Update (#391 / PR #399): this section originally assumed the two registries
-have no dependency on each other. That is no longer true for the default
-capacity value — `poker_registry.gleam` now does `import gleamroom/registry`
-and calls `registry.get_default_max_rooms()` directly
-(`poker_registry.gleam:12,102,110,173`) instead of keeping its own copy of the
-default. This is a narrow, one-value dependency (default max rooms), not a
-general one: the actor logic duplication described above is unchanged, and
-the function-value-injection need below still applies to the rest of the
-registry. It does mean step 4 should not assume "registries have zero
-dependency on each other" as a starting premise.
+Update (#391 / PR #399, superseded by #586): `poker_registry.gleam` still does
+`import gleamroom/registry` solely for `registry.get_default_max_rooms()`
+(`poker_registry.gleam:79,87,127`), a narrow one-value dependency on the
+default capacity.
 
-What generalization would need: three function values injected per
-registry instance — room startup (`fn() -> actor.StartResult(Subject(a))`),
-`shutdown_if_empty` (`fn(Subject(a)) -> Bool`), and a snapshot probe
-(`fn(Subject(a)) -> Result(_, Nil)`). The `start_room` path already injects a
-comparable function today, so the pattern has precedent in this codebase.
-
-Open question to resolve during extraction: whether `RoomId` should become
-one shared type or stay as two independent opaque types (the current
-duplication may be incidentally preventing buzzer/poker room ids from being
-mixed up at the type level).
+Resolution of the open question: `RoomId` became one shared type. Mixing a
+buzzer id into a poker registry call is not a type error any more, but the two
+registries are separate processes with separate subjects, so a mix-up can only
+come from calling the wrong registry, which the `Subject(Message)` type
+already prevents.
 
 ### 1.2 `call.gleam` — already shared
 
 **対象外（既に共有済み）.** `call.try_call`, `call.try_call_classified`,
 `classify`, and `Failure` live in one module and are imported by both sides
-(`registry.gleam:10`, `poker_registry.gleam:10`, `room.gleam:7`,
+(`registry.gleam:7`, `poker_registry.gleam:7`, `room.gleam:7`,
 `poker.gleam:7`). This is the existing precedent for how a shared boundary
 in this codebase looks; use it as the template when extracting the registry
 layer in 1.1.
