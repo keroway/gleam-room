@@ -1,10 +1,11 @@
+import gleamroom/client_js
+
 /// The minimal browser client for manually exercising Planning Poker's
 /// room join/presence, voting, and reveal behavior end to end.
 ///
-/// Deliberately mirrors `web.gleam`'s shape (a single static HTML document
-/// with inline CSS/JS, no build tool or framework) rather than sharing code
-/// with it, per ADR 0009: Planning Poker duplicates rather than shares. It
-/// only speaks the wire protocol documented in `docs/planning-poker.md`; it
+/// Mirrors `web.gleam`'s shape (a single static HTML document with inline
+/// CSS/JS, no build tool or framework); the connection/reconnect/log JS both
+/// pages have in common is spliced in from `client_js` (#589). It only speaks the wire protocol documented in `docs/planning-poker.md`; it
 /// holds no room-domain logic of its own.
 pub fn poker_html() -> String {
   "<!doctype html>
@@ -116,49 +117,18 @@ pub fn poker_html() -> String {
   let ownVoteBeforeSend = null;
   let lastSentType = null;
 
-  // Same transient-identity reconnect model as the buzzer (docs/mvp.md's
-  // Reconnect section, referenced by docs/planning-poker.md): a reconnect
-  // re-joins as a brand new, server-assigned participant identity.
-  const RECONNECT_DELAY_MS = 1500;
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  let lastJoin = null;
-  let reconnectAttempts = 0;
-  let reconnectTimer = null;
-
-  function cancelReconnect() {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    reconnectAttempts = 0;
-  }
-
-  function scheduleReconnect() {
-    if (!lastJoin) return;
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      log(\"giving up automatic reconnect\");
-      return;
-    }
-    reconnectAttempts += 1;
-    log(
-      `reconnecting in ${RECONNECT_DELAY_MS}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
-    );
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect(lastJoin.roomId, lastJoin.displayName);
-    }, RECONNECT_DELAY_MS);
-  }
-
-  const MAX_LOG_ENTRIES = 200;
-
-  function log(line) {
-    const entry = document.createElement(\"div\");
-    entry.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
-    logEl.append(entry);
-    while (logEl.children.length > MAX_LOG_ENTRIES) {
-      logEl.firstElementChild.remove();
-    }
-    logEl.scrollTop = logEl.scrollHeight;
+  const WS_PATH = \"/poker/ws\";
+  const afterSend = (message) => {
+    lastSentType = message.type;
+  };
+" <> client_js.shared <> "
+  function resetRoomView() {
+    participants = new Map();
+    votes = [];
+    ownVote = null;
+    ownVoteBeforeSend = null;
+    renderParticipants();
+    renderVotes();
   }
 
   function setConnected(connected) {
@@ -334,35 +304,12 @@ pub fn poker_html() -> String {
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
         // room_full/invalid_room_id/invalid_display_name/room_unavailable は
-        // 恒久的な拒否で、ソケットを閉じずに返る（poker_websocket.gleam の
-        // with_room/JoinRejected/with_join_reply の各分岐。join タイムアウト
-        // 由来の room_unavailable はサーバ側が接続自体を閉じるが、クライアント
-        // からは同じ error メッセージとして届く）。
-        // web.gleam と同じ理由でここで即座に未接続・再join可能な状態へ戻す。
+        // room_full/room_unavailable/room_busy 等の接続レベルのエラーは
+        // client_js.gleam の共有処理が扱う。
+        if (handleConnectionError(message.code)) {
+          break;
+        }
         if (
-          message.code === \"room_full\" ||
-          message.code === \"invalid_room_id\" ||
-          message.code === \"invalid_display_name\" ||
-          message.code === \"room_unavailable\"
-        ) {
-          if (socket) socket.close();
-          socket = null;
-          lastJoin = null;
-          setConnected(false);
-          participants = new Map();
-          votes = [];
-          ownVote = null;
-          ownVoteBeforeSend = null;
-          renderParticipants();
-          renderVotes();
-        } else if (message.code === \"room_busy\") {
-          // join 済みの接続で vote/reveal/reset がタイムアウトしたときだけ
-          // 届く（poker_websocket.gleam の with_room_reply/ReplyTimedOut）。
-          // web.gleam と同じ理由でソケットは閉じるが lastJoin は保持し、
-          // close イベントの scheduleReconnect() に自動再 join を任せる
-          // （#570）。
-          if (socket) socket.close();
-        } else if (
           message.code === \"round_already_revealed\" ||
           message.code === \"voter_not_joined\" ||
           message.code === \"invalid_card\" ||
@@ -393,96 +340,6 @@ pub fn poker_html() -> String {
       default:
         log(`unrecognized message: ${JSON.stringify(message)}`);
     }
-  }
-
-  function connect(roomId, displayName) {
-    if (socket) return;
-
-    const protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";
-    socket = new WebSocket(`${protocol}//${location.host}/poker/ws`);
-
-    socket.addEventListener(\"open\", () => {
-      // web.gleam と同じ理由で、ここでは setConnected(true) を呼ばない・
-      // 試行回数も戻さない: open は join 成立を意味しない。
-      log(`connected, joining room ${roomId} as ${displayName}`);
-      socket.send(JSON.stringify({
-        type: \"join\",
-        room_id: roomId,
-        display_name: displayName,
-      }));
-    });
-
-    socket.addEventListener(\"message\", (event) => {
-      let message;
-      try {
-        message = JSON.parse(event.data);
-      } catch (err) {
-        log(`could not parse server message: ${event.data}`);
-        return;
-      }
-      try {
-        handleServerMessage(message);
-      } catch (err) {
-        log(`failed to handle server message: ${event.data} (${err?.message ?? err})`);
-      }
-    });
-
-    socket.addEventListener(\"close\", () => {
-      setConnected(false);
-      participants = new Map();
-      votes = [];
-      ownVote = null;
-      ownVoteBeforeSend = null;
-      renderParticipants();
-      renderVotes();
-      socket = null;
-      log(\"disconnected\");
-      scheduleReconnect();
-    });
-
-    socket.addEventListener(\"error\", () => {
-      log(\"connection error\");
-    });
-  }
-
-  joinForm.addEventListener(\"submit\", (event) => {
-    event.preventDefault();
-    if (socket) {
-      log(\"already connecting or connected\");
-      return;
-    }
-
-    const roomId = roomInput.value.trim();
-    const displayName = nameInput.value.trim();
-    if (!roomId || !displayName) {
-      log(\"room ID と display name を入力してください\");
-      return;
-    }
-    // maxlength=\"64\" は UTF-16 コード単位でのみ制限するが、サーバの
-    // is_valid_field は UTF-8 バイト数(<=64)も要求する。マルチバイト文字は
-    // maxlength を満たしても超過しうるため、送信前にここで検知する(#549)。
-    if (byteLength(roomId) > 64 || byteLength(displayName) > 64) {
-      log(\"room ID・display name は UTF-8 で64バイト以内にしてください（マルチバイト文字は文字数より少なく入力してください）\");
-      return;
-    }
-
-    cancelReconnect();
-    lastJoin = { roomId, displayName };
-    connect(roomId, displayName);
-  });
-
-  function byteLength(value) {
-    return new TextEncoder().encode(value).length;
-  }
-
-  function sendIfOpen(message) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-      lastSentType = message.type;
-      return true;
-    }
-    log(\"not connected, ignoring \" + message.type);
-    return false;
   }
 
   for (const card of cards) {

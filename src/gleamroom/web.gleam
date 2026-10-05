@@ -1,9 +1,12 @@
+import gleamroom/client_js
+
 /// The minimal browser client for manually exercising room join/presence
 /// and buzzer behavior end to end.
 ///
 /// This is deliberately a single static HTML document with inline CSS/JS,
 /// no frontend build tool or framework. It only speaks the wire protocol
 /// documented in `docs/mvp.md`; it holds no room-domain logic of its own.
+/// JS shared with the Planning Poker page is spliced in from `client_js`.
 pub fn index_html() -> String {
   "<!doctype html>
 <html lang=\"en\">
@@ -84,50 +87,14 @@ pub fn index_html() -> String {
   let hasBuzzed = false;
   let isConnected = false;
 
-  // A reconnect always re-joins as a brand new, server-assigned participant
-  // identity (see docs/mvp.md, \"Reconnect\"); this client does not attempt
-  // to preserve the previous one. A fixed, small retry count keeps this
-  // \"simple\" rather than a full exponential-backoff strategy.
-  const RECONNECT_DELAY_MS = 1500;
-  const MAX_RECONNECT_ATTEMPTS = 5;
-  let lastJoin = null;
-  let reconnectAttempts = 0;
-  let reconnectTimer = null;
-
-  function cancelReconnect() {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    reconnectAttempts = 0;
-  }
-
-  function scheduleReconnect() {
-    if (!lastJoin) return;
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-      log(\"giving up automatic reconnect\");
-      return;
-    }
-    reconnectAttempts += 1;
-    log(
-      `reconnecting in ${RECONNECT_DELAY_MS}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
-    );
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect(lastJoin.roomId, lastJoin.displayName);
-    }, RECONNECT_DELAY_MS);
-  }
-
-  const MAX_LOG_ENTRIES = 200;
-
-  function log(line) {
-    const entry = document.createElement(\"div\");
-    entry.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
-    logEl.append(entry);
-    while (logEl.children.length > MAX_LOG_ENTRIES) {
-      logEl.firstElementChild.remove();
-    }
-    logEl.scrollTop = logEl.scrollHeight;
+  const WS_PATH = \"/ws\";
+  const afterSend = () => {};
+" <> client_js.shared <> "
+  function resetRoomView() {
+    participants = new Map();
+    buzzes = [];
+    renderParticipants();
+    renderBuzzes();
   }
 
   function updateBuzzButton() {
@@ -251,41 +218,12 @@ pub fn index_html() -> String {
       case \"error\":
         log(`error [${message.code}]: ${message.message}`);
         // room_full/invalid_room_id/invalid_display_name/room_unavailable は
-        // 恒久的な拒否で、ソケットを閉じずに返る（websocket.gleam の
-        // with_room/JoinRejected/with_join_reply の各分岐。join タイムアウト
-        // 由来の room_unavailable はサーバ側が mist.stop() で接続自体を閉じる
-        // が、クライアントからは同じ error メッセージとして届く）。実接続の
-        // close イベントを待つと再joinまで時間差ができるため、ここで即座に
-        // \"未接続・再度join可能\" な状態へ戻す。実ソケットも明示的に閉じ、
-        // 以降そのソケットからのイベントは無視する（close は自然発火しても
-        // ここでの状態は既にリセット済み）。
-        // 明示的な拒否なので自動再接続はしない（lastJoin をクリア）。
-        // already_joined はこの接続が既にroomへ参加済みであることを示す
-        // だけで join 失敗ではないため、ここには含めない。
-        if (
-          message.code === \"room_full\" ||
-          message.code === \"invalid_room_id\" ||
-          message.code === \"invalid_display_name\" ||
-          message.code === \"room_unavailable\"
-        ) {
-          if (socket) socket.close();
-          socket = null;
-          lastJoin = null;
-          setConnected(false);
-          participants = new Map();
-          buzzes = [];
-          renderParticipants();
-          renderBuzzes();
-        } else if (message.code === \"room_busy\") {
-          // join 済みの接続で buzz/reset がタイムアウトしたときだけ届く
-          // （websocket.gleam の with_room_reply/ReplyTimedOut）。サーバは
-          // この接続を閉じずに保持する設計だが、以後の buzz/reset はサーバ側
-          // state がリセットされ not_joined で弾かれるため、クライアントは
-          // ソケットを閉じて再接続を起こす。ただし恒久拒否とは違い
-          // lastJoin はクリアしない — close イベントの scheduleReconnect() が
-          // lastJoin を使って自動的に再 join まで行う（#570）。
-          if (socket) socket.close();
-        } else if (message.code === \"already_buzzed\") {
+        // room_full/room_unavailable/room_busy 等の接続レベルのエラーは
+        // client_js.gleam の共有処理が扱う。
+        if (handleConnectionError(message.code)) {
+          break;
+        }
+        if (message.code === \"already_buzzed\") {
           // 楽観的に立てた hasBuzzed をサーバーの判定で確定させる（#576）。
           hasBuzzed = true;
           updateBuzzButton();
@@ -299,97 +237,6 @@ pub fn index_html() -> String {
       default:
         log(`unrecognized message: ${JSON.stringify(message)}`);
     }
-  }
-
-  function connect(roomId, displayName) {
-    if (socket) return;
-
-    const protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";
-    socket = new WebSocket(`${protocol}//${location.host}/ws`);
-
-    socket.addEventListener(\"open\", () => {
-      // **ここでは setConnected(true) を呼ばない・試行回数も戻さない（#62, #87）。**
-      // WebSocket が開いただけでは join できたことにならない。UI が
-      // \"connected\" になるのはサーバから state（join成立）が届いたときのみ。
-      // join が通らずサーバ側から即切断される状況では open → close が
-      // 繰り返され、open ごとに試行回数を 0 に戻すと上限に永久に到達せず、
-      // 「5 回で諦める」という約束が効かなくなる。
-      log(`connected, joining room ${roomId} as ${displayName}`);
-      socket.send(JSON.stringify({
-        type: \"join\",
-        room_id: roomId,
-        display_name: displayName,
-      }));
-    });
-
-    socket.addEventListener(\"message\", (event) => {
-      let message;
-      try {
-        message = JSON.parse(event.data);
-      } catch (err) {
-        log(`could not parse server message: ${event.data}`);
-        return;
-      }
-      try {
-        handleServerMessage(message);
-      } catch (err) {
-        log(`failed to handle server message: ${event.data} (${err?.message ?? err})`);
-      }
-    });
-
-    socket.addEventListener(\"close\", () => {
-      setConnected(false);
-      participants = new Map();
-      buzzes = [];
-      renderParticipants();
-      renderBuzzes();
-      socket = null;
-      log(\"disconnected\");
-      scheduleReconnect();
-    });
-
-    socket.addEventListener(\"error\", () => {
-      log(\"connection error\");
-    });
-  }
-
-  joinForm.addEventListener(\"submit\", (event) => {
-    event.preventDefault();
-    if (socket) {
-      log(\"already connecting or connected\");
-      return;
-    }
-
-    const roomId = roomInput.value.trim();
-    const displayName = nameInput.value.trim();
-    if (!roomId || !displayName) {
-      log(\"room ID と display name を入力してください\");
-      return;
-    }
-    // maxlength=\"64\" は UTF-16 コード単位でのみ制限するが、サーバの
-    // is_valid_field は UTF-8 バイト数(<=64)も要求する。マルチバイト文字は
-    // maxlength を満たしても超過しうるため、送信前にここで検知する(#549)。
-    if (byteLength(roomId) > 64 || byteLength(displayName) > 64) {
-      log(\"room ID・display name は UTF-8 で64バイト以内にしてください（マルチバイト文字は文字数より少なく入力してください）\");
-      return;
-    }
-
-    cancelReconnect();
-    lastJoin = { roomId, displayName };
-    connect(roomId, displayName);
-  });
-
-  function byteLength(value) {
-    return new TextEncoder().encode(value).length;
-  }
-
-  function sendIfOpen(message) {
-    if (socket && socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify(message));
-      return true;
-    }
-    log(\"not connected, ignoring \" + message.type);
-    return false;
   }
 
   buzzButton.addEventListener(\"click\", () => {
