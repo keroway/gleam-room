@@ -1,38 +1,21 @@
 import gleam/dynamic/decode
 import gleam/json
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import gleam/string
+import gleamroom/wire.{
+  type ParticipantId, type ProtocolError, type RoomId, ProtocolError,
+  participant_id_to_string,
+}
 
 /// The wire-format client/server protocol boundary for Planning Poker.
 ///
 /// Mirrors `protocol.gleam`'s boundary role for the buzzer (translating JSON
-/// text to/from typed Gleam values, nothing more), but is a fully separate
-/// module per ADR 0009: Planning Poker duplicates the buzzer's wire types
-/// rather than sharing them, and this module's `Card`/`ParticipantId` are
-/// distinct types from `poker.gleam`'s domain types of the same name — see
+/// text to/from typed Gleam values, nothing more). Identifier types and join
+/// validation are shared with the buzzer via `wire.gleam`; the message
+/// variants and `Card` stay app-specific, and `Card`/`ParticipantId` here are
+/// distinct from `poker.gleam`'s domain types of the same name — see
 /// `docs/planning-poker.md` for the wire protocol this module implements.
-pub type RoomId {
-  RoomId(String)
-}
-
-pub fn room_id_to_string(id: RoomId) -> String {
-  let RoomId(value) = id
-  value
-}
-
-pub type ParticipantId {
-  ParticipantId(String)
-}
-
-pub fn participant_id(value: String) -> ParticipantId {
-  ParticipantId(value)
-}
-
-pub fn participant_id_to_string(id: ParticipantId) -> String {
-  let ParticipantId(value) = id
-  value
-}
-
 /// The fixed card set from `docs/planning-poker.md`. A custom type (rather
 /// than passing the wire strings through) so an invalid card is rejected at
 /// this boundary and never reaches the domain layer.
@@ -140,12 +123,6 @@ pub type ServerMessage {
   ProtocolErrorMessage(code: String, message: String)
 }
 
-/// An explicit decode/protocol failure, returned instead of crashing the
-/// calling process when a client sends an invalid or unknown message.
-pub type ProtocolError {
-  ProtocolError(code: String, message: String)
-}
-
 /// An intermediate shape-only decode result, kept distinct from
 /// `ClientMessage` so `join`/`vote` content validation (trimming, length
 /// limits, card membership) happens after shape decoding succeeds, mirroring
@@ -164,21 +141,13 @@ pub fn decode_client_message(
     Ok(RawJoin(raw_room_id, raw_display_name)) -> {
       let room_id = string.trim(raw_room_id) |> string.uppercase
       let display_name = string.trim(raw_display_name)
-      validate_join(room_id, display_name)
+      wire.validate_join(room_id, display_name)
+      |> result.map(fn(joined) { Join(joined.0, joined.1) })
     }
     Ok(RawVote(raw_value)) -> validate_vote(raw_value)
     Ok(RawReveal) -> Ok(Reveal)
     Ok(RawReset) -> Ok(Reset)
-    Error(json.UnableToDecode(_)) ->
-      Error(ProtocolError(
-        code: "invalid_message",
-        message: "Message did not match a known client message shape.",
-      ))
-    Error(_) ->
-      Error(ProtocolError(
-        code: "malformed_json",
-        message: "Message body was not valid JSON.",
-      ))
+    Error(error) -> Error(wire.decode_error(error))
   }
 }
 
@@ -193,10 +162,6 @@ fn client_message_decoder() -> decode.Decoder(RawClientMessage) {
   }
 }
 
-/// The maximum accepted length for a trimmed `room_id` or `display_name`,
-/// matching `protocol.gleam`'s `max_field_length` for the same reason.
-const max_field_length = 64
-
 fn join_decoder() -> decode.Decoder(RawClientMessage) {
   use raw_room_id <- decode.field("room_id", decode.string)
   use raw_display_name <- decode.field("display_name", decode.string)
@@ -206,36 +171,6 @@ fn join_decoder() -> decode.Decoder(RawClientMessage) {
 fn vote_decoder() -> decode.Decoder(RawClientMessage) {
   use raw_value <- decode.field("value", decode.string)
   decode.success(RawVote(raw_value))
-}
-
-/// Content-validates an already-shape-decoded `join` message, reporting
-/// which field is invalid instead of collapsing both cases into the generic
-/// `invalid_message` shape error. A `room_id` failure takes priority over a
-/// `display_name` failure when both are invalid, mirroring
-/// `protocol.gleam`'s `validate_join`.
-fn validate_join(
-  room_id: String,
-  display_name: String,
-) -> Result(ClientMessage, ProtocolError) {
-  case is_valid_field(room_id), is_valid_field(display_name) {
-    True, True -> Ok(Join(RoomId(room_id), display_name))
-    False, _ ->
-      Error(ProtocolError(
-        code: "invalid_room_id",
-        message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
-      ))
-    True, False ->
-      Error(ProtocolError(
-        code: "invalid_display_name",
-        message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
-      ))
-  }
-}
-
-fn is_valid_field(value: String) -> Bool {
-  !string.is_empty(value)
-  && string.length(value) <= max_field_length
-  && string.byte_size(value) <= max_field_length
 }
 
 fn validate_vote(raw_value: String) -> Result(ClientMessage, ProtocolError) {
@@ -250,9 +185,7 @@ fn validate_vote(raw_value: String) -> Result(ClientMessage, ProtocolError) {
 }
 
 pub fn encode_server_message(message: ServerMessage) -> String {
-  message
-  |> server_message_to_json
-  |> json.to_string
+  wire.encode_message(message, with: server_message_to_json)
 }
 
 fn server_message_to_json(message: ServerMessage) -> json.Json {

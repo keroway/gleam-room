@@ -167,21 +167,19 @@ Investigated (2026-09-17, #406):
 
 ### 1.4 Wire protocol boundary — `protocol.gleam` vs `poker_protocol.gleam`
 
-**抽出すべき（部分的）**, for the parts listed below only.
+**抽出すべき（部分的）**, for the parts listed below only. **抽出済み (#587)**:
+all of the following now live in `gleamroom/wire.gleam` and both protocol
+modules use it.
 
-- `RoomId`/`ParticipantId` opaque types and accessors
-  (`protocol.gleam:11-31`, `poker_protocol.gleam:14-34`).
+- `RoomId`/`ParticipantId` types and accessors (`wire.gleam:9-29`).
 - `max_field_length = 64` and `is_valid_field` (trim, 1-64 char/byte check)
-  (`protocol.gleam:98-101,135-139`, `poker_protocol.gleam:198,235-239`).
-- `validate_join` (room_id-first error precedence)
-  (`protocol.gleam:116-133`, `poker_protocol.gleam:216-233`, including the
-  comment).
-- `decode_client_message`'s `json.UnableToDecode`/error branching shape and
-  `ProtocolError` type (`protocol.gleam:64-86`, `poker_protocol.gleam:160-183`
-  for `decode_client_message`; `ProtocolError` itself is a separate range on
-  the `poker_protocol.gleam` side, `poker_protocol.gleam:143-147`).
-- `encode_server_message`'s json-to-string skeleton
-  (`protocol.gleam:141-146`, `poker_protocol.gleam:252-256`).
+  (`wire.gleam:58,84-88`).
+- `validate_join` (room_id-first error precedence) (`wire.gleam:65-82`,
+  including the comment).
+- The `json.UnableToDecode`/error branching shape and `ProtocolError` type
+  (`wire.gleam:33-35`, `wire.gleam:40-53` for `decode_error`).
+- The json-to-string skeleton behind `encode_server_message`, now
+  `encode_message` (`wire.gleam:90-94`).
 
 This is pure string validation with no domain knowledge attached, which
 makes it the lowest-risk extraction candidate alongside the registry layer.
@@ -199,25 +197,25 @@ actual domain and are the reason the two protocols exist separately.
 Domain-independent and duplicated near-exactly (already commented in the
 source as "same value, same reason"):
 
-- `default_heartbeat_interval_ms = 30_000` (`websocket.gleam:59`,
-  `poker_websocket.gleam:51`).
-- `origin_allowed`/`origin_header_allowed` (`websocket.gleam:120-139`,
-  `poker_websocket.gleam:105-122`).
+- `default_heartbeat_interval_ms = 30_000` (`websocket.gleam:60`,
+  `poker_websocket.gleam:52`).
+- `origin_allowed`/`origin_header_allowed` (`websocket.gleam:121-140`,
+  `poker_websocket.gleam:106-123`).
 - `on_init` heartbeat subject + `send_after` scheduling
-  (`websocket.gleam:141-160`, `poker_websocket.gleam:124-146`).
-- `mark_active`/`record_message` (`websocket.gleam:253-263`,
-  `poker_websocket.gleam:224-234`).
+  (`websocket.gleam:142-161`, `poker_websocket.gleam:125-147`).
+- `mark_active`/`record_message` (`websocket.gleam:254-264`,
+  `poker_websocket.gleam:225-235`).
 - `heartbeat_outcome`/`handle_heartbeat_tick` idle-timeout logic
-  (`websocket.gleam:266-309`, `poker_websocket.gleam:237-277`).
+  (`websocket.gleam:267-310`, `poker_websocket.gleam:238-278`).
 - `max_text_frame_bytes = 2048` and `frame_size_outcome`
-  (`websocket.gleam:317-329`, `poker_websocket.gleam:280-291`).
+  (`websocket.gleam:318-330`, `poker_websocket.gleam:281-292`).
 - `max_messages_per_heartbeat_window = 30` and `message_rate_outcome`
-  (`websocket.gleam:355-382`, `poker_websocket.gleam:308-330`).
-- `connection_tag` (PID-based log identifier) (`websocket.gleam:1084-1086`,
-  `poker_websocket.gleam:1061-1063`, byte-identical).
+  (`websocket.gleam:356-383`, `poker_websocket.gleam:309-331`).
+- `connection_tag` (PID-based log identifier) (`websocket.gleam:1083-1085`,
+  `poker_websocket.gleam:1059-1061`, byte-identical).
 - `new_participant_id` (`crypto.strong_random_bytes(16)` + base64url, with
-  the same "don't leak the PID" rationale comment) (`websocket.gleam:1104-1107`,
-  `poker_websocket.gleam:1066-1069`, byte-identical).
+  the same "don't leak the PID" rationale comment) (`websocket.gleam:1103-1106`,
+  `poker_websocket.gleam:1064-1067`, byte-identical).
 
 None of the above touch `ConnectionState`'s room-specific fields, so they can
 move to a shared module (e.g. `gleamroom/ws_guard`) without a design change
@@ -226,9 +224,9 @@ beyond moving code.
 Judgment-deferred, larger-scope duplication:
 
 - `release_room` (`websocket.gleam:779-794`,
-  `poker_websocket.gleam:762-780`) and the `with_room`/`with_join_reply`/
+  `poker_websocket.gleam:763-781`) and the `with_room`/`with_join_reply`/
   `with_room_reply` family (`websocket.gleam:833-957`,
-  `poker_websocket.gleam:804-889`) — these encode "how to talk to a room
+  `poker_websocket.gleam:804-890`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,
@@ -317,14 +315,14 @@ for both (#295).
 - **The phase concept.** `RoundPhase` (`Voting`/`Revealed`) has no buzzer
   counterpart, nor does `VoteRejectReason`'s `RoundAlreadyRevealed`.
 - **The vote-secrecy design.** `ParticipantView`'s `has_voted: Bool` (no
-  vote value exposed, `poker_protocol.gleam:95-100`) and the
+  vote value exposed, `poker_protocol.gleam:78-83`) and the
   `VoteRegistered` event's "deliberately carries no vote value" comment
   (`poker.gleam:106-109`) — this asymmetry is the whole point of Planning
   Poker and has no buzzer equivalent to extract against.
 - **`RevealedVote.value: Option(Card)`** including non-voters as explicit
-  `None` (`poker_protocol.gleam:105-111`) — poker-only.
+  `None` (`poker_protocol.gleam:85-94`) — poker-only.
 - **`Card` type and its wire string mapping**
-  (`poker_protocol.gleam:39-81`) — poker-only, 10 variants.
+  (`poker_protocol.gleam:22-64`) — poker-only, 10 variants.
 
 ## 3. Summary table
 

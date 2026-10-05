@@ -5,6 +5,7 @@ import gleamroom/poker
 import gleamroom/poker_protocol
 import gleamroom/poker_registry
 import gleamroom/poker_websocket
+import gleamroom/wire
 
 pub fn release_room_sends_release_when_registry_is_reachable_test() {
   let registry_subject = process.new_subject()
@@ -162,29 +163,21 @@ pub fn not_joined_message_test() {
 
 pub fn to_wire_participant_id_test() {
   assert poker_websocket.to_wire_participant_id(poker.participant_id("p1"))
-    == poker_protocol.participant_id("p1")
+    == wire.participant_id("p1")
 }
 
 pub fn to_wire_participant_view_not_voted_test() {
   let participant = poker.Participant(poker.participant_id("p1"), "Alice")
 
   assert poker_websocket.to_wire_participant_view(participant, False)
-    == poker_protocol.ParticipantView(
-      poker_protocol.participant_id("p1"),
-      "Alice",
-      False,
-    )
+    == poker_protocol.ParticipantView(wire.participant_id("p1"), "Alice", False)
 }
 
 pub fn to_wire_participant_view_voted_test() {
   let participant = poker.Participant(poker.participant_id("p1"), "Alice")
 
   assert poker_websocket.to_wire_participant_view(participant, True)
-    == poker_protocol.ParticipantView(
-      poker_protocol.participant_id("p1"),
-      "Alice",
-      True,
-    )
+    == poker_protocol.ParticipantView(wire.participant_id("p1"), "Alice", True)
 }
 
 pub fn to_wire_round_phase_voting_test() {
@@ -234,7 +227,7 @@ pub fn to_wire_revealed_vote_with_value_test() {
 
   assert poker_websocket.to_wire_revealed_vote(vote)
     == poker_protocol.RevealedVote(
-      poker_protocol.participant_id("p1"),
+      wire.participant_id("p1"),
       "Alice",
       Some(poker_protocol.Five),
     )
@@ -244,11 +237,7 @@ pub fn to_wire_revealed_vote_without_value_test() {
   let vote = poker.RevealedVote(poker.participant_id("p1"), "Alice", None)
 
   assert poker_websocket.to_wire_revealed_vote(vote)
-    == poker_protocol.RevealedVote(
-      poker_protocol.participant_id("p1"),
-      "Alice",
-      None,
-    )
+    == poker_protocol.RevealedVote(wire.participant_id("p1"), "Alice", None)
 }
 
 pub fn room_event_to_server_message_participant_joined_test() {
@@ -259,7 +248,7 @@ pub fn room_event_to_server_message_participant_joined_test() {
     ))
     == Some(
       poker_protocol.ParticipantJoined(poker_protocol.ParticipantView(
-        poker_protocol.participant_id("p1"),
+        wire.participant_id("p1"),
         "Alice",
         False,
       )),
@@ -270,14 +259,14 @@ pub fn room_event_to_server_message_participant_left_test() {
   assert poker_websocket.room_event_to_server_message(
       poker.ParticipantLeft(poker.participant_id("p1")),
     )
-    == Some(poker_protocol.ParticipantLeft(poker_protocol.participant_id("p1")))
+    == Some(poker_protocol.ParticipantLeft(wire.participant_id("p1")))
 }
 
 pub fn room_event_to_server_message_vote_registered_test() {
   assert poker_websocket.room_event_to_server_message(
       poker.VoteRegistered(poker.participant_id("p1")),
     )
-    == Some(poker_protocol.VoteRegistered(poker_protocol.participant_id("p1")))
+    == Some(poker_protocol.VoteRegistered(wire.participant_id("p1")))
 }
 
 pub fn room_event_to_server_message_round_revealed_test() {
@@ -286,11 +275,7 @@ pub fn room_event_to_server_message_round_revealed_test() {
   assert poker_websocket.room_event_to_server_message(poker.RoundRevealed(votes))
     == Some(
       poker_protocol.RoundRevealed([
-        poker_protocol.RevealedVote(
-          poker_protocol.participant_id("p1"),
-          "Alice",
-          None,
-        ),
+        poker_protocol.RevealedVote(wire.participant_id("p1"), "Alice", None),
       ]),
     )
 }
