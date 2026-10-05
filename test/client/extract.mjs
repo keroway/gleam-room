@@ -17,15 +17,42 @@ function extractIndexHtml(
   functionName = DEFAULT_FUNCTION_NAME,
 ) {
   const source = fs.readFileSync(path.join(repoRoot, modulePath), "utf8");
-  const literal = new RegExp(
-    `pub fn ${functionName}\\(\\) -> String \\{\\s*"([\\s\\S]*)"\\s*\\}\\s*$`,
+  const body = new RegExp(
+    `pub fn ${functionName}\\(\\) -> String \\{([\\s\\S]*)\\}\\s*$`,
   ).exec(source);
-  if (!literal) {
+  if (!body) {
+    throw new Error(
+      `${functionName}() の本体を取り出せませんでした（${modulePath} の形が変わった可能性）`,
+    );
+  }
+  // 本体は `"..." <> client_js.shared <> "..."` の連結。文字列リテラルと
+  // `client_js.<const>` 参照を順に解決して1本の HTML にする。
+  const token = /"((?:[^"\\]|\\[\s\S])*)"|client_js\.(\w+)/g;
+  let html = "";
+  let rest = body[1];
+  let match;
+  while ((match = token.exec(rest)) !== null) {
+    html += match[2] === undefined ? unescapeGleam(match[1]) : clientJsConst(match[2]);
+  }
+  if (html === "") {
     throw new Error(
       `${functionName}() の文字列リテラルを取り出せませんでした（${modulePath} の形が変わった可能性）`,
     );
   }
-  return literal[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+  return html;
+}
+
+function unescapeGleam(literal) {
+  return literal.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+}
+
+function clientJsConst(name) {
+  const source = fs.readFileSync(path.join(repoRoot, "src/gleamroom/client_js.gleam"), "utf8");
+  const literal = new RegExp(`pub const ${name} = "((?:[^"\\\\]|\\\\[\\s\\S])*)"`).exec(source);
+  if (!literal) {
+    throw new Error(`client_js.${name} の文字列リテラルを取り出せませんでした`);
+  }
+  return unescapeGleam(literal[1]);
 }
 
 export function extractClientScript(modulePath, functionName) {

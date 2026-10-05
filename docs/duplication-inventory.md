@@ -225,33 +225,26 @@ are the actual command/event surface of each application.
 expressible in Gleam's type system since it is duplicated JS string
 literals, not Gleam code.
 
-- `cancelReconnect`/`scheduleReconnect`, including the shared
-  `RECONNECT_DELAY_MS = 1500` / `MAX_RECONNECT_ATTEMPTS = 5` constants
-  (`web.gleam:85-113`, `web_poker.gleam:120-148`, byte-identical).
-- `log` with `MAX_LOG_ENTRIES = 200` (`web.gleam:115-125`,
-  `web_poker.gleam:150-160`, byte-identical).
-- `connect`'s WebSocket setup/event-registration skeleton
-  (`web.gleam:273-322`, `web_poker.gleam:382-429`).
-- `joinForm` submit handler (`web.gleam:356-379`, `web_poker.gleam:431-454`,
-  byte-identical).
-- `sendIfOpen` (`web.gleam:386-393`, `web_poker.gleam:478-486`,
-  byte-identical except that the poker one also records `lastSentType`).
-- Server `error` message handling for
-  `room_full`/`invalid_room_id`/`invalid_display_name`/`room_unavailable`
-  (`web.gleam:229-257`, `web_poker.gleam:330-353`), plus the `room_busy`
-  `else if` branch that closes the socket without clearing `lastJoin`
-  (`web.gleam:257-266`, `web_poker.gleam:353-359`, added by #570). The
-  poker-only `round_already_revealed`/`voter_not_joined` `else if` branch
-  (`web_poker.gleam:360-375`) rolls back the optimistic `ownVote` and is
-  **not** part of this duplication — buzzer has no equivalent — so it
-  should not be counted when comparing the two files' `error` handling.
+**解消済み** (#589): the following were extracted to the `shared` constant in
+`src/gleamroom/client_js.gleam` and are spliced into both pages' `<script>`
+with Gleam's `<>`, so the pages stay single static HTML documents with no
+build step:
 
-Extracting this conflicts with the current "single static HTML document, no
-build tooling" design noted in both files' headers (`web.gleam:1-6`,
-`web_poker.gleam:1-8`); any extraction here needs its own decision about how
-a shared JS snippet gets assembled into two Gleam string-embedded documents
-without introducing a build step. Flag this as a distinct sub-problem from
-the Gleam-side extraction in step 4, not the same mechanism.
+- `cancelReconnect`/`scheduleReconnect` with `RECONNECT_DELAY_MS` /
+  `MAX_RECONNECT_ATTEMPTS`.
+- `log` with `MAX_LOG_ENTRIES`.
+- `connect`'s WebSocket setup/event-registration skeleton (the page supplies
+  `WS_PATH`, `setConnected`, `resetRoomView`, `handleServerMessage`).
+- `joinForm` submit handler and `byteLength`.
+- `sendIfOpen` (the page supplies `afterSend`; poker records `lastSentType`).
+- `handleConnectionError(code)`: the `room_full`/`invalid_room_id`/
+  `invalid_display_name`/`room_unavailable` reset and the `room_busy` branch
+  that closes the socket without clearing `lastJoin` (#570). The poker-only
+  `round_already_revealed`/`voter_not_joined` rollback of the optimistic
+  `ownVote` stays in `web_poker.gleam` — buzzer has no equivalent.
+
+`test/client/extract.mjs` resolves the same `<>` concatenation, so the client
+JS tests run against the spliced script.
 
 **抽出すべきでない**: card-selection UI (`cards` array,
 `updateCardButtons`), vote/reveal rendering (`renderVotes`, `has_voted`
@@ -313,7 +306,7 @@ for both (#295).
 | Protocol: `ClientMessage`/`ServerMessage`/`Card`/`RoundPhase` | 抽出すべきでない |
 | WebSocket: heartbeat/frame size/rate limit/origin/`connection_tag`/`new_participant_id` | 抽出すべき |
 | WebSocket: `release_room`/`with_room*` room-interaction skeleton | 判断保留 |
-| Embedded JS: reconnect/log/`sendIfOpen`/error handling | 抽出すべき（別カテゴリとして扱う） |
+| Embedded JS: reconnect/log/`sendIfOpen`/error handling | 解消済み（#589、`client_js.gleam` へ共有化） |
 | Embedded JS: card/vote UI | 抽出すべきでない |
 | `test/client/extract.mjs`/`harness.mjs` | 対象外（既に共有） |
 | `test/client`: `flapWithoutJoining` helper | 解消済み（#298） |
