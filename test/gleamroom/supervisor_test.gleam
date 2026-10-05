@@ -5,6 +5,7 @@ import gleamroom
 import gleamroom/poker_registry
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/room_registry
 import gleamroom/wait
 
 /// registry が落ちても supervisor が作り直し、**同じ名前で引き続き使えること**（#23）。
@@ -469,7 +470,7 @@ pub fn start_actually_enforces_the_given_max_rooms_test() {
       registry_subject,
       registry.room_id("room-437-buzzer-b"),
     )
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 
   let assert Ok(_) =
     poker_registry.lookup(
@@ -480,7 +481,7 @@ pub fn start_actually_enforces_the_given_max_rooms_test() {
       poker_registry_subject,
       poker_registry.room_id("room-437-poker-b"),
     )
-    == Error(registry.CapacityReached)
+    == Error(room_registry.CapacityReached)
 }
 
 @external(erlang, "gleamroom_supervisor_test_ffi", "first_child_pid")

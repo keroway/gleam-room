@@ -10,6 +10,7 @@ import gleam/string
 import gleamroom/protocol
 import gleamroom/registry
 import gleamroom/room
+import gleamroom/room_registry
 import gleamroom/wire
 import gleamroom/ws_guard.{
   FrameSizeAccepted, FrameTooLarge, HeartbeatContinues, HeartbeatTimedOut,
@@ -718,8 +719,8 @@ fn with_room(
         "room unavailable: room=" <> registry.room_id_to_string(room_id),
       )
       let reason = case lookup_error {
-        registry.CapacityReached -> RoomCapacityReached
-        registry.Unavailable -> RoomLookupFailed
+        room_registry.CapacityReached -> RoomCapacityReached
+        room_registry.Unavailable -> RoomLookupFailed
       }
       send_server_message(
         connection,

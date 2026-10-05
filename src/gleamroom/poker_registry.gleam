@@ -1,37 +1,30 @@
-import gleam/dict.{type Dict}
-import gleam/dynamic/decode
-import gleam/erlang/atom
+import gleam/dict
 import gleam/erlang/process.{type Subject}
-import gleam/int
+import gleam/list
 import gleam/otp/actor
 import gleam/result
-import gleam/set.{type Set}
-import gleam/string
+import gleam/set
 import gleamroom/call
 import gleamroom/poker
 import gleamroom/registry
-import logging
+import gleamroom/room_registry.{type Core}
 
-/// Opaque so callers cannot construct a `RoomId` except through `room_id`,
-/// mirroring `registry.gleam`'s `RoomId` (ADR 0009: Planning Poker
-/// duplicates rather than shares the buzzer's registry).
-pub opaque type RoomId {
-  RoomId(String)
-}
+/// 実体は `room_registry` が持つ（#586）。`registry.RoomId` と同じ型。
+pub type RoomId =
+  room_registry.RoomId
 
 pub fn room_id(value: String) -> RoomId {
-  RoomId(value)
+  room_registry.room_id(value)
 }
 
 pub fn room_id_to_string(id: RoomId) -> String {
-  let RoomId(value) = id
-  value
+  room_registry.room_id_to_string(id)
 }
 
 pub type Message {
   Lookup(
     id: RoomId,
-    reply_to: Subject(Result(Subject(poker.Message), registry.LookupError)),
+    reply_to: Subject(Result(Subject(poker.Message), room_registry.LookupError)),
   )
   /// 最後の参加者が抜けた room を登録から外す。`registry.gleam`'s `Release`
   /// と同じ理由（#26）: 登録中のものと一致するときだけ削除する ABA ガード。
@@ -55,10 +48,9 @@ pub type Message {
   Health(reply_to: Subject(HealthSnapshot))
   /// room 1 件分の probe（`poker.get_snapshot`）の結果。`registry.gleam`'s
   /// `RoomProbed` と同じ理由（#138）。probe 発火時点の `subject` を運び、
-  /// 応答時に `dict.get(state.rooms, key)` の現在値と一致するかを確かめる
-  /// （#471）。一致確認が無いと、probe 発火後に同じ key で room が
-  /// 入れ替わった場合、遅れて届いた結果が無関係な新しい room の
-  /// `stuck_rooms` を誤って書き換える。
+  /// 応答時に登録中の値と一致するかを確かめる（#471）。一致確認が無いと、
+  /// probe 発火後に同じ key で room が入れ替わった場合、遅れて届いた結果が
+  /// 無関係な新しい room の `stuck_rooms` を誤って書き換える。
   RoomProbed(key: String, subject: Subject(poker.Message), ok: Bool)
 }
 
@@ -68,30 +60,15 @@ pub type HealthSnapshot {
   HealthSnapshot(rooms: Int, stuck: Int)
 }
 
-/// room を起動する関数と、起動済み room の対応表。
-///
-/// 起動関数を状態に持つのは**テストのため**、`registry.gleam`'s `State` と
+/// room 管理状態（`core`、`room_registry` 参照）と registry 自身の subject。
+/// 起動関数を `core` に持つのは**テストのため**、`registry.gleam`'s `State` と
 /// 同じ理由（#32）。
 type State {
   State(
-    rooms: Dict(String, Subject(poker.Message)),
-    /// 監視中の room actor の pid → 登録時の room 情報（#39 / #160 と同じ理由）。
-    monitored: Dict(process.Pid, MonitoredRoom),
-    start_room: fn() -> actor.StartResult(Subject(poker.Message)),
-    /// 新規 room actor（BEAMプロセス）を起動できる上限（#127 と同じ理由）。
-    max_rooms: Int,
+    core: Core(poker.Message),
     /// registry 自身の subject（#71 と同じ理由）。
     self: Subject(Message),
-    /// 直近の `Health` probe で応答が無かった room の key（#138 と同じ理由）。
-    stuck_rooms: Set(String),
-    /// 前回発火した probe のうち、まだ `RoomProbed` が返っていない件数
-    /// （#269 と同じ理由）。
-    probe_in_flight: Int,
   )
-}
-
-type MonitoredRoom {
-  MonitoredRoom(key: String, subject: Subject(poker.Message))
 }
 
 /// Starts one registry actor with no known rooms. Lookups are handled
@@ -119,18 +96,11 @@ pub fn start_with_max_rooms(
   |> actor.start
 }
 
-/// trapped exit を `RoomDown`（room のクラッシュ）と `ParentShutdown`
-/// （親からの shutdown 要求）に振り分ける。`registry.gleam`'s
-/// `exit_to_message` と同じ理由・実装（#117）。
-fn exit_to_message(exit: process.ExitMessage) -> Message {
-  let shutdown = atom.create("shutdown")
-  case exit.reason {
-    process.Abnormal(reason) ->
-      case decode.run(reason, atom.decoder()) {
-        Ok(reason_atom) if reason_atom == shutdown -> ParentShutdown
-        _ -> RoomDown(exit.pid)
-      }
-    process.Normal | process.Killed -> RoomDown(exit.pid)
+/// `room_registry` の exit 分類を、この registry の `Message` へ写す（#117）。
+fn exit_to_message(kind: room_registry.ExitKind) -> Message {
+  case kind {
+    room_registry.RoomExited(pid) -> RoomDown(pid)
+    room_registry.ParentShutdownRequested -> ParentShutdown
   }
 }
 
@@ -140,28 +110,12 @@ fn build(
   start_room: fn() -> actor.StartResult(Subject(poker.Message)),
   max_rooms: Int,
 ) -> actor.Builder(State, Message, Subject(Message)) {
-  actor.new_with_initialiser(1000, fn(subject) {
-    let selector =
-      process.new_selector()
-      |> process.select(subject)
-      |> process.select_trapped_exits(exit_to_message)
-    process.trap_exits(True)
-    let initial =
-      State(
-        rooms: dict.new(),
-        monitored: dict.new(),
-        start_room:,
-        max_rooms:,
-        self: subject,
-        stuck_rooms: set.new(),
-        probe_in_flight: 0,
-      )
-    actor.initialised(initial)
-    |> actor.selecting(selector)
-    |> actor.returning(subject)
-    |> Ok
-  })
-  |> actor.on_message(handle_message)
+  room_registry.build(
+    room_registry.new(start_room, max_rooms),
+    exit_to_message,
+    handle_message,
+    fn(core, subject) { State(core:, self: subject) },
+  )
 }
 
 /// 名前付きで起動する。`registry.gleam`'s `start_named` と同じ理由（#23）:
@@ -192,132 +146,46 @@ fn handle_message(
 ) -> actor.Next(State, Message) {
   case message {
     Lookup(id, reply_to) -> {
-      let key = room_id_to_string(id)
-      let room_count = dict.size(state.rooms)
-      case dict.get(state.rooms, key) {
-        Ok(subject) -> {
-          process.send(reply_to, Ok(subject))
-          actor.continue(state)
-        }
-        Error(Nil) if room_count >= state.max_rooms -> {
-          logging.log(
-            logging.Warning,
-            "poker room capacity reached, rejecting lookup: id="
-              <> key
-              <> ", rooms="
-              <> string.inspect(room_count)
-              <> ", max_rooms="
-              <> string.inspect(state.max_rooms),
-          )
-          process.send(reply_to, Error(registry.CapacityReached))
-          actor.continue(state)
-        }
-        Error(Nil) ->
-          case state.start_room() {
-            Ok(started) -> {
-              let subject = started.data
-              // subject_owner が引けない場合、room を state.rooms に登録すると
-              // 監視表に載らないままクラッシュしたときに RoomDown で回収できず、
-              // その room_id が永久に使用不能になる（#467）。想定外の事態
-              // なので、追跡できない room は起動失敗として扱い registry には
-              // 一切残さない（registry.gleam と同じ方針）。
-              case process.subject_owner(subject) {
-                Ok(pid) -> {
-                  logging.log(logging.Info, "poker room created: id=" <> key)
-                  process.send(reply_to, Ok(subject))
-                  actor.continue(
-                    State(
-                      ..state,
-                      rooms: dict.insert(state.rooms, key, subject),
-                      monitored: dict.insert(
-                        state.monitored,
-                        pid,
-                        MonitoredRoom(key:, subject:),
-                      ),
-                    ),
-                  )
-                }
-                Error(Nil) -> {
-                  logging.log(
-                    logging.Warning,
-                    "subject_owner failed for started poker room, treating as start failure: id="
-                      <> key,
-                  )
-                  process.send(reply_to, Error(registry.Unavailable))
-                  actor.continue(state)
-                }
-              }
-            }
-            Error(reason) -> {
-              logging.log(
-                logging.Warning,
-                "poker room failed to start: id="
-                  <> key
-                  <> ", reason="
-                  <> string.inspect(reason),
-              )
-              process.send(reply_to, Error(registry.Unavailable))
-              actor.continue(state)
-            }
-          }
-      }
+      let #(result, core) =
+        room_registry.lookup(state.core, room_id_to_string(id), "poker room")
+      process.send(reply_to, result)
+      actor.continue(State(..state, core:))
     }
     RoomDown(pid) ->
-      case dict.get(state.monitored, pid) {
-        Ok(MonitoredRoom(key, subject)) -> {
-          logging.log(logging.Warning, "poker room crashed: id=" <> key)
-          let rooms = case dict.get(state.rooms, key) {
-            Ok(current) if current == subject -> dict.delete(state.rooms, key)
-            _ -> state.rooms
-          }
-          actor.continue(
-            State(
-              ..state,
-              rooms:,
-              monitored: dict.delete(state.monitored, pid),
-              stuck_rooms: set.delete(state.stuck_rooms, key),
-            ),
-          )
-        }
-        // 既に Release 済みなど、監視表に無い pid は無視する。
-        Error(Nil) -> actor.continue(state)
-      }
+      actor.continue(
+        State(
+          ..state,
+          core: room_registry.room_down(state.core, pid, "poker room"),
+        ),
+      )
     ParentShutdown -> actor.stop()
     Release(id, subject) -> {
-      let key = room_id_to_string(id)
-      case dict.get(state.rooms, key) {
-        Ok(current) if current == subject -> {
+      case
+        room_registry.is_registered(state.core, room_id_to_string(id), subject)
+      {
+        True -> {
           process.spawn_unlinked(fn() {
-            let empty = poker.shutdown_if_empty(current)
-            process.send(state.self, RoomEmptyChecked(id, current, empty))
+            let empty = poker.shutdown_if_empty(subject)
+            process.send(state.self, RoomEmptyChecked(id, subject, empty))
           })
           actor.continue(state)
         }
-        _ -> actor.continue(state)
+        False -> actor.continue(state)
       }
     }
-    RoomEmptyChecked(id, subject, empty) -> {
-      let key = room_id_to_string(id)
-      case empty, dict.get(state.rooms, key) {
-        True, Ok(current) if current == subject -> {
-          logging.log(logging.Info, "poker room closed (empty): id=" <> key)
-          let monitored = case process.subject_owner(subject) {
-            Ok(pid) ->
-              case dict.get(state.monitored, pid) {
-                Ok(MonitoredRoom(subject: monitored_subject, ..))
-                  if monitored_subject == subject
-                -> dict.delete(state.monitored, pid)
-                _ -> state.monitored
-              }
-            Error(Nil) -> state.monitored
-          }
-          actor.continue(
-            State(..state, rooms: dict.delete(state.rooms, key), monitored:),
-          )
-        }
-        _, _ -> actor.continue(state)
-      }
-    }
+    RoomEmptyChecked(id, subject, empty) ->
+      actor.continue(
+        State(
+          ..state,
+          core: room_registry.close_if_empty(
+            state.core,
+            room_id_to_string(id),
+            subject,
+            empty,
+            "poker room",
+          ),
+        ),
+      )
     Health(reply_to) -> {
       // `registry.gleam`'s `Health` と同じ理由（#138）: 返事が来ること自体が
       // 「registry が詰まっていない」証拠。`stuck` は前回の probe 結果を
@@ -325,46 +193,33 @@ fn handle_message(
       process.send(
         reply_to,
         HealthSnapshot(
-          rooms: dict.size(state.rooms),
-          stuck: set.size(state.stuck_rooms),
+          rooms: dict.size(state.core.rooms),
+          stuck: set.size(state.core.stuck_rooms),
         ),
       )
       // 前回の probe 群がまだ全件返り終えていなければ発火を見送る
       // （#269 と同じガード）。
-      case state.probe_in_flight {
-        0 -> {
-          dict.each(state.rooms, fn(key, subject) {
-            process.spawn_unlinked(fn() {
-              let ok = case poker.get_snapshot(subject) {
-                Ok(_) -> True
-                Error(Nil) -> False
-              }
-              process.send(state.self, RoomProbed(key, subject, ok))
-            })
-          })
-          actor.continue(
-            State(..state, probe_in_flight: dict.size(state.rooms)),
-          )
-        }
-        _ -> actor.continue(state)
-      }
-    }
-    RoomProbed(key, subject, ok) -> {
-      // probe 発火後に同じ key で room が入れ替わっていないか確かめる
-      // （#471、`registry.gleam`'s `RoomProbed` と同じ理由）。一致しなければ
-      // stuck_rooms は書き換えない。
-      let stuck_rooms = case dict.get(state.rooms, key) {
-        Ok(current) if current == subject ->
-          case ok {
-            True -> set.delete(state.stuck_rooms, key)
-            False -> set.insert(state.stuck_rooms, key)
+      let #(targets, core) = room_registry.begin_probes(state.core)
+      list.each(targets, fn(target) {
+        let #(key, subject) = target
+        process.spawn_unlinked(fn() {
+          let ok = case poker.get_snapshot(subject) {
+            Ok(_) -> True
+            Error(Nil) -> False
           }
-        _ -> state.stuck_rooms
-      }
-      // 0 未満にはならない: `registry.gleam`'s `RoomProbed` と同じ理由。
-      let probe_in_flight = int.max(0, state.probe_in_flight - 1)
-      actor.continue(State(..state, stuck_rooms:, probe_in_flight:))
+          process.send(state.self, RoomProbed(key, subject, ok))
+        })
+      })
+      actor.continue(State(..state, core:))
     }
+    RoomProbed(key, subject, ok) ->
+      // `registry.gleam`'s `RoomProbed` と同じ理由（#471）。
+      actor.continue(
+        State(
+          ..state,
+          core: room_registry.record_probe(state.core, key, subject, ok),
+        ),
+      )
   }
 }
 
@@ -389,13 +244,13 @@ pub fn health(
 pub fn lookup(
   subject: Subject(Message),
   id: RoomId,
-) -> Result(Subject(poker.Message), registry.LookupError) {
+) -> Result(Subject(poker.Message), room_registry.LookupError) {
   call.try_call(
     subject,
     call.default_timeout,
     Lookup(id, _),
     "poker_registry.lookup",
   )
-  |> result.replace_error(registry.Unavailable)
+  |> result.replace_error(room_registry.Unavailable)
   |> result.flatten
 }
