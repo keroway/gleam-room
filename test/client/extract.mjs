@@ -48,7 +48,7 @@ function unescapeGleam(literal) {
 
 function clientJsConst(name) {
   const source = fs.readFileSync(path.join(repoRoot, "src/gleamroom/client_js.gleam"), "utf8");
-  const literal = new RegExp(`pub const ${name} = "((?:[^"\\\\]|\\\\[\\s\\S])*)"`).exec(source);
+  const literal = new RegExp(`pub const ${name} =\\s*"((?:[^"\\\\]|\\\\[\\s\\S])*)"`).exec(source);
   if (!literal) {
     throw new Error(`client_js.${name} の文字列リテラルを取り出せませんでした`);
   }

@@ -110,6 +110,37 @@ for (const code of ["room_full", "invalid_display_name", "invalid_room_id", "roo
   });
 }
 
+// 拒否後に再joinが成立した後、旧ソケットの遅延closeが現行接続を壊す問題の回帰テスト（#645）。
+test("拒否→再join成立後に旧ソケットのcloseが遅延発火しても現行接続は維持される", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    client.submitJoin();
+    const oldSocket = client.latestSocket();
+    oldSocket.handlers.open?.();
+    oldSocket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "room_full", message: "nope" }),
+    });
+
+    client.submitJoin();
+    const newSocket = client.latestSocket();
+    newSocket.handlers.open?.();
+    newSocket.handlers.message?.({
+      data: JSON.stringify({ type: "state", phase: "voting", participants: [], votes: [] }),
+    });
+    assert.equal(client.connectionState(), "connected");
+    const before = client.sockets.length;
+
+    oldSocket.handlers.close?.();
+    client.runTimers();
+
+    assert.equal(client.connectionState(), "connected");
+    assert.equal(newSocket.readyState, 1, "現行ソケットが閉じられている");
+    assert.equal(client.sockets.length, before, "旧closeで追加接続が発生している");
+  } finally {
+    client.dispose();
+  }
+});
+
 // 空白のみの入力で無音 no-op になる問題の回帰テスト（#123 / buzzer側 join-ui.test.mjs と同型）。
 for (const [roomId, displayName] of [
   [" ", "N"],
