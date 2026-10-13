@@ -143,6 +143,53 @@ test("reveal後にparticipant_leftを受信すると、退出者の投票も結�
   }
 });
 
+test("reveal後にparticipant_joinedを受信すると、入室者の未投票行が結果一覧に追加される（#657）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(
+      client,
+      [{ participant_id: "p1", display_name: "Alice", has_voted: true }],
+      "revealed",
+      [{ participant_id: "p1", display_name: "Alice", value: "5" }],
+    );
+    const joined = JSON.stringify({
+      type: "participant_joined",
+      participant: { participant_id: "p2", display_name: "Bob", has_voted: false },
+    });
+    socket.handlers.message?.({ data: joined });
+    // 同じイベントが重複しても行は増えない。
+    socket.handlers.message?.({ data: joined });
+
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓", "Bob"]);
+    assert.deepEqual(client.childTextContents("votes"), ["Alice: 5", "Bob: (no vote)"]);
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", participant_id: "p2" }),
+    });
+    assert.deepEqual(client.childTextContents("votes"), ["Alice: 5"]);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("Voting中にparticipant_joinedを受信しても、結果一覧には行を追加しない（#657）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "participant_joined",
+        participant: { participant_id: "p2", display_name: "Bob", has_voted: false },
+      }),
+    });
+
+    assert.deepEqual(client.childTextContents("participants"), ["Bob"]);
+    assert.deepEqual(client.childTextContents("votes"), []);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
   const client = startClient(POKER_MODULE);
   try {
