@@ -118,6 +118,10 @@ pub fn poker_html() -> String {
   // 受理済みの値へ戻れるよう単一変数ではなくスタックで持つ（#650）。
   let voteRollbacks = [];
   const MAX_VOTE_ROLLBACKS = 32;
+  // スタックが上限を超えて捨てた最古の戻し先。スタックが空になった後の拒否は
+  // この値へ戻す（捨てると全拒否後に受理済みの値へ戻れない。#655）。
+  // undefined は「捨てた値なし」。null は「未投票へ戻す」を表す有効な値。
+  let voteRollbackFloor = undefined;
   let lastSentType = null;
 
   const WS_PATH = \"/poker/ws\";
@@ -125,11 +129,16 @@ pub fn poker_html() -> String {
     lastSentType = message.type;
   };
 " <> client_js.shared <> "
+  function clearVoteRollbacks() {
+    voteRollbacks = [];
+    voteRollbackFloor = undefined;
+  }
+
   function resetRoomView() {
     participants = new Map();
     votes = [];
     ownVote = null;
-    voteRollbacks = [];
+    clearVoteRollbacks();
     renderParticipants();
     renderVotes();
     updateCardButtons();
@@ -206,7 +215,7 @@ pub fn poker_html() -> String {
         // 空配列で届く。
         votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
-        voteRollbacks = [];
+        clearVoteRollbacks();
         setConnected(true);
         renderParticipants();
         renderVotes();
@@ -299,7 +308,7 @@ pub fn poker_html() -> String {
         phase = \"voting\";
         votes = [];
         ownVote = null;
-        voteRollbacks = [];
+        clearVoteRollbacks();
         for (const participant of participants.values()) {
           participant.has_voted = false;
         }
@@ -346,6 +355,11 @@ pub fn poker_html() -> String {
           if (voteRollbacks.length > 0) {
             ownVote = voteRollbacks.pop();
             updateCardButtons();
+          } else if (voteRollbackFloor !== undefined) {
+            // 上限超過で捨てた最古の戻し先（#655）。1回だけ使う。
+            ownVote = voteRollbackFloor;
+            voteRollbackFloor = undefined;
+            updateCardButtons();
           }
         }
         break;
@@ -358,7 +372,7 @@ pub fn poker_html() -> String {
     card.el.addEventListener(\"click\", () => {
       if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
       voteRollbacks.push(ownVote);
-      if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbacks.shift();
+      if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbackFloor = voteRollbacks.shift();
       ownVote = card.value;
       updateCardButtons();
     });
