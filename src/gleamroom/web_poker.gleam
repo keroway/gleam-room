@@ -234,6 +234,22 @@ pub fn poker_html() -> String {
           break;
         }
         participants.set(message.participant.participant_id, message.participant);
+        // Revealed 中の入室は join 後 state の votes（未投票者は value=null の行）と
+        // 同じ表示に揃える。Voting 中は votes を使わないので追加しない（#657）。
+        if (
+          phase === \"revealed\" &&
+          !votes.some((v) => v.participant_id === message.participant.participant_id)
+        ) {
+          votes = [
+            ...votes,
+            {
+              participant_id: message.participant.participant_id,
+              display_name: message.participant.display_name,
+              value: null,
+            },
+          ];
+          renderVotes();
+        }
         renderParticipants();
         log(`joined: ${message.participant.display_name}`);
         break;
