@@ -16,7 +16,8 @@
 /// and may call `handleConnectionError(code)` from its `error` case.
 /// The test extractor (`test/client/extract.mjs`) resolves the same
 /// concatenation, so the client JS tests exercise the spliced result.
-pub const shared = "
+pub const shared =
+  "
   // A reconnect always re-joins as a brand new, server-assigned participant
   // identity (see docs/mvp.md, \"Reconnect\"); this client does not attempt
   // to preserve the previous one. A fixed, small retry count keeps this
@@ -108,9 +109,14 @@ pub const shared = "
     if (socket) return;
 
     const protocol = location.protocol === \"https:\" ? \"wss:\" : \"ws:\";
-    socket = new WebSocket(`${protocol}//${location.host}${WS_PATH}`);
+    const ws = new WebSocket(`${protocol}//${location.host}${WS_PATH}`);
+    socket = ws;
+    // 拒否後に再joinされると `socket` は別の接続を指す。旧ソケットの遅延
+    // イベントが現行接続の状態を壊さないよう、各ハンドラで同一性を確認する（#645）。
+    const isCurrent = () => socket === ws;
 
-    socket.addEventListener(\"open\", () => {
+    ws.addEventListener(\"open\", () => {
+      if (!isCurrent()) return;
       // **ここでは setConnected(true) を呼ばない・試行回数も戻さない（#62, #87）。**
       // WebSocket が開いただけでは join できたことにならない。UI が
       // \"connected\" になるのはサーバから state（join成立）が届いたときのみ。
@@ -118,14 +124,15 @@ pub const shared = "
       // 繰り返され、open ごとに試行回数を 0 に戻すと上限に永久に到達せず、
       // 「5 回で諦める」という約束が効かなくなる。
       log(`connected, joining room ${roomId} as ${displayName}`);
-      socket.send(JSON.stringify({
+      ws.send(JSON.stringify({
         type: \"join\",
         room_id: roomId,
         display_name: displayName,
       }));
     });
 
-    socket.addEventListener(\"message\", (event) => {
+    ws.addEventListener(\"message\", (event) => {
+      if (!isCurrent()) return;
       let message;
       try {
         message = JSON.parse(event.data);
@@ -140,7 +147,8 @@ pub const shared = "
       }
     });
 
-    socket.addEventListener(\"close\", () => {
+    ws.addEventListener(\"close\", () => {
+      if (!isCurrent()) return;
       setConnected(false);
       resetRoomView();
       socket = null;
@@ -148,7 +156,8 @@ pub const shared = "
       scheduleReconnect();
     });
 
-    socket.addEventListener(\"error\", () => {
+    ws.addEventListener(\"error\", () => {
+      if (!isCurrent()) return;
       log(\"connection error\");
     });
   }
