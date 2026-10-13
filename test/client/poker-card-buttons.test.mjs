@@ -183,6 +183,27 @@ test("切断されると全カードが無効化される", () => {
   }
 });
 
+test("投票済みの状態で切断されると、全カードが無効化され aria-pressed も false に戻る（#649）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true");
+
+    socket.handlers.close?.();
+
+    for (const id of CARD_IDS) {
+      assert.equal(client.isDisabled(id), true, `切断後も ${id} が有効なまま`);
+      assert.equal(client.getAttribute(id, "aria-pressed"), "false", `切断後も ${id} の aria-pressed が false でない`);
+    }
+  } finally {
+    client.dispose();
+  }
+});
+
 test("2回目の vote が拒否されると、送信前の ownVote へロールバックする（#575）", () => {
   const client = startClient(POKER_MODULE);
   try {
