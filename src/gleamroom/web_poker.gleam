@@ -231,7 +231,11 @@ pub fn poker_html() -> String {
           break;
         }
         participants.delete(message.participant_id);
+        // サーバーは退出者の投票を削除する（poker.apply_leave）ので、公開済みの
+        // 結果一覧からも同じ participant_id を外して参加者一覧と揃える（#651）。
+        votes = votes.filter((v) => v.participant_id !== message.participant_id);
         renderParticipants();
+        renderVotes();
         log(`left: ${message.participant_id}`);
         break;
       case \"vote_registered\": {

@@ -111,6 +111,38 @@ test("participant_left はログに残る", () => {
   }
 });
 
+test("reveal後にparticipant_leftを受信すると、退出者の投票も結果一覧から消える（#651）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(
+      client,
+      [
+        { participant_id: "p1", display_name: "Alice", has_voted: true },
+        { participant_id: "p2", display_name: "Bob", has_voted: true },
+      ],
+      "revealed",
+      [
+        { participant_id: "p1", display_name: "Alice", value: "5" },
+        { participant_id: "p2", display_name: "Bob", value: "8" },
+      ],
+    );
+    assert.deepEqual(client.childTextContents("votes"), ["Alice: 5", "Bob: 8"]);
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", participant_id: "p2" }),
+    });
+
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓"]);
+    assert.deepEqual(
+      client.childTextContents("votes"),
+      ["Alice: 5"],
+      "退出者の投票が結果一覧に残っている",
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
   const client = startClient(POKER_MODULE);
   try {
