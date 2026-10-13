@@ -129,6 +129,7 @@ pub fn poker_html() -> String {
     ownVoteBeforeSend = null;
     renderParticipants();
     renderVotes();
+    updateCardButtons();
   }
 
   function setConnected(connected) {
