@@ -113,8 +113,11 @@ pub fn poker_html() -> String {
   let phase = \"voting\";
   let votes = [];
   let ownVote = null;
-  // 直近の vote 送信前の ownVote。拒否時は null ではこの値へ戻す（#575）。
-  let ownVoteBeforeSend = null;
+  // 未確定の vote ごとの送信前 ownVote（古い順）。拒否時は null ではなく
+  // 末尾の値へ戻す（#575）。応答を待たず連続送信しても、拒否のたびに1段ずつ
+  // 受理済みの値へ戻れるよう単一変数ではなくスタックで持つ（#650）。
+  let voteRollbacks = [];
+  const MAX_VOTE_ROLLBACKS = 32;
   let lastSentType = null;
 
   const WS_PATH = \"/poker/ws\";
@@ -126,7 +129,7 @@ pub fn poker_html() -> String {
     participants = new Map();
     votes = [];
     ownVote = null;
-    ownVoteBeforeSend = null;
+    voteRollbacks = [];
     renderParticipants();
     renderVotes();
     updateCardButtons();
@@ -203,7 +206,7 @@ pub fn poker_html() -> String {
         // 空配列で届く。
         votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
-        ownVoteBeforeSend = null;
+        voteRollbacks = [];
         setConnected(true);
         renderParticipants();
         renderVotes();
@@ -296,7 +299,7 @@ pub fn poker_html() -> String {
         phase = \"voting\";
         votes = [];
         ownVote = null;
-        ownVoteBeforeSend = null;
+        voteRollbacks = [];
         for (const participant of participants.values()) {
           participant.has_voted = false;
         }
@@ -338,8 +341,12 @@ pub fn poker_html() -> String {
           // （例: rejected_type）を足す案があるが、費用に見合わず見送った。
           // 戻し先は null ではなく送信前の値（2回目以降の vote が拒否されても、
           // サーバーに残っている前回の投票を見失わない。#575）。
-          ownVote = ownVoteBeforeSend;
-          updateCardButtons();
+          // 拒否通知は拒否した種別を返さないため、直近の vote を拒否されたものと
+          // みなして1段戻す。履歴が空なら（対応する vote が無い）何もしない。
+          if (voteRollbacks.length > 0) {
+            ownVote = voteRollbacks.pop();
+            updateCardButtons();
+          }
         }
         break;
       default:
@@ -350,7 +357,8 @@ pub fn poker_html() -> String {
   for (const card of cards) {
     card.el.addEventListener(\"click\", () => {
       if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
-      ownVoteBeforeSend = ownVote;
+      voteRollbacks.push(ownVote);
+      if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbacks.shift();
       ownVote = card.value;
       updateCardButtons();
     });

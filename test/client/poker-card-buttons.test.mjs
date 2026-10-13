@@ -204,6 +204,31 @@ test("投票済みの状態で切断されると、全カードが無効化さ�
   }
 });
 
+test("応答前に連続送信した vote が両方拒否されても、受理済みの ownVote へ戻る（#650）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    client.click("card-8");
+    client.click("card-13");
+
+    for (let i = 0; i < 2; i++) {
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected" }),
+      });
+    }
+
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "受理済みの card-5 に戻っていない");
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "false", "拒否済みの card-8 が残っている");
+    assert.equal(client.getAttribute("card-13", "aria-pressed"), "false", "拒否済みの card-13 が残っている");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("2回目の vote が拒否されると、送信前の ownVote へロールバックする（#575）", () => {
   const client = startClient(POKER_MODULE);
   try {
