@@ -229,6 +229,37 @@ test("応答前に連続送信した vote が両方拒否されても、受理�
   }
 });
 
+// 戻し先スタックの上限は32件。32件・33件の境界で、全拒否後に受理済みの値へ
+// 戻ることを確かめる（#655）。33件は上限超過で捨てた最古の戻し先を床値として
+// 使う経路。それ以上の超過は床値1つ分までしか復元しない（既知の制約）。
+for (const pending of [32, 33]) {
+  test(`未応答の vote が ${pending} 件すべて拒否されても、受理済みの ownVote へ戻る（#655）`, () => {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(client, [
+        { participant_id: "p1", display_name: "Alice", has_voted: false },
+      ]);
+      client.click("card-5");
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+      });
+      for (let i = 0; i < pending; i++) {
+        client.click("card-8");
+      }
+      for (let i = 0; i < pending; i++) {
+        socket.handlers.message?.({
+          data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected" }),
+        });
+      }
+
+      assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "受理済みの card-5 に戻っていない");
+      assert.equal(client.getAttribute("card-8", "aria-pressed"), "false", "拒否済みの card-8 が残っている");
+    } finally {
+      client.dispose();
+    }
+  });
+}
+
 test("2回目の vote が拒否されると、送信前の ownVote へロールバックする（#575）", () => {
   const client = startClient(POKER_MODULE);
   try {
