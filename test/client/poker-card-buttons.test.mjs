@@ -261,6 +261,30 @@ test("先の vote が拒否され後の vote が受理されても、選択表�
   }
 });
 
+test("同じカードの再選択が拒否されたら、古い受理済みの同値履歴ではなく最新の送信を戻す（#661）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    client.click("card-13");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    client.click("card-5");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected", value: "5" }),
+    });
+
+    assert.equal(client.getAttribute("card-13", "aria-pressed"), "true", "card-13 に戻っていない");
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "false", "拒否済みの card-5 が残っている");
+  } finally {
+    client.dispose();
+  }
+});
+
 // 戻し先スタックの上限は32件。32件・33件の境界で、全拒否後に受理済みの値へ
 // 戻ることを確かめる（#655）。33件は上限超過で捨てた最古の戻し先を床値として
 // 使う経路。それ以上の超過は床値1つ分までしか復元しない（既知の制約）。

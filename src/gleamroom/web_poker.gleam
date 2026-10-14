@@ -371,8 +371,10 @@ pub fn poker_html() -> String {
           // 拒否された vote の値がエラーに載っている場合（rate_limited, #659）は、
           // 先に拒否され後の vote が受理される混在でも取り違えないよう、その値の
           // 履歴を取り除く。最新でなければ ownVote（最新の送信値）は変えない。
+          // 受理済みの履歴は残るため、同じ値が複数あるときは最古ではなく最新の
+          // 一致を選ぶ（古い受理済みの同値へ誤対応しない。#661）。
           if (typeof message.value === \"string\") {
-            const index = voteRollbacks.findIndex((entry) => entry.value === message.value);
+            const index = voteRollbacks.findLastIndex((entry) => entry.value === message.value);
             if (index >= 0) {
               const [removed] = voteRollbacks.splice(index, 1);
               if (index === voteRollbacks.length) {
