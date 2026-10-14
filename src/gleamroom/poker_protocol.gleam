@@ -121,6 +121,10 @@ pub type ServerMessage {
   RoundRevealed(votes: List(RevealedVote))
   RoundReset
   ProtocolErrorMessage(code: String, message: String)
+  /// A vote rejected before dispatch (rate limit). Carries the rejected card
+  /// so a client with several unanswered votes can tell which one was
+  /// refused (#659). Other errors never name the message they refuse.
+  RejectedVoteMessage(code: String, message: String, card: Card)
 }
 
 /// An intermediate shape-only decode result, kept distinct from
@@ -229,6 +233,13 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("type", json.string("error")),
         #("code", json.string(code)),
         #("message", json.string(message)),
+      ])
+    RejectedVoteMessage(code, message, card) ->
+      json.object([
+        #("type", json.string("error")),
+        #("code", json.string(code)),
+        #("message", json.string(message)),
+        #("value", json.string(card_to_wire_string(card))),
       ])
   }
 }
