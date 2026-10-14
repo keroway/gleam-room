@@ -20,6 +20,28 @@ function joinAndConnect(client, participants = []) {
   return socket;
 }
 
+test("state の participants/buzzes に不正な要素があると、connected にならず部分適用しない（#647）", () => {
+  for (const body of [
+    { type: "state", participants: [null], buzzes: [] },
+    { type: "state", participants: [], buzzes: [{ position: "1", display_name: "A" }] },
+  ]) {
+    const client = startClient();
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      socket.handlers.message?.({ data: JSON.stringify(body) });
+
+      assert.notEqual(client.connectionState(), "connected");
+      assert.ok(
+        client.logs.some((line) => line.includes("state message missing expected fields")),
+      );
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("participant_joined は participants に追加されログに残る", () => {
   const client = startClient();
   try {

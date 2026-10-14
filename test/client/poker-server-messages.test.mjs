@@ -613,6 +613,58 @@ test("state メッセージが妥当なJSONだが participants フィールド�
   }
 });
 
+test("state の participants/votes に不正な要素があると、connected にならず部分適用しない（#647）", () => {
+  for (const body of [
+    { type: "state", phase: "voting", participants: [null], votes: [] },
+    { type: "state", phase: "voting", participants: [{ participant_id: "p1" }], votes: [] },
+    {
+      type: "state",
+      phase: "revealed",
+      participants: [],
+      votes: [{ participant_id: "p1", display_name: "A", value: 5 }],
+    },
+  ]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      socket.handlers.message?.({ data: JSON.stringify(body) });
+
+      assert.notEqual(client.connectionState(), "connected");
+      assert.ok(
+        client.logs.some((line) => line.includes("state message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
+test("revealed の votes に不正な要素があると、phase・カード状態・votes を更新しない（#647）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "state", phase: "voting", participants: [], votes: [] }),
+    });
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "revealed", votes: [null] }),
+    });
+
+    assert.equal(client.isDisabled("card-5"), false, "カードが無効化されている");
+    assert.deepEqual(client.childTextContents("votes"), []);
+    assert.ok(
+      client.logs.some((line) => line.includes("revealed message missing expected fields")),
+    );
+  } finally {
+    client.dispose();
+  }
+});
+
 // join 拒否コード（#314）: サーバーが接続を閉じずに error を返す場合でも
 // UI を即座に未接続へ戻し、フォームを再送信可能にする必要がある。
 for (const code of ["room_full", "invalid_room_id", "invalid_display_name", "room_unavailable"]) {
