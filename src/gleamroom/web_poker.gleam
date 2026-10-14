@@ -190,6 +190,16 @@ pub fn poker_html() -> String {
     );
   }
 
+  function isValidVote(v) {
+    return (
+      typeof v === \"object\" &&
+      v !== null &&
+      typeof v.participant_id === \"string\" &&
+      typeof v.display_name === \"string\" &&
+      (v.value === null || typeof v.value === \"string\")
+    );
+  }
+
   function handleServerMessage(message) {
     switch (message.type) {
       case \"state\":
@@ -197,9 +207,19 @@ pub fn poker_html() -> String {
         // ことがある（サーバ側プロトコル変更等）。副作用を始める前に検証し、
         // setConnected(true) 実行済みのまま参加者が更新されない部分適用状態を
         // 避ける（web.gleam #478 と同じ理由）。
+        // 配列要素も検証する。null 要素などで setConnected(true) の前後に
+        // 例外終了すると部分適用状態が残る（#647）。votes は省略されうる。
         if (
           typeof message.phase !== \"string\" ||
-          !Array.isArray(message.participants)
+          !Array.isArray(message.participants) ||
+          !message.participants.every(
+            (p) =>
+              typeof p === \"object\" &&
+              p !== null &&
+              typeof p.participant_id === \"string\" &&
+              typeof p.display_name === \"string\",
+          ) ||
+          (Array.isArray(message.votes) && !message.votes.every(isValidVote))
         ) {
           log(`state message missing expected fields: ${JSON.stringify(message)}`);
           break;
@@ -291,7 +311,7 @@ pub fn poker_html() -> String {
       case \"revealed\": {
         // state ケース（#478）と同じ理由。votes が配列でないと updateCardButtons
         // 実行済みのまま votes 描画・ログが例外か部分適用状態で固まる（#527）。
-        if (!Array.isArray(message.votes)) {
+        if (!Array.isArray(message.votes) || !message.votes.every(isValidVote)) {
           log(`revealed message missing expected fields: ${JSON.stringify(message)}`);
           break;
         }

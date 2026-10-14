@@ -143,7 +143,26 @@ pub fn index_html() -> String {
         // ことがある（サーバ側プロトコル変更等）。副作用を始める前に検証し、
         // setConnected(true) 実行済みのまま参加者/buzz が更新されない
         // 部分適用状態を避ける（#478）。
-        if (!Array.isArray(message.participants) || !Array.isArray(message.buzzes)) {
+        // 配列要素も同様に検証する。null 要素などで setConnected(true) の後に
+        // 例外終了すると接続成立表示だけが残る（#647）。
+        if (
+          !Array.isArray(message.participants) ||
+          !Array.isArray(message.buzzes) ||
+          !message.participants.every(
+            (p) =>
+              typeof p === \"object\" &&
+              p !== null &&
+              typeof p.participant_id === \"string\" &&
+              typeof p.display_name === \"string\",
+          ) ||
+          !message.buzzes.every(
+            (b) =>
+              typeof b === \"object\" &&
+              b !== null &&
+              typeof b.position === \"number\" &&
+              typeof b.display_name === \"string\",
+          )
+        ) {
           log(`state message missing expected fields: ${JSON.stringify(message)}`);
           break;
         }
