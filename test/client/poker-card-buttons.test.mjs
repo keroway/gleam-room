@@ -229,6 +229,38 @@ test("応答前に連続送信した vote が両方拒否されても、受理�
   }
 });
 
+test("先の vote が拒否され後の vote が受理されても、選択表示は受理済みの最新カードのまま（#659）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("card-5");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    client.click("card-8");
+    client.click("card-13");
+
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected", value: "8" }),
+    });
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+
+    assert.equal(client.getAttribute("card-13", "aria-pressed"), "true", "受理済みの card-13 が選択されていない");
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "false", "拒否済みの card-8 が残っている");
+
+    // 後の 13 も拒否されたら、8 ではなく受理済みの 5 まで戻る。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected", value: "13" }),
+    });
+    assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "card-5 に戻っていない");
+    assert.equal(client.getAttribute("card-13", "aria-pressed"), "false");
+  } finally {
+    client.dispose();
+  }
+});
+
 // 戻し先スタックの上限は32件。32件・33件の境界で、全拒否後に受理済みの値へ
 // 戻ることを確かめる（#655）。33件は上限超過で捨てた最古の戻し先を床値として
 // 使う経路。それ以上の超過は床値1つ分までしか復元しない（既知の制約）。

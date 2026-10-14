@@ -271,10 +271,14 @@ fn handle_text(
             "poker protocol message rejected: code=rate_limited",
           )
           let #(code, message) = rate_limited_code_and_message
-          send_server_message(
-            connection,
-            poker_protocol.ProtocolErrorMessage(code, message),
-          )
+          // 拒否した vote のカードを載せ、未応答の vote が複数あるクライアントが
+          // どれが拒否されたか判別できるようにする(#659)。
+          let reply = case poker_protocol.decode_client_message(text) {
+            Ok(poker_protocol.Vote(card)) ->
+              poker_protocol.RejectedVoteMessage(code, message, card)
+            _ -> poker_protocol.ProtocolErrorMessage(code, message)
+          }
+          send_server_message(connection, reply)
           mist.continue(state)
         }
         MessageRateAccepted ->

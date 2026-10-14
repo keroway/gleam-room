@@ -368,8 +368,22 @@ pub fn poker_html() -> String {
           // サーバーに残っている前回の投票を見失わない。#575）。
           // 拒否通知は拒否した種別を返さないため、直近の vote を拒否されたものと
           // みなして1段戻す。履歴が空なら（対応する vote が無い）何もしない。
-          if (voteRollbacks.length > 0) {
-            ownVote = voteRollbacks.pop();
+          // 拒否された vote の値がエラーに載っている場合（rate_limited, #659）は、
+          // 先に拒否され後の vote が受理される混在でも取り違えないよう、その値の
+          // 履歴を取り除く。最新でなければ ownVote（最新の送信値）は変えない。
+          if (typeof message.value === \"string\") {
+            const index = voteRollbacks.findIndex((entry) => entry.value === message.value);
+            if (index >= 0) {
+              const [removed] = voteRollbacks.splice(index, 1);
+              if (index === voteRollbacks.length) {
+                ownVote = removed.prior;
+                updateCardButtons();
+              } else {
+                voteRollbacks[index].prior = removed.prior;
+              }
+            }
+          } else if (voteRollbacks.length > 0) {
+            ownVote = voteRollbacks.pop().prior;
             updateCardButtons();
           } else if (voteRollbackFloor !== undefined) {
             // 上限超過で捨てた最古の戻し先（#655）。1回だけ使う。
@@ -387,8 +401,8 @@ pub fn poker_html() -> String {
   for (const card of cards) {
     card.el.addEventListener(\"click\", () => {
       if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
-      voteRollbacks.push(ownVote);
-      if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbackFloor = voteRollbacks.shift();
+      voteRollbacks.push({ value: card.value, prior: ownVote });
+      if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbackFloor = voteRollbacks.shift().prior;
       ownVote = card.value;
       updateCardButtons();
     });

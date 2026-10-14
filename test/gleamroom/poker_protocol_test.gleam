@@ -282,6 +282,17 @@ pub fn encode_error_test() {
     == "{\"type\":\"error\",\"code\":\"invalid_card\",\"message\":\"bad card\"}"
 }
 
+pub fn encode_rejected_vote_test() {
+  assert poker_protocol.encode_server_message(
+      poker_protocol.RejectedVoteMessage(
+        "rate_limited",
+        "slow down",
+        poker_protocol.Eight,
+      ),
+    )
+    == "{\"type\":\"error\",\"code\":\"rate_limited\",\"message\":\"slow down\",\"value\":\"8\"}"
+}
+
 pub fn encode_error_already_joined_test() {
   assert poker_protocol.encode_server_message(ProtocolErrorMessage(
       "already_joined",
