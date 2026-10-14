@@ -403,6 +403,16 @@ pub fn poker_html() -> String {
               } else {
                 voteRollbacks[index].prior = removed.prior;
               }
+            } else if (voteRollbackFloor !== undefined) {
+              // 一致する履歴が無い値付き拒否は、上限超過で捨てた最古の vote への
+              // もの（#665）。残りの最古の戻し先を床値へつなぎ、履歴が空なら戻す。
+              if (voteRollbacks.length > 0) {
+                voteRollbacks[0].prior = voteRollbackFloor;
+              } else {
+                ownVote = voteRollbackFloor;
+                updateCardButtons();
+              }
+              voteRollbackFloor = undefined;
             }
           } else if (voteRollbacks.length > 0) {
             ownVote = voteRollbacks.pop().prior;
