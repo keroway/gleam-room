@@ -316,6 +316,36 @@ for (const pending of [32, 33]) {
   });
 }
 
+// 現行サーバーの rate_limited は拒否した vote の value を載せる。値付き通知でも
+// 32件・33件の全拒否後に受理済みの値へ戻ること（#665）。
+for (const pending of [32, 33]) {
+  test(`値付きの拒否通知で未応答 vote が ${pending} 件すべて拒否されても、受理済みの ownVote へ戻る（#665）`, () => {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(client, [
+        { participant_id: "p1", display_name: "Alice", has_voted: false },
+      ]);
+      client.click("card-5");
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+      });
+      for (let i = 0; i < pending; i++) {
+        client.click("card-8");
+      }
+      for (let i = 0; i < pending; i++) {
+        socket.handlers.message?.({
+          data: JSON.stringify({ type: "error", code: "rate_limited", message: "rejected", value: "8" }),
+        });
+      }
+
+      assert.equal(client.getAttribute("card-5", "aria-pressed"), "true", "受理済みの card-5 に戻っていない");
+      assert.equal(client.getAttribute("card-8", "aria-pressed"), "false", "拒否済みの card-8 が残っている");
+    } finally {
+      client.dispose();
+    }
+  });
+}
+
 test("2回目の vote が拒否されると、送信前の ownVote へロールバックする（#575）", () => {
   const client = startClient(POKER_MODULE);
   try {
