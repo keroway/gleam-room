@@ -108,6 +108,7 @@ test("reset clears unacknowledged first vote even before has_voted becomes true"
 test("unknown replies do not settle votes and pending memory is bounded", () => {
   const { client, vote, reply, socket } = setup();
   try {
+    reply(vote("5")); // 相関応答を受けた状態（新サーバー）にする
     const first = vote("5");
     reply("unknown");
     for (let i = 1; i < 64; i++) vote("8");
@@ -118,5 +119,19 @@ test("unknown replies do not settle votes and pending memory is bounded", () => 
     vote("13");
     assert.equal(socket.sent.length, before + 1);
     selected(client, "13");
+  } finally { client.dispose(); }
+});
+
+test("#673: legacy vote_registered replies never stall card clicks after 64 votes", () => {
+  const { client, receive, socket } = setup();
+  try {
+    for (let i = 0; i < 70; i++) {
+      client.click("card-5");
+      receive({ type: "vote_registered", participant_id: "p1" });
+    }
+    const before = socket.sent.length;
+    client.click("card-8");
+    assert.equal(socket.sent.length, before + 1);
+    selected(client, "8");
   } finally { client.dispose(); }
 });

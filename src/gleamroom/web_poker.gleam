@@ -482,7 +482,15 @@ pub fn poker_html() -> String {
     card.el.addEventListener(\"click\", () => {
       // Bound memory if a peer stops acknowledging votes. Normal responses
       // release entries immediately; card changes do not wait for a reply.
-      if (pendingVotes.size >= MAX_PENDING_VOTES) return;
+      if (pendingVotes.size >= MAX_PENDING_VOTES) {
+        if (correlatedReplies) {
+          log(\"too many unacknowledged votes; waiting for the server to reply\");
+          return;
+        }
+        // 相関応答を一度も受けていない（旧サーバー）間は request_id で解放
+        // されないため、最古の未応答票を捨てて上限を保つ（#673）。
+        pendingVotes.delete(pendingVotes.keys().next().value);
+      }
       const id = ++nextVoteId;
       const requestId = String(id);
       if (!sendIfOpen({ type: \"vote\", value: card.value, request_id: requestId })) return;
