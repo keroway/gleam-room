@@ -122,6 +122,12 @@ Client messages:
 {"type":"reset"}
 ```
 
+The browser adds a unique `request_id` to each vote, for example
+`{"type":"vote","value":"5","request_id":"1"}`. A valid ID is a string
+of 1–64 characters, unique across votes on that connection (including resets).
+Missing, empty, overlong, or non-string IDs use the legacy response format.
+The ID is transport metadata; it never enters the room actor.
+
 The vote card set for the MVP is a fixed enumeration:
 `"0"`, `"1"`, `"2"`, `"3"`, `"5"`, `"8"`, `"13"`, `"21"`, `"?"`, `"coffee"`.
 
@@ -137,6 +143,29 @@ Server messages:
 {"type":"round_reset"}
 {"type":"error","code":"...","message":"..."}
 ```
+
+For a vote with a valid `request_id`, the **direct reply to the sender** is
+wrapped instead of sent as a bare `vote_registered` or `error`:
+
+```json
+{"type":"vote_reply","request_id":"1","result":{"type":"vote_registered","participant_id":"..."}}
+{"type":"vote_reply","request_id":"2","result":{"type":"error","code":"rate_limited","message":"...","value":"8"}}
+```
+
+The same envelope covers validation errors, domain rejection, `not_joined`,
+and `room_busy`. Oversized frames still close the connection without a
+correlated reply. The room broadcast remains a bare `vote_registered`, even
+for the sender: it contains neither the request ID nor the card value. Old
+clients that omit IDs keep their existing replies unchanged.
+
+The browser settles only the matching pending vote. Selection reflects the
+newest pending vote newer than the last accepted vote, or that accepted vote
+when none remains. Duplicate/unknown replies and replies from before a
+reset/rejoin do not settle another vote. Ordinary card changes do not wait
+for an acknowledgement. To bound memory if replies stop, at 64 outstanding
+votes further card clicks send nothing until a reply arrives or the room view
+is reset. The value-based rollback path is retained only as a best-effort
+fallback for older servers; exact correlation requires the updated server.
 
 Note the deliberate asymmetry: `vote_registered` carries only
 `participant_id` (presence of a vote, not its value); `revealed` carries

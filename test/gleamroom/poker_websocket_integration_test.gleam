@@ -40,6 +40,78 @@ fn suspend_process(pid: process.Pid) -> Nil
 @external(erlang, "gleamroom_room_test_ffi", "resume")
 fn resume_process(pid: process.Pid) -> Nil
 
+pub fn poker_ws_correlates_private_vote_replies_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"vote\",\"value\":\"8\",\"request_id\":\"before-join\"}",
+  )
+  let #(reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"type\":\"vote_reply\"")
+  assert string.contains(reply, "\"request_id\":\"before-join\"")
+  assert string.contains(reply, "\"code\":\"not_joined\"")
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"join\",\"room_id\":\"CORRELATION\",\"display_name\":\"Alice\"}",
+  )
+  let #(_state, buffer) = recv_text_message(socket, buffer)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  send_raw_text_frame(
+    bob,
+    "{\"type\":\"join\",\"room_id\":\"CORRELATION\",\"display_name\":\"Bob\"}",
+  )
+  let #(_bob_state, bob_buffer) = recv_text_message(bob, bob_buffer)
+  let #(_bob_joined, buffer) = recv_text_message(socket, buffer)
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"vote\",\"value\":\"8\",\"request_id\":\"v1\"}",
+  )
+  let #(reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"type\":\"vote_reply\"")
+  assert string.contains(reply, "\"request_id\":\"v1\"")
+  assert string.contains(reply, "\"type\":\"vote_registered\"")
+  let #(vote_echo, buffer) = recv_text_message(socket, buffer)
+  assert !string.contains(vote_echo, "request_id")
+  assert !string.contains(vote_echo, "value")
+  let #(broadcast, _) = recv_text_message(bob, bob_buffer)
+  assert broadcast == vote_echo
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"vote\",\"value\":\"invalid\",\"request_id\":\"v2\"}",
+  )
+  let #(reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"request_id\":\"v2\"")
+  assert string.contains(reply, "\"code\":\"invalid_card\"")
+  send_raw_text_frame(socket, "{\"type\":\"reveal\"}")
+  let #(_, buffer) = recv_text_message(socket, buffer)
+  let #(_, buffer) = recv_text_message(socket, buffer)
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"vote\",\"value\":\"5\",\"request_id\":\"v3\"}",
+  )
+  let #(reply, _) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"request_id\":\"v3\"")
+  assert string.contains(reply, "\"code\":\"round_already_revealed\"")
+  tcp_close(socket)
+  tcp_close(bob)
+}
+
+pub fn poker_ws_correlates_rate_limited_vote_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+  let buffer = send_and_drain_reveal(socket, buffer, 30)
+  send_raw_text_frame(
+    socket,
+    "{\"type\":\"vote\",\"value\":\"8\",\"request_id\":\"limited\"}",
+  )
+  let #(reply, _) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"type\":\"vote_reply\"")
+  assert string.contains(reply, "\"request_id\":\"limited\"")
+  assert string.contains(reply, "\"code\":\"rate_limited\"")
+  tcp_close(socket)
+}
+
 pub fn poker_ws_roundtrip_join_vote_reveal_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(socket, buffer) = handshake(port, 50)
@@ -303,13 +375,19 @@ pub fn poker_ws_cleans_up_via_session_down_after_reply_timeout_test() {
 
   send_client_message(
     socket,
-    json.object([#("type", json.string("vote")), #("value", json.string("5"))]),
+    json.object([
+      #("type", json.string("vote")),
+      #("value", json.string("5")),
+      #("request_id", json.string("timed-out")),
+    ]),
   )
   // `recv_text_message` は必要ならフレームが揃うまで `tcp_recv` を繰り返す
   // ので、1000ms のタイムアウトが経過して `room_busy` が届くまで待てる。
   let #(vote_reply, _buffer) = recv_text_message(socket, buffer)
   assert string.contains(vote_reply, "\"type\":\"error\"")
   assert string.contains(vote_reply, "\"code\":\"room_busy\"")
+  assert string.contains(vote_reply, "\"type\":\"vote_reply\"")
+  assert string.contains(vote_reply, "\"request_id\":\"timed-out\"")
 
   // 再joinせずにここで切断する。on_close は state.room == None の枝に入り
   // Leave dispatch も release_room も呼ばない。

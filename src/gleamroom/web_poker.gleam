@@ -123,6 +123,12 @@ pub fn poker_html() -> String {
   // undefined は「捨てた値なし」。null は「未投票へ戻す」を表す有効な値。
   let voteRollbackFloor = undefined;
   let lastSentType = null;
+  let nextVoteId = 0;
+  let confirmedVote = null;
+  let confirmedVoteId = 0;
+  const pendingVotes = new Map();
+  const MAX_PENDING_VOTES = 64;
+  let correlatedReplies = false;
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -132,6 +138,41 @@ pub fn poker_html() -> String {
   function clearVoteRollbacks() {
     voteRollbacks = [];
     voteRollbackFloor = undefined;
+    pendingVotes.clear();
+    confirmedVote = null;
+    confirmedVoteId = 0;
+  }
+
+  function applyVoteReply(message) {
+    const pending = pendingVotes.get(message.request_id);
+    const result = message.result;
+    if (!pending || !result ||
+        (result.type !== \"vote_registered\" && result.type !== \"error\")) return;
+    if (result.type === \"vote_registered\" &&
+        typeof result.participant_id !== \"string\") return;
+    if (result.type === \"error\" &&
+        (typeof result.code !== \"string\" || typeof result.message !== \"string\")) return;
+    correlatedReplies = true;
+    voteRollbacks = [];
+    voteRollbackFloor = undefined;
+    pendingVotes.delete(message.request_id);
+    if (result.type === \"vote_registered\" && pending.id > confirmedVoteId) {
+      confirmedVoteId = pending.id;
+      confirmedVote = pending.value;
+    }
+    ownVote = confirmedVote;
+    for (const vote of pendingVotes.values()) {
+      if (vote.id > confirmedVoteId) ownVote = vote.value;
+    }
+    updateCardButtons();
+    // The nested result still updates presence/logging and connection errors,
+    // but must not enter the legacy value-based rollback path.
+    if (result.type === \"error\") {
+      log(`error [${result.code}]: ${result.message}`);
+      handleConnectionError(result.code);
+    } else {
+      handleServerMessage(result);
+    }
   }
 
   function resetRoomView() {
@@ -139,6 +180,7 @@ pub fn poker_html() -> String {
     votes = [];
     ownVote = null;
     clearVoteRollbacks();
+    correlatedReplies = false;
     renderParticipants();
     renderVotes();
     updateCardButtons();
@@ -286,6 +328,9 @@ pub fn poker_html() -> String {
         renderVotes();
         log(`left: ${message.participant_id}`);
         break;
+      case \"vote_reply\":
+        applyVoteReply(message);
+        break;
       case \"vote_registered\": {
         if (typeof message.participant_id !== \"string\") {
           log(`vote_registered message missing expected fields: ${JSON.stringify(message)}`);
@@ -336,6 +381,7 @@ pub fn poker_html() -> String {
         // 状態が既に一致しているかどうかを冪等化キーとして使う。
         const alreadyReset =
           phase === \"voting\" &&
+          ownVote === null && pendingVotes.size === 0 &&
           votes.length === 0 &&
           ![...participants.values()].some((p) => p.has_voted);
         if (alreadyReset) {
@@ -362,12 +408,14 @@ pub fn poker_html() -> String {
         if (handleConnectionError(message.code)) {
           break;
         }
-        if (
+        // Compatibility fallback only: the updated server always correlates
+        // this client's vote errors, so card values are never used to match them.
+        if (!correlatedReplies && (
           message.code === \"round_already_revealed\" ||
           message.code === \"voter_not_joined\" ||
           message.code === \"invalid_card\" ||
           (message.code === \"rate_limited\" && lastSentType === \"vote\")
-        ) {
+        )) {
           // vote が楽観的に反映した ownVote/aria-pressed をサーバーの拒否に
           // 合わせて巻き戻す（reveal との競合などで届いた vote が拒否される
           // ケース。参加者リストの✓は元々サーバー権威なので不整合はない）。
@@ -432,7 +480,13 @@ pub fn poker_html() -> String {
 
   for (const card of cards) {
     card.el.addEventListener(\"click\", () => {
-      if (!sendIfOpen({ type: \"vote\", value: card.value })) return;
+      // Bound memory if a peer stops acknowledging votes. Normal responses
+      // release entries immediately; card changes do not wait for a reply.
+      if (pendingVotes.size >= MAX_PENDING_VOTES) return;
+      const id = ++nextVoteId;
+      const requestId = String(id);
+      if (!sendIfOpen({ type: \"vote\", value: card.value, request_id: requestId })) return;
+      pendingVotes.set(requestId, { id, value: card.value });
       voteRollbacks.push({ value: card.value, prior: ownVote });
       if (voteRollbacks.length > MAX_VOTE_ROLLBACKS) voteRollbackFloor = voteRollbacks.shift().prior;
       ownVote = card.value;

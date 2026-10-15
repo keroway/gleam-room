@@ -278,7 +278,13 @@ fn handle_text(
               poker_protocol.RejectedVoteMessage(code, message, card)
             _ -> poker_protocol.ProtocolErrorMessage(code, message)
           }
-          send_server_message(connection, reply)
+          send_server_message(
+            connection,
+            poker_protocol.correlate_vote_reply(
+              reply,
+              poker_protocol.vote_request_id(text),
+            ),
+          )
           mist.continue(state)
         }
         MessageRateAccepted ->
@@ -290,14 +296,22 @@ fn handle_text(
               )
               send_server_message(
                 connection,
-                poker_protocol.ProtocolErrorMessage(error.code, error.message),
+                poker_protocol.correlate_vote_reply(
+                  poker_protocol.ProtocolErrorMessage(error.code, error.message),
+                  poker_protocol.vote_request_id(text),
+                ),
               )
               mist.continue(state)
             }
             Ok(poker_protocol.Join(wire_room_id, display_name)) ->
               handle_join(state, connection, wire_room_id, display_name)
             Ok(poker_protocol.Vote(card)) ->
-              handle_vote(state, connection, card)
+              handle_vote(
+                state,
+                connection,
+                card,
+                poker_protocol.vote_request_id(text),
+              )
             Ok(poker_protocol.Reveal) -> handle_reveal(state, connection)
             Ok(poker_protocol.Reset) -> handle_reset(state, connection)
           }
@@ -529,10 +543,17 @@ fn handle_vote(
   state: ConnectionState,
   connection: WebsocketConnection,
   wire_card: poker_protocol.Card,
+  request_id: Option(String),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection, "vote")
+      send_server_message(
+        connection,
+        poker_protocol.correlate_vote_reply(
+          poker_protocol.ProtocolErrorMessage("not_joined", not_joined_message),
+          request_id,
+        ),
+      )
       mist.continue(state)
     }
     Some(handle) -> {
@@ -544,6 +565,7 @@ fn handle_vote(
           poker.Vote(handle.participant_id, to_domain_card(wire_card)),
           handle.session,
         ),
+        request_id,
       )
       case event {
         poker.VoteRegistered(id) -> {
@@ -556,7 +578,10 @@ fn handle_vote(
           )
           send_server_message(
             connection,
-            poker_protocol.VoteRegistered(to_wire_participant_id(id)),
+            poker_protocol.correlate_vote_reply(
+              poker_protocol.VoteRegistered(to_wire_participant_id(id)),
+              request_id,
+            ),
           )
         }
         poker.VoteRejected(id, reason) -> {
@@ -572,7 +597,10 @@ fn handle_vote(
           let #(code, message) = vote_reject_code_and_message(reason)
           send_server_message(
             connection,
-            poker_protocol.ProtocolErrorMessage(code, message),
+            poker_protocol.correlate_vote_reply(
+              poker_protocol.ProtocolErrorMessage(code, message),
+              request_id,
+            ),
           )
         }
         // `Vote` never yields any other event; kept for exhaustiveness since
@@ -603,6 +631,7 @@ fn handle_reveal(
         state,
         connection,
         poker.dispatch(handle.subject, poker.Reveal, handle.session),
+        None,
       )
       case event {
         poker.RoundRevealed(votes) -> {
@@ -647,6 +676,7 @@ fn handle_reset(
         state,
         connection,
         poker.dispatch(handle.subject, poker.ResetRound, handle.session),
+        None,
       )
       case event {
         poker.RoundReset -> {
@@ -783,6 +813,7 @@ fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
   reply: Result(poker.PokerEvent, Nil),
+  request_id: Option(String),
   next: fn(poker.PokerEvent) -> Next(ConnectionState, ConnectionEvent),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case reply {
@@ -797,20 +828,19 @@ fn with_room_reply(
         }
           <> ", reason=reply_timed_out",
       )
-      send_room_busy(connection)
+      send_server_message(
+        connection,
+        poker_protocol.correlate_vote_reply(
+          poker_protocol.ProtocolErrorMessage(
+            "room_busy",
+            room_unavailable_message(ReplyTimedOut),
+          ),
+          request_id,
+        ),
+      )
       mist.continue(ConnectionState(..state, room: None))
     }
   }
-}
-
-fn send_room_busy(connection: WebsocketConnection) -> Nil {
-  send_server_message(
-    connection,
-    poker_protocol.ProtocolErrorMessage(
-      "room_busy",
-      room_unavailable_message(ReplyTimedOut),
-    ),
-  )
 }
 
 /// `websocket.gleam`'s `not_joined_message` と同じ理由・値。
