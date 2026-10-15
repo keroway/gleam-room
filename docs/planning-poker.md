@@ -164,7 +164,9 @@ when none remains. Duplicate/unknown replies and replies from before a
 reset/rejoin do not settle another vote. Ordinary card changes do not wait
 for an acknowledgement. To bound memory if replies stop, at 64 outstanding
 votes further card clicks send nothing until a reply arrives or the room view
-is reset. The value-based rollback path is retained only as a best-effort
+is reset (the browser logs the stall). Until the first correlated reply
+arrives (older servers never send one), the oldest outstanding vote is
+dropped instead so clicks keep working. The value-based rollback path is retained only as a best-effort
 fallback for older servers; exact correlation requires the updated server.
 
 Note the deliberate asymmetry: `vote_registered` carries only
