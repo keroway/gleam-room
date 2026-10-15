@@ -14,3 +14,7 @@ allow_merge: true
 # ペースは Claude の利用枠の残量から、cron の起動間隔は launchd の設定から決まる。
 # 同じ理由で `allow_codex_implementation` も外した(#191)。読む側の実装が
 # 用意された時点で改めて追記する。
+
+# Codex による非対話 issue 実装を許可する。秘密情報を扱うリポジトリでは true にしない。
+# (agent-assets#371: 既定値依存をやめて明示する。本リポジトリは秘密情報・本番デプロイ資格情報を持たない)
+allow_codex_implementation: true
