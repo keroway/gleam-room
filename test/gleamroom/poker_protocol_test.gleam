@@ -7,6 +7,35 @@ import gleamroom/poker_protocol.{
 }
 import gleamroom/wire.{ParticipantId, ProtocolError, RoomId}
 
+pub fn vote_correlation_test() {
+  assert poker_protocol.vote_request_id(
+      "{\"type\":\"vote\",\"value\":\"invalid\",\"request_id\":\"v1\"}",
+    )
+    == Some("v1")
+  assert poker_protocol.vote_request_id("{\"type\":\"vote\",\"value\":\"8\"}")
+    == None
+  assert poker_protocol.vote_request_id(
+      "{\"type\":\"reveal\",\"request_id\":\"v1\"}",
+    )
+    == None
+  assert poker_protocol.vote_request_id("{\"type\":\"vote\",\"request_id\":3}")
+    == None
+  assert poker_protocol.vote_request_id(
+      "{\"type\":\"vote\",\"request_id\":\"\"}",
+    )
+    == None
+  assert poker_protocol.vote_request_id(
+      "{\"type\":\"vote\",\"request_id\":\"" <> string.repeat("a", 65) <> "\"}",
+    )
+    == None
+  let accepted = VoteRegistered(ParticipantId("p1"))
+  assert poker_protocol.correlate_vote_reply(accepted, None) == accepted
+  assert poker_protocol.encode_server_message(
+      poker_protocol.correlate_vote_reply(accepted, Some("v1")),
+    )
+    == "{\"type\":\"vote_reply\",\"request_id\":\"v1\",\"result\":{\"type\":\"vote_registered\",\"participant_id\":\"p1\"}}"
+}
+
 pub fn decode_join_test() {
   let json =
     "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"

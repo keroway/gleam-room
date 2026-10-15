@@ -110,6 +110,8 @@ pub type ClientMessage {
 /// reveal sees the same result other participants got from `RoundRevealed`
 /// (#407).
 pub type ServerMessage {
+  /// Private direct reply; never used for room broadcasts.
+  VoteReply(request_id: String, result: ServerMessage)
   State(
     phase: RoundPhase,
     participants: List(ParticipantView),
@@ -188,12 +190,45 @@ fn validate_vote(raw_value: String) -> Result(ClientMessage, ProtocolError) {
   }
 }
 
+/// Read correlation independently of card validation so invalid-card errors can
+/// also acknowledge a vote. Missing/invalid IDs retain the legacy reply format.
+pub fn vote_request_id(text: String) -> Option(String) {
+  let decoder = {
+    use kind <- decode.field("type", decode.string)
+    use id <- decode.field("request_id", decode.string)
+    case kind == "vote" && string.length(id) > 0 && string.length(id) <= 64 {
+      True -> decode.success(id)
+      False -> decode.failure("", "vote request_id (1-64 characters)")
+    }
+  }
+  case json.parse(text, decoder) {
+    Ok(id) -> Some(id)
+    Error(_) -> None
+  }
+}
+
+pub fn correlate_vote_reply(
+  message: ServerMessage,
+  request_id: Option(String),
+) -> ServerMessage {
+  case request_id {
+    Some(id) -> VoteReply(id, message)
+    None -> message
+  }
+}
+
 pub fn encode_server_message(message: ServerMessage) -> String {
   wire.encode_message(message, with: server_message_to_json)
 }
 
 fn server_message_to_json(message: ServerMessage) -> json.Json {
   case message {
+    VoteReply(id, result) ->
+      json.object([
+        #("type", json.string("vote_reply")),
+        #("request_id", json.string(id)),
+        #("result", server_message_to_json(result)),
+      ])
     State(phase, participants, votes) ->
       json.object([
         #("type", json.string("state")),
