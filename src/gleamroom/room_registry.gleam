@@ -274,7 +274,14 @@ pub fn close_if_empty(
           }
         Error(Nil) -> core.monitored
       }
-      Core(..core, rooms: dict.delete(core.rooms, key), monitored:)
+      // monitored が消えると後続の RoomDown は未登録分岐に入り stuck を
+      // 回収できないため、ここで同じ key の stuck 記録も外す（#669）。
+      Core(
+        ..core,
+        rooms: dict.delete(core.rooms, key),
+        monitored:,
+        stuck_rooms: set.delete(core.stuck_rooms, key),
+      )
     }
   }
 }
