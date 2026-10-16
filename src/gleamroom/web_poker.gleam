@@ -127,6 +127,7 @@ pub fn poker_html() -> String {
   let confirmedVote = null;
   let confirmedVoteId = 0;
   const pendingVotes = new Map();
+  const evictedVoteIds = new Set();
   const MAX_PENDING_VOTES = 64;
   let correlatedReplies = false;
 
@@ -139,6 +140,7 @@ pub fn poker_html() -> String {
     voteRollbacks = [];
     voteRollbackFloor = undefined;
     pendingVotes.clear();
+    evictedVoteIds.clear();
     confirmedVote = null;
     confirmedVoteId = 0;
   }
@@ -146,6 +148,16 @@ pub fn poker_html() -> String {
   function applyVoteReply(message) {
     const pending = pendingVotes.get(message.request_id);
     const result = message.result;
+    // 上限で捨てた票への room_busy は、票の状態には触れず接続エラーだけ処理する
+    // （現接続のタイムアウトは票を捨てても起きている。#675）。リセット前の古い
+    // 応答は evictedVoteIds ごと消えているので従来どおり無視される。
+    if (!pending && evictedVoteIds.delete(message.request_id) &&
+        result && result.type === \"error\" && result.code === \"room_busy\" &&
+        typeof result.message === \"string\") {
+      log(`error [${result.code}]: ${result.message}`);
+      handleConnectionError(result.code);
+      return;
+    }
     if (!pending || !result ||
         (result.type !== \"vote_registered\" && result.type !== \"error\")) return;
     if (result.type === \"vote_registered\" &&
@@ -489,7 +501,12 @@ pub fn poker_html() -> String {
         }
         // 相関応答を一度も受けていない（旧サーバー）間は request_id で解放
         // されないため、最古の未応答票を捨てて上限を保つ（#673）。
-        pendingVotes.delete(pendingVotes.keys().next().value);
+        const evicted = pendingVotes.keys().next().value;
+        pendingVotes.delete(evicted);
+        evictedVoteIds.add(evicted);
+        if (evictedVoteIds.size > MAX_PENDING_VOTES) {
+          evictedVoteIds.delete(evictedVoteIds.values().next().value);
+        }
       }
       const id = ++nextVoteId;
       const requestId = String(id);
