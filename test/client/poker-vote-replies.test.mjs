@@ -135,3 +135,26 @@ test("#673: legacy vote_registered replies never stall card clicks after 64 vote
     selected(client, "8");
   } finally { client.dispose(); }
 });
+
+test("#675: room_busy for a vote discarded at the pending cap still closes the socket", () => {
+  const { client, receive, vote, socket } = setup();
+  try {
+    const first = vote("5");
+    for (let i = 0; i < 64; i++) vote("8");
+    receive({ type: "vote_reply", request_id: first,
+      result: { type: "error", code: "room_busy", message: "timed out" } });
+    assert.equal(socket.readyState, socket.constructor.CLOSED);
+  } finally { client.dispose(); }
+});
+
+test("#675: room_busy for a vote cleared by reset is still ignored", () => {
+  const { client, receive, vote, socket } = setup();
+  try {
+    const first = vote("5");
+    for (let i = 0; i < 64; i++) vote("8");
+    receive({ type: "round_reset" });
+    receive({ type: "vote_reply", request_id: first,
+      result: { type: "error", code: "room_busy", message: "timed out" } });
+    assert.notEqual(socket.readyState, socket.constructor.CLOSED);
+  } finally { client.dispose(); }
+});
