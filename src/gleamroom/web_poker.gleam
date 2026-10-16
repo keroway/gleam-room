@@ -130,6 +130,7 @@ pub fn poker_html() -> String {
   const evictedVoteIds = new Set();
   const MAX_PENDING_VOTES = 64;
   let correlatedReplies = false;
+  let ownResetMessages = 0;
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -192,6 +193,7 @@ pub fn poker_html() -> String {
     votes = [];
     ownVote = null;
     clearVoteRollbacks();
+    ownResetMessages = 0;
     correlatedReplies = false;
     renderParticipants();
     renderVotes();
@@ -290,6 +292,7 @@ pub fn poker_html() -> String {
         votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
         clearVoteRollbacks();
+        ownResetMessages = 0;
         setConnected(true);
         renderParticipants();
         renderVotes();
@@ -390,7 +393,14 @@ pub fn poker_html() -> String {
       case \"round_reset\": {
         // 同じ理由（#526）で round_reset も自己エコーが2回届く。リセット後
         // の状態（voting フェーズ・votes 空・全員 has_voted=false）と現在の
-        // 状態が既に一致しているかどうかを冪等化キーとして使う。
+        // 状態が既に一致しているかどうかを冪等化キーとして使う。ただし自分が
+        // 送った reset の2通目は状態が一致しなくても重複として捨てる: 間に
+        // 送った新ラウンドの未応答票を再適用で消してしまう（#677）。
+        const ownEcho = ownResetMessages === 1;
+        if (ownResetMessages > 0) ownResetMessages--;
+        if (ownEcho) {
+          break;
+        }
         const alreadyReset =
           phase === \"voting\" &&
           ownVote === null && pendingVotes.size === 0 &&
@@ -524,7 +534,8 @@ pub fn poker_html() -> String {
   });
 
   resetButton.addEventListener(\"click\", () => {
-    sendIfOpen({ type: \"reset\" });
+    // 自分の reset は直接応答と broadcast の2通で戻る（#677）。
+    if (sendIfOpen({ type: \"reset\" })) ownResetMessages = 2;
   });
 })();
 </script>
