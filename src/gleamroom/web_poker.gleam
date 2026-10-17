@@ -133,7 +133,8 @@ pub fn poker_html() -> String {
   // 自分の reset の直接応答を受けた数ぶん、後続の自己エコー broadcast を捨てる。
   let ownResetEchoes = 0;
   let nextResetId = 0;
-  const pendingResets = new Set();
+  // request_id -> reset 送信時点の nextVoteId。これより後の票は reset 後の票（#683）。
+  const pendingResets = new Map();
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -149,11 +150,22 @@ pub fn poker_html() -> String {
     confirmedVoteId = 0;
   }
 
-  function applyRoundReset() {
+  // 自分の reset の成功応答では、reset 送信より後に送った未応答票（id が
+  // keepAfterId 超）は新ラウンドの票なので残す。サーバーは reset の後に処理して
+  // vote_registered を返すため、消すと選択表示が復元されない（#683）。
+  function applyRoundReset(keepAfterId = Infinity) {
+    const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
     phase = \"voting\";
     votes = [];
     ownVote = null;
     clearVoteRollbacks();
+    let prior = null;
+    for (const vote of kept) {
+      pendingVotes.set(String(vote.id), vote);
+      voteRollbacks.push({ value: vote.value, prior });
+      prior = vote.value;
+      ownVote = vote.value;
+    }
     for (const participant of participants.values()) {
       participant.has_voted = false;
     }
@@ -163,11 +175,11 @@ pub fn poker_html() -> String {
     log(\"round reset\");
   }
 
-  function applyResetReply(result) {
+  function applyResetReply(result, keepAfterId) {
     if (result && result.type === \"round_reset\") {
       // 直接応答の後に自己エコーの broadcast が1通続く。
       ownResetEchoes++;
-      applyRoundReset();
+      applyRoundReset(keepAfterId);
     } else if (result && result.type === \"error\" &&
         typeof result.code === \"string\" && typeof result.message === \"string\") {
       log(`error [${result.code}]: ${result.message}`);
@@ -176,8 +188,10 @@ pub fn poker_html() -> String {
   }
 
   function applyVoteReply(message) {
-    if (pendingResets.delete(message.request_id)) {
-      applyResetReply(message.result);
+    if (pendingResets.has(message.request_id)) {
+      const keepAfterId = pendingResets.get(message.request_id);
+      pendingResets.delete(message.request_id);
+      applyResetReply(message.result, keepAfterId);
       return;
     }
     const pending = pendingVotes.get(message.request_id);
@@ -563,7 +577,7 @@ pub fn poker_html() -> String {
     // 自分の reset は直接応答（vote_reply）と broadcast の2通で戻る（#677）。
     // 拒否は直接応答のエラーだけで返るので、request_id で成否を個別に数える（#681）。
     const requestId = \"r\" + String(++nextResetId);
-    if (sendIfOpen({ type: \"reset\", request_id: requestId })) pendingResets.add(requestId);
+    if (sendIfOpen({ type: \"reset\", request_id: requestId })) pendingResets.set(requestId, nextVoteId);
   });
 })();
 </script>

@@ -455,6 +455,39 @@ test("重複 round_reset の間に送った投票は、成功応答までカー�
   }
 });
 
+test("reset 送信後・直接応答前に送った投票は、reset 成功応答で消えず選択が維持される（#683）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    client.click("reset");
+    const resetSent = JSON.parse(socket.sent[socket.sent.length - 1]);
+    client.click("card-8");
+    const voteSent = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "round_reset" }, resetSent);
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "true");
+    replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, voteSent);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+    });
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "true");
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓"]);
+
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "revealed",
+        votes: [{ participant_id: "p1", display_name: "Alice", value: "8" }],
+      }),
+    });
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "true");
+    assert.deepEqual(client.childTextContents("votes"), ["Alice: 8"]);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("reset が rate_limited で拒否されても、後続の他参加者の round_reset は適用される（#679）", () => {
   const client = startClient(POKER_MODULE);
   try {
