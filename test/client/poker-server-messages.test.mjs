@@ -454,6 +454,35 @@ test("重複 round_reset の間に送った投票は、成功応答までカー�
   }
 });
 
+test("reset が rate_limited で拒否されても、後続の他参加者の round_reset は適用される（#679）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    client.click("reset");
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "rate_limited", message: "slow down" }),
+    });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    client.click("card-8");
+    const sent = JSON.parse(socket.sent[socket.sent.length - 1]);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "vote_reply",
+        request_id: sent.request_id,
+        result: { type: "vote_registered", participant_id: "p1" },
+      }),
+    });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "false");
+    assert.deepEqual(client.childTextContents("participants"), ["Alice"]);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("revealed で未投票者(value: null)は votes 要素に (no vote) として描画される", () => {
   const client = startClient(POKER_MODULE);
   try {

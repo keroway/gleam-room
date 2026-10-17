@@ -430,6 +430,11 @@ pub fn poker_html() -> String {
         if (handleConnectionError(message.code)) {
           break;
         }
+        // 直前に送った reset が拒否されたなら、自己エコーは戻ってこない。
+        // 待ちを残すと、後続の他参加者の round_reset を捨ててしまう（#679）。
+        if (message.code === \"rate_limited\" && lastSentType === \"reset\") {
+          ownResetMessages = 0;
+        }
         // Compatibility fallback only: the updated server always correlates
         // this client's vote errors, so card values are never used to match them.
         if (!correlatedReplies && (
