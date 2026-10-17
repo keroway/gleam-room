@@ -158,6 +158,13 @@ correlated reply. The room broadcast remains a bare `vote_registered`, even
 for the sender: it contains neither the request ID nor the card value. Old
 clients that omit IDs keep their existing replies unchanged.
 
+`reset` takes the same optional `request_id` and the same envelope
+(`{"type":"vote_reply","request_id":"r1","result":{"type":"round_reset"}}`, or
+an `error` result when rejected). The sender's room broadcast stays a bare
+`round_reset`. The browser counts one self-echo per successful direct reply and
+drops that many broadcasts, so rapid or rejected resets cannot swallow another
+participant's reset (#681).
+
 The browser settles only the matching pending vote. Selection reflects the
 newest pending vote newer than the last accepted vote, or that accepted vote
 when none remains. Duplicate/unknown replies and replies from before a

@@ -130,7 +130,10 @@ pub fn poker_html() -> String {
   const evictedVoteIds = new Set();
   const MAX_PENDING_VOTES = 64;
   let correlatedReplies = false;
-  let ownResetMessages = 0;
+  // 自分の reset の直接応答を受けた数ぶん、後続の自己エコー broadcast を捨てる。
+  let ownResetEchoes = 0;
+  let nextResetId = 0;
+  const pendingResets = new Set();
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -146,7 +149,37 @@ pub fn poker_html() -> String {
     confirmedVoteId = 0;
   }
 
+  function applyRoundReset() {
+    phase = \"voting\";
+    votes = [];
+    ownVote = null;
+    clearVoteRollbacks();
+    for (const participant of participants.values()) {
+      participant.has_voted = false;
+    }
+    updateCardButtons();
+    renderParticipants();
+    renderVotes();
+    log(\"round reset\");
+  }
+
+  function applyResetReply(result) {
+    if (result && result.type === \"round_reset\") {
+      // 直接応答の後に自己エコーの broadcast が1通続く。
+      ownResetEchoes++;
+      applyRoundReset();
+    } else if (result && result.type === \"error\" &&
+        typeof result.code === \"string\" && typeof result.message === \"string\") {
+      log(`error [${result.code}]: ${result.message}`);
+      handleConnectionError(result.code);
+    }
+  }
+
   function applyVoteReply(message) {
+    if (pendingResets.delete(message.request_id)) {
+      applyResetReply(message.result);
+      return;
+    }
     const pending = pendingVotes.get(message.request_id);
     const result = message.result;
     // 上限で捨てた票への room_busy は、票の状態には触れず接続エラーだけ処理する
@@ -193,7 +226,8 @@ pub fn poker_html() -> String {
     votes = [];
     ownVote = null;
     clearVoteRollbacks();
-    ownResetMessages = 0;
+    ownResetEchoes = 0;
+    pendingResets.clear();
     correlatedReplies = false;
     renderParticipants();
     renderVotes();
@@ -292,7 +326,8 @@ pub fn poker_html() -> String {
         votes = Array.isArray(message.votes) ? message.votes : [];
         ownVote = null;
         clearVoteRollbacks();
-        ownResetMessages = 0;
+        ownResetEchoes = 0;
+        pendingResets.clear();
         setConnected(true);
         renderParticipants();
         renderVotes();
@@ -391,16 +426,17 @@ pub fn poker_html() -> String {
         break;
       }
       case \"round_reset\": {
-        // 同じ理由（#526）で round_reset も自己エコーが2回届く。リセット後
-        // の状態（voting フェーズ・votes 空・全員 has_voted=false）と現在の
-        // 状態が既に一致しているかどうかを冪等化キーとして使う。ただし自分が
-        // 送った reset の2通目は状態が一致しなくても重複として捨てる: 間に
-        // 送った新ラウンドの未応答票を再適用で消してしまう（#677）。
-        const ownEcho = ownResetMessages === 1;
-        if (ownResetMessages > 0) ownResetMessages--;
-        if (ownEcho) {
+        // 同じ理由（#526）で round_reset も自己エコーが2回届く。自分の reset の
+        // 直接応答（vote_reply）を受けるたびに ownResetEchoes を1つ積み、後続の
+        // broadcast 1通をその分だけ捨てる: 状態が一致しなくても再適用すると、間に
+        // 送った新ラウンドの未応答票を消してしまう（#677）。連続送信・拒否が
+        // あっても、応答は request_id で個別に数えるので取り違えない（#681）。
+        if (ownResetEchoes > 0) {
+          ownResetEchoes--;
           break;
         }
+        // 自己エコーでなければ、リセット後の状態（voting フェーズ・votes 空・
+        // 全員 has_voted=false）と現在の状態が既に一致しているかを冪等化キーにする。
         const alreadyReset =
           phase === \"voting\" &&
           ownVote === null && pendingVotes.size === 0 &&
@@ -409,17 +445,7 @@ pub fn poker_html() -> String {
         if (alreadyReset) {
           break;
         }
-        phase = \"voting\";
-        votes = [];
-        ownVote = null;
-        clearVoteRollbacks();
-        for (const participant of participants.values()) {
-          participant.has_voted = false;
-        }
-        updateCardButtons();
-        renderParticipants();
-        renderVotes();
-        log(\"round reset\");
+        applyRoundReset();
         break;
       }
       case \"error\":
@@ -429,11 +455,6 @@ pub fn poker_html() -> String {
         // client_js.gleam の共有処理が扱う。
         if (handleConnectionError(message.code)) {
           break;
-        }
-        // 直前に送った reset が拒否されたなら、自己エコーは戻ってこない。
-        // 待ちを残すと、後続の他参加者の round_reset を捨ててしまう（#679）。
-        if (message.code === \"rate_limited\" && lastSentType === \"reset\") {
-          ownResetMessages = 0;
         }
         // Compatibility fallback only: the updated server always correlates
         // this client's vote errors, so card values are never used to match them.
@@ -539,8 +560,10 @@ pub fn poker_html() -> String {
   });
 
   resetButton.addEventListener(\"click\", () => {
-    // 自分の reset は直接応答と broadcast の2通で戻る（#677）。
-    if (sendIfOpen({ type: \"reset\" })) ownResetMessages = 2;
+    // 自分の reset は直接応答（vote_reply）と broadcast の2通で戻る（#677）。
+    // 拒否は直接応答のエラーだけで返るので、request_id で成否を個別に数える（#681）。
+    const requestId = \"r\" + String(++nextResetId);
+    if (sendIfOpen({ type: \"reset\", request_id: requestId })) pendingResets.add(requestId);
   });
 })();
 </script>
