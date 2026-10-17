@@ -196,9 +196,14 @@ pub fn vote_request_id(text: String) -> Option(String) {
   let decoder = {
     use kind <- decode.field("type", decode.string)
     use id <- decode.field("request_id", decode.string)
-    case kind == "vote" && string.length(id) > 0 && string.length(id) <= 64 {
+    // reset も同じ相関 ID で直接応答を識別できるようにする（#681）。
+    case
+      { kind == "vote" || kind == "reset" }
+      && string.length(id) > 0
+      && string.length(id) <= 64
+    {
       True -> decode.success(id)
-      False -> decode.failure("", "vote request_id (1-64 characters)")
+      False -> decode.failure("", "vote/reset request_id (1-64 characters)")
     }
   }
   case json.parse(text, decoder) {

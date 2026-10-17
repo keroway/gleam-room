@@ -28,6 +28,14 @@ pub fn vote_correlation_test() {
       "{\"type\":\"vote\",\"request_id\":\"" <> string.repeat("a", 65) <> "\"}",
     )
     == None
+  assert poker_protocol.vote_request_id(
+      "{\"type\":\"reset\",\"request_id\":\"r1\"}",
+    )
+    == Some("r1")
+  assert poker_protocol.encode_server_message(
+      poker_protocol.correlate_vote_reply(RoundReset, Some("r1")),
+    )
+    == "{\"type\":\"vote_reply\",\"request_id\":\"r1\",\"result\":{\"type\":\"round_reset\"}}"
   let accepted = VoteRegistered(ParticipantId("p1"))
   assert poker_protocol.correlate_vote_reply(accepted, None) == accepted
   assert poker_protocol.encode_server_message(

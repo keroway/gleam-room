@@ -20,6 +20,13 @@ function joinAndConnect(client, participants = [], phase = "voting", votes = [])
   return socket;
 }
 
+// request_id 付きで送られた reset/vote への直接応答を注入する。sent を省くと直近の送信。
+function replyToLast(socket, result, sent = JSON.parse(socket.sent[socket.sent.length - 1])) {
+  socket.handlers.message?.({
+    data: JSON.stringify({ type: "vote_reply", request_id: sent.request_id, result }),
+  });
+}
+
 test("participant_joined は participants に追加されログに残る", () => {
   const client = startClient(POKER_MODULE);
   try {
@@ -432,17 +439,11 @@ test("重複 round_reset の間に送った投票は、成功応答までカー�
       { participant_id: "p1", display_name: "Alice", has_voted: false },
     ]);
     client.click("reset");
-    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    replyToLast(socket, { type: "round_reset" });
     client.click("card-8");
     const sent = JSON.parse(socket.sent[socket.sent.length - 1]);
     socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
-    socket.handlers.message?.({
-      data: JSON.stringify({
-        type: "vote_reply",
-        request_id: sent.request_id,
-        result: { type: "vote_registered", participant_id: "p1" },
-      }),
-    });
+    replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, sent);
     socket.handlers.message?.({
       data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
     });
@@ -461,19 +462,61 @@ test("reset が rate_limited で拒否されても、後続の他参加者の ro
       { participant_id: "p1", display_name: "Alice", has_voted: false },
     ]);
     client.click("reset");
-    socket.handlers.message?.({
-      data: JSON.stringify({ type: "error", code: "rate_limited", message: "slow down" }),
-    });
+    replyToLast(socket, { type: "error", code: "rate_limited", message: "slow down" });
     socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
     client.click("card-8");
     const sent = JSON.parse(socket.sent[socket.sent.length - 1]);
-    socket.handlers.message?.({
-      data: JSON.stringify({
-        type: "vote_reply",
-        request_id: sent.request_id,
-        result: { type: "vote_registered", participant_id: "p1" },
-      }),
-    });
+    replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, sent);
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "false");
+    assert.deepEqual(client.childTextContents("participants"), ["Alice"]);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("reset を応答前に2回送っても、自己エコー4通が新ラウンドの未応答票を消さない（#681）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    client.click("reset");
+    const first = JSON.parse(socket.sent[socket.sent.length - 1]);
+    client.click("reset");
+    const second = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "round_reset" }, first);
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    replyToLast(socket, { type: "round_reset" }, second);
+    client.click("card-8");
+    const vote = JSON.parse(socket.sent[socket.sent.length - 1]);
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, vote);
+
+    assert.equal(client.getAttribute("card-8", "aria-pressed"), "true");
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓"]);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("reset の拒否前に vote を送っても、受理済み投票は後続の他参加者のリセットで消える（#681）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client, [
+      { participant_id: "p1", display_name: "Alice", has_voted: false },
+    ]);
+    client.click("reset");
+    const reset = JSON.parse(socket.sent[socket.sent.length - 1]);
+    client.click("card-5");
+    const rejectedVote = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "error", code: "rate_limited", message: "slow down" }, reset);
+    replyToLast(socket, { type: "error", code: "rate_limited", message: "slow down" }, rejectedVote);
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    client.click("card-8");
+    const vote = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, vote);
     socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
 
     assert.equal(client.getAttribute("card-8", "aria-pressed"), "false");

@@ -313,7 +313,12 @@ fn handle_text(
                 poker_protocol.vote_request_id(text),
               )
             Ok(poker_protocol.Reveal) -> handle_reveal(state, connection)
-            Ok(poker_protocol.Reset) -> handle_reset(state, connection)
+            Ok(poker_protocol.Reset) ->
+              handle_reset(
+                state,
+                connection,
+                poker_protocol.vote_request_id(text),
+              )
           }
       }
   }
@@ -665,10 +670,21 @@ fn handle_reveal(
 fn handle_reset(
   state: ConnectionState,
   connection: WebsocketConnection,
+  request_id: Option(String),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection, "reset")
+      logging.log(
+        logging.Info,
+        "poker not joined: command=reset, " <> connection_tag(),
+      )
+      send_server_message(
+        connection,
+        poker_protocol.correlate_vote_reply(
+          poker_protocol.ProtocolErrorMessage("not_joined", not_joined_message),
+          request_id,
+        ),
+      )
       mist.continue(state)
     }
     Some(handle) -> {
@@ -676,7 +692,7 @@ fn handle_reset(
         state,
         connection,
         poker.dispatch(handle.subject, poker.ResetRound, handle.session),
-        None,
+        request_id,
       )
       case event {
         poker.RoundReset -> {
@@ -687,7 +703,15 @@ fn handle_reset(
               <> ", by="
               <> poker.participant_id_to_string(handle.participant_id),
           )
-          send_server_message(connection, poker_protocol.RoundReset)
+          // 直接応答は request_id で包み、クライアントが自分の reset の
+          // 成否と、後続の自己エコー broadcast を数えられるようにする（#681）。
+          send_server_message(
+            connection,
+            poker_protocol.correlate_vote_reply(
+              poker_protocol.RoundReset,
+              request_id,
+            ),
+          )
         }
         // `ResetRound` never yields any other event; kept for exhaustiveness
         // since `poker.PokerEvent` is shared across every room command.
