@@ -135,6 +135,7 @@ pub fn poker_html() -> String {
   let nextResetId = 0;
   // request_id -> reset 送信時点の nextVoteId。これより後の票は reset 後の票（#683）。
   const pendingResets = new Map();
+  const MAX_PENDING_RESETS = 8;
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -191,6 +192,7 @@ pub fn poker_html() -> String {
     if (pendingResets.has(message.request_id)) {
       const keepAfterId = pendingResets.get(message.request_id);
       pendingResets.delete(message.request_id);
+      correlatedReplies = true;
       applyResetReply(message.result, keepAfterId);
       return;
     }
@@ -576,6 +578,15 @@ pub fn poker_html() -> String {
   resetButton.addEventListener(\"click\", () => {
     // 自分の reset は直接応答（vote_reply）と broadcast の2通で戻る（#677）。
     // 拒否は直接応答のエラーだけで返るので、request_id で成否を個別に数える（#681）。
+    // 応答が届かない間に無制限に増えないよう上限を設ける（#685）。投票と同じく、
+    // 相関応答を一度も受けていない旧サーバーでは解放されないので最古を捨てる。
+    if (pendingResets.size >= MAX_PENDING_RESETS) {
+      if (correlatedReplies) {
+        log(\"too many unacknowledged resets; waiting for the server to reply\");
+        return;
+      }
+      pendingResets.delete(pendingResets.keys().next().value);
+    }
     const requestId = \"r\" + String(++nextResetId);
     if (sendIfOpen({ type: \"reset\", request_id: requestId })) pendingResets.set(requestId, nextVoteId);
   });

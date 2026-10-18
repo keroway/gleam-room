@@ -534,6 +534,37 @@ test("reset を応答前に2回送っても、自己エコー4通が新ラウン
   }
 });
 
+test("reset の未応答が上限に達したら送信を止め、応答後に再び送れる（#685）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    client.click("reset");
+    const first = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "error", code: "rate_limited", message: "slow down" }, first);
+    const before = socket.sent.length;
+    for (let i = 0; i < 20; i++) client.click("reset");
+    assert.equal(socket.sent.length - before, 8);
+    const last = JSON.parse(socket.sent[socket.sent.length - 1]);
+    replyToLast(socket, { type: "error", code: "rate_limited", message: "slow down" }, last);
+    client.click("reset");
+    assert.equal(socket.sent.length - before, 9);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("相関応答を受けていない旧サーバーでは reset の未応答が最古から捨てられ、送信は止まらない（#685）", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    const socket = joinAndConnect(client);
+    const before = socket.sent.length;
+    for (let i = 0; i < 20; i++) client.click("reset");
+    assert.equal(socket.sent.length - before, 20);
+  } finally {
+    client.dispose();
+  }
+});
+
 test("reset の拒否前に vote を送っても、受理済み投票は後続の他参加者のリセットで消える（#681）", () => {
   const client = startClient(POKER_MODULE);
   try {
