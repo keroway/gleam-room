@@ -565,6 +565,37 @@ test("相関応答を受けていない旧サーバーでは reset の未応答�
   }
 });
 
+test("初回応答前に reset が上限を超えて捨てられても、その成功応答と自己エコーで後続票を消さない（#687）", () => {
+  for (const resets of [8, 9]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(client, [
+        { participant_id: "p1", display_name: "Alice", has_voted: false },
+      ]);
+      const sentResets = [];
+      for (let i = 0; i < resets; i++) {
+        client.click("reset");
+        sentResets.push(JSON.parse(socket.sent[socket.sent.length - 1]));
+      }
+      client.click("card-8");
+      const vote = JSON.parse(socket.sent[socket.sent.length - 1]);
+      for (const sent of sentResets) {
+        replyToLast(socket, { type: "round_reset" }, sent);
+        socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+      }
+      replyToLast(socket, { type: "vote_registered", participant_id: "p1" }, vote);
+      socket.handlers.message?.({
+        data: JSON.stringify({ type: "vote_registered", participant_id: "p1" }),
+      });
+
+      assert.equal(client.getAttribute("card-8", "aria-pressed"), "true", `resets=${resets}`);
+      assert.deepEqual(client.childTextContents("participants"), ["Alice ✓"]);
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("reset の拒否前に vote を送っても、受理済み投票は後続の他参加者のリセットで消える（#681）", () => {
   const client = startClient(POKER_MODULE);
   try {

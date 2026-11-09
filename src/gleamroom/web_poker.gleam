@@ -136,6 +136,9 @@ pub fn poker_html() -> String {
   // request_id -> reset 送信時点の nextVoteId。これより後の票は reset 後の票（#683）。
   const pendingResets = new Map();
   const MAX_PENDING_RESETS = 8;
+  // 上限で追跡から外した reset（旧サーバー互換）。後から届く直接応答と自己エコーを
+  // 通常の reset 応答として扱うために keepAfterId だけ覚える（#687）。
+  const evictedResets = new Map();
 
   const WS_PATH = \"/poker/ws\";
   const afterSend = (message) => {
@@ -189,9 +192,11 @@ pub fn poker_html() -> String {
   }
 
   function applyVoteReply(message) {
-    if (pendingResets.has(message.request_id)) {
-      const keepAfterId = pendingResets.get(message.request_id);
-      pendingResets.delete(message.request_id);
+    const resetSource = pendingResets.has(message.request_id) ? pendingResets
+      : evictedResets.has(message.request_id) ? evictedResets : null;
+    if (resetSource) {
+      const keepAfterId = resetSource.get(message.request_id);
+      resetSource.delete(message.request_id);
       correlatedReplies = true;
       applyResetReply(message.result, keepAfterId);
       return;
@@ -244,6 +249,7 @@ pub fn poker_html() -> String {
     clearVoteRollbacks();
     ownResetEchoes = 0;
     pendingResets.clear();
+    evictedResets.clear();
     correlatedReplies = false;
     renderParticipants();
     renderVotes();
@@ -585,7 +591,12 @@ pub fn poker_html() -> String {
         log(\"too many unacknowledged resets; waiting for the server to reply\");
         return;
       }
-      pendingResets.delete(pendingResets.keys().next().value);
+      const evicted = pendingResets.keys().next().value;
+      evictedResets.set(evicted, pendingResets.get(evicted));
+      pendingResets.delete(evicted);
+      if (evictedResets.size > MAX_PENDING_RESETS) {
+        evictedResets.delete(evictedResets.keys().next().value);
+      }
     }
     const requestId = \"r\" + String(++nextResetId);
     if (sendIfOpen({ type: \"reset\", request_id: requestId })) pendingResets.set(requestId, nextVoteId);
