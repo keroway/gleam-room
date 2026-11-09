@@ -85,6 +85,9 @@ pub fn index_html() -> String {
   // 自分の参加者IDも渡さないため、クリック時に楽観的に立て、already_buzzed で
   // 確定させる。round_reset・state・切断で戻す（#576）。
   let hasBuzzed = false;
+  // 直近に送った操作。応答に相関 ID が無いため、error の対象を推定する唯一の
+  // 手がかり。reset の拒否で受理済み buzz の押下済み状態を解除しない（#690）。
+  let lastSentOp = null;
   let isConnected = false;
 
   const WS_PATH = \"/ws\";
@@ -246,7 +249,7 @@ pub fn index_html() -> String {
           // 楽観的に立てた hasBuzzed をサーバーの判定で確定させる（#576）。
           hasBuzzed = true;
           updateBuzzButton();
-        } else if (hasBuzzed) {
+        } else if (hasBuzzed && lastSentOp === \"buzz\") {
           // buzz が rate_limited 等で拒否された場合に備えて楽観状態を戻す。
           // 取り違えても、次のクリックで already_buzzed が返って再び確定する。
           hasBuzzed = false;
@@ -260,12 +263,13 @@ pub fn index_html() -> String {
 
   buzzButton.addEventListener(\"click\", () => {
     if (!sendIfOpen({ type: \"buzz\" })) return;
+    lastSentOp = \"buzz\";
     hasBuzzed = true;
     updateBuzzButton();
   });
 
   resetButton.addEventListener(\"click\", () => {
-    sendIfOpen({ type: \"reset\" });
+    if (sendIfOpen({ type: \"reset\" })) lastSentOp = \"reset\";
   });
 })();
 </script>
