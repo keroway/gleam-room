@@ -224,15 +224,19 @@ pub fn index_html() -> String {
         }
         break;
       case \"round_reset\":
-        hasBuzzed = false;
-        updateBuzzButton();
         // broadcast_all は発行者本人にも配信するため、同じ round_reset が
         // reply 経由と broadcast 経由の2回届く（#526）。round には position
         // のような一意キーが無いため、リセット後の状態（buzzes が空）と
         // 現在の状態が既に一致しているかどうかを冪等化キーとして使う。
+        // 押下済み表示の解除もこの判定の後に行う: 空のときに解除すると、
+        // reset 応答後に送った BUZZ が自己エコーで再び押下可能に戻る（#689）。
+        // 配送は順序保証なので、空の間に届く reset は適用済みの重複であり、
+        // 未応答 BUZZ より前の本物の reset なら先に buzz_accepted が届く。
         if (buzzes.length === 0) {
           break;
         }
+        hasBuzzed = false;
+        updateBuzzButton();
         buzzes = [];
         renderBuzzes();
         log(\"round reset\");

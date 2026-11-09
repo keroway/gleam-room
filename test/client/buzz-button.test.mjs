@@ -78,8 +78,36 @@ test("round_reset でボタンが有効に戻る", () => {
   try {
     const socket = joinAndConnect(client);
     client.click("buzz");
+    send(socket, {
+      type: "buzz_accepted",
+      participant_id: "p1",
+      display_name: "Alice",
+      position: 1,
+    });
     send(socket, { type: "round_reset" });
     assert.equal(client.isDisabled("buzz"), false, "round_reset 後もボタンが無効のまま");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("reset 応答後に送った BUZZ は reset の自己エコーで押下可能に戻らない（#689）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    client.click("reset");
+    send(socket, { type: "round_reset" });
+    client.click("buzz");
+    send(socket, { type: "round_reset" });
+    const accepted = {
+      type: "buzz_accepted",
+      participant_id: "p1",
+      display_name: "Alice",
+      position: 1,
+    };
+    send(socket, accepted);
+    send(socket, accepted);
+    assert.equal(client.isDisabled("buzz"), true, "自己エコーで押下済み状態が解除された");
   } finally {
     client.dispose();
   }
