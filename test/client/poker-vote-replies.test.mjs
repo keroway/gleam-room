@@ -194,3 +194,19 @@ test("#692: a stale revealed echo after reset does not restore the old result", 
     assert.ok(client.childTextContents("votes").some((t) => t.includes("5")));
   } finally { client.dispose(); }
 });
+
+test("#693: a success reply for a vote evicted at the 65th vote keeps the selection", () => {
+  const { client, receive, socket } = setup();
+  try {
+    for (let i = 0; i < 65; i++) client.click("card-8");
+    const ids = socket.sent.map((m) => JSON.parse(m)).filter((m) => m.type === "vote").map((m) => m.request_id);
+    receive({ type: "vote_reply", request_id: ids[0], result: { type: "vote_registered", participant_id: "p1" } });
+    receive({ type: "vote_registered", participant_id: "p1" });
+    for (const id of ids.slice(1)) {
+      receive({ type: "vote_reply", request_id: id,
+        result: { type: "error", code: "rate_limited", message: "Too many messages. Please slow down." } });
+    }
+    selected(client, "8");
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓", "Bob"]);
+  } finally { client.dispose(); }
+});

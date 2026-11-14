@@ -127,7 +127,9 @@ pub fn poker_html() -> String {
   let confirmedVote = null;
   let confirmedVoteId = 0;
   const pendingVotes = new Map();
-  const evictedVoteIds = new Set();
+  // 上限で追跡から外した未応答票（request_id -> {id, value}）。後から成功応答が届いたら
+  // 値を失わず確定票として扱う（#693）。
+  const evictedVoteIds = new Map();
   const MAX_PENDING_VOTES = 64;
   let correlatedReplies = false;
   // 自分の reset の直接応答を受けた数ぶん、後続の自己エコー broadcast を捨てる。
@@ -208,17 +210,23 @@ pub fn poker_html() -> String {
       applyResetReply(message.result, keepAfterId);
       return;
     }
-    const pending = pendingVotes.get(message.request_id);
+    let pending = pendingVotes.get(message.request_id);
+    const evictedVote = pending ? undefined : evictedVoteIds.get(message.request_id);
+    if (evictedVote) evictedVoteIds.delete(message.request_id);
     const result = message.result;
     // 上限で捨てた票への room_busy は、票の状態には触れず接続エラーだけ処理する
     // （現接続のタイムアウトは票を捨てても起きている。#675）。リセット前の古い
     // 応答は evictedVoteIds ごと消えているので従来どおり無視される。
-    if (!pending && evictedVoteIds.delete(message.request_id) &&
+    if (!pending && evictedVote &&
         result && result.type === \"error\" && result.code === \"room_busy\" &&
         typeof result.message === \"string\") {
       log(`error [${result.code}]: ${result.message}`);
       handleConnectionError(result.code);
       return;
+    }
+    // 追跡から外した票の成功応答は、保持していた値で確定票を更新する（#693）。
+    if (!pending && evictedVote && result && result.type === \"vote_registered\") {
+      pending = evictedVote;
     }
     if (!pending || !result ||
         (result.type !== \"vote_registered\" && result.type !== \"error\")) return;
@@ -591,10 +599,10 @@ pub fn poker_html() -> String {
         // 相関応答を一度も受けていない（旧サーバー）間は request_id で解放
         // されないため、最古の未応答票を捨てて上限を保つ（#673）。
         const evicted = pendingVotes.keys().next().value;
+        evictedVoteIds.set(evicted, pendingVotes.get(evicted));
         pendingVotes.delete(evicted);
-        evictedVoteIds.add(evicted);
         if (evictedVoteIds.size > MAX_PENDING_VOTES) {
-          evictedVoteIds.delete(evictedVoteIds.values().next().value);
+          evictedVoteIds.delete(evictedVoteIds.keys().next().value);
         }
       }
       const id = ++nextVoteId;
