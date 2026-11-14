@@ -535,6 +535,10 @@ pub fn buzz_reject_code_and_message(
       "already_buzzed",
       "This participant already buzzed for the current round.",
     )
+    room.RoundFull -> #(
+      "round_full",
+      "This round has reached its buzz limit. Reset the round to continue.",
+    )
     room.BuzzerNotJoined -> #(
       "buzzer_not_joined",
       "This connection has not joined the room yet.",

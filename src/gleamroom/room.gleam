@@ -64,6 +64,7 @@ pub type LeaveRejectReason {
 pub type BuzzRejectReason {
   BuzzerNotJoined
   AlreadyBuzzed
+  RoundFull
 }
 
 pub type RoomEvent {
@@ -105,6 +106,13 @@ const max_display_name_length = 64
 /// bound, which drives the O(N) per-event broadcast cost in `broadcast`/
 /// `broadcast_all` toward O(N^2) over the room's lifetime (#129).
 const max_participants = 64
+
+/// Ceiling on accepted buzzes per round. Leavers keep their result (ADR 0003),
+/// so a resident participant plus join/buzz/leave churn could otherwise grow
+/// one round's history without bound, and every new joiner's state snapshot
+/// carries all of it (#691). Reaching it rejects further buzzes with
+/// `RoundFull` until `ResetRound`; existing positions never change.
+const max_buzzes_per_round = 128
 
 fn apply_join(
   state: RoomState,
@@ -168,15 +176,19 @@ fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
     Ok(participant) ->
       case has_buzzed(state, id) {
         True -> #(state, BuzzRejected(id, AlreadyBuzzed))
-        False -> {
-          let position = list.length(state.buzzes) + 1
-          let next =
-            RoomState(..state, buzzes: [
-              BuzzResult(id, participant.display_name, position),
-              ..state.buzzes
-            ])
-          #(next, BuzzAccepted(id, participant.display_name, position))
-        }
+        False ->
+          case list.length(state.buzzes) >= max_buzzes_per_round {
+            True -> #(state, BuzzRejected(id, RoundFull))
+            False -> {
+              let position = list.length(state.buzzes) + 1
+              let next =
+                RoomState(..state, buzzes: [
+                  BuzzResult(id, participant.display_name, position),
+                  ..state.buzzes
+                ])
+              #(next, BuzzAccepted(id, participant.display_name, position))
+            }
+          }
       }
   }
 }

@@ -720,3 +720,50 @@ fn one_to(n: Int) -> List(Int) {
     _ -> list.append(one_to(n - 1), [n])
   }
 }
+
+fn fill_round_with_churn(state: room.RoomState, count: Int) -> room.RoomState {
+  int.range(from: 1, to: count + 1, with: state, run: fn(state, i) {
+    let id = room.participant_id("churn" <> int.to_string(i))
+    let #(state, _) = room.apply_command(state, room.Join(id, "Guest"))
+    let #(state, _) = room.apply_command(state, room.Buzz(id))
+    let #(state, _) = room.apply_command(state, room.Leave(id))
+    state
+  })
+}
+
+pub fn buzz_beyond_round_limit_is_rejected_and_order_kept_test() {
+  let anchor = room.participant_id("anchor")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+  let state = fill_round_with_churn(state, 128)
+  assert list.length(room.buzz_snapshot(state)) == 128
+
+  let #(next, event) = room.apply_command(state, room.Buzz(anchor))
+
+  assert next == state
+  assert event == room.BuzzRejected(anchor, room.RoundFull)
+}
+
+pub fn buzz_at_round_limit_minus_one_is_still_accepted_test() {
+  let anchor = room.participant_id("anchor")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+  let state = fill_round_with_churn(state, 127)
+
+  let #(next, event) = room.apply_command(state, room.Buzz(anchor))
+
+  assert event == room.BuzzAccepted(anchor, "Anchor", 128)
+  assert list.length(room.buzz_snapshot(next)) == 128
+}
+
+pub fn reset_round_lifts_round_limit_test() {
+  let anchor = room.participant_id("anchor")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+  let state = fill_round_with_churn(state, 128)
+  let #(state, _) = room.apply_command(state, room.ResetRound)
+
+  let #(_, event) = room.apply_command(state, room.Buzz(anchor))
+
+  assert event == room.BuzzAccepted(anchor, "Anchor", 1)
+}

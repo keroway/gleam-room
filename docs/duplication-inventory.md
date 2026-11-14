@@ -95,17 +95,17 @@ Duplicated infrastructure (not domain state machine):
 
 - `sessions: Dict(process.Pid, List(#(String, process.Monitor)))` and the
   `select_monitors`-based `SessionDown` wiring in `start`
-  (`room.gleam:277-308`, `poker.gleam:312-337`).
+  (`room.gleam:289-320`, `poker.gleam:312-337`).
 - `update_sessions` (register monitor on `ParticipantJoined`, demonitor +
-  remove on `ParticipantLeft`) (`room.gleam:437-498`, `poker.gleam:428-481`).
-- `broadcast_all` (`room.gleam:501-508`, `poker.gleam:484-491`).
-- `SessionDown` handler (`room.gleam:351-412`, `poker.gleam:365-411`) and
-  `ShutdownIfEmpty` handler (`room.gleam:413-424`, `poker.gleam:412-422`).
+  remove on `ParticipantLeft`) (`room.gleam:449-510`, `poker.gleam:428-481`).
+- `broadcast_all` (`room.gleam:513-520`, `poker.gleam:484-491`).
+- `SessionDown` handler (`room.gleam:363-424`, `poker.gleam:365-411`) and
+  `ShutdownIfEmpty` handler (`room.gleam:425-436`, `poker.gleam:412-422`).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
-  `call.try_call` (`room.gleam:572-619`, `poker.gleam:551-598`).
+  `call.try_call` (`room.gleam:584-631`, `poker.gleam:551-598`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
-  (`room.gleam:109-140`, `poker.gleam:144-174`); `is_valid_display_name` is
+  (`room.gleam:117-148`, `poker.gleam:144-174`); `is_valid_display_name` is
   identical.
 
 Why this is deferred rather than classified "抽出すべき": generalizing it
