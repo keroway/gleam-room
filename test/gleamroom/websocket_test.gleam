@@ -187,3 +187,11 @@ pub fn release_room_does_not_panic_when_registry_is_unregistered_test() {
 
   websocket.release_room(registry_subject, room_id, room_subject)
 }
+
+pub fn buzz_reject_code_and_message_round_full_test() {
+  assert websocket.buzz_reject_code_and_message(room.RoundFull)
+    == #(
+      "round_full",
+      "This round has reached its buzz limit. Reset the round to continue.",
+    )
+}
