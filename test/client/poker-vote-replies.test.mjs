@@ -174,3 +174,23 @@ test("#695: a vote echo arriving after reset does not restore the voted mark", (
     assert.deepEqual(client.childTextContents("participants"), ["Alice ✓", "Bob"]);
   } finally { client.dispose(); }
 });
+
+test("#692: a stale revealed echo after reset does not restore the old result", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: "8" }] };
+    client.click("reveal");
+    receive(revealed);
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive(revealed);
+    receive({ type: "round_reset" });
+    assert.equal(client.isDisabled("card-8"), false);
+    assert.deepEqual(client.childTextContents("votes"), []);
+    assert.deepEqual(client.childTextContents("participants"), ["Alice", "Bob"]);
+    // a genuine reveal in the new round (different content) still applies
+    receive({ type: "revealed", votes: [{ participant_id: "p2", display_name: "Bob", value: "5" }] });
+    assert.ok(client.childTextContents("votes").some((t) => t.includes("5")));
+  } finally { client.dispose(); }
+});
