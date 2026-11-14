@@ -158,3 +158,19 @@ test("#675: room_busy for a vote cleared by reset is still ignored", () => {
     assert.notEqual(socket.readyState, socket.constructor.CLOSED);
   } finally { client.dispose(); }
 });
+
+test("#695: a vote echo arriving after reset does not restore the voted mark", () => {
+  const { client, vote, reply, receive, socket } = setup();
+  try {
+    reply(vote("8"));
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "vote_registered", participant_id: "p1" });
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("participants"), ["Alice", "Bob"]);
+    // a legitimate vote in the new round still marks the participant
+    reply(vote("5"));
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓", "Bob"]);
+  } finally { client.dispose(); }
+});

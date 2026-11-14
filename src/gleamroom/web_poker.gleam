@@ -133,6 +133,9 @@ pub fn poker_html() -> String {
   // 自分の reset の直接応答を受けた数ぶん、後続の自己エコー broadcast を捨てる。
   let ownResetEchoes = 0;
   let nextResetId = 0;
+  // 自分の vote の成功応答を受けた数ぶん、後続の自己エコー vote_registered を捨てる。
+  // reset をまたいで届いた旧ラウンドの自己エコーで has_voted が復活しないようにする（#695）。
+  const ownVoteEchoes = new Map();
   // request_id -> reset 送信時点の nextVoteId。これより後の票は reset 後の票（#683）。
   const pendingResets = new Map();
   const MAX_PENDING_RESETS = 8;
@@ -239,6 +242,8 @@ pub fn poker_html() -> String {
       handleConnectionError(result.code);
     } else {
       handleServerMessage(result);
+      ownVoteEchoes.set(result.participant_id,
+        (ownVoteEchoes.get(result.participant_id) || 0) + 1);
     }
   }
 
@@ -248,6 +253,7 @@ pub fn poker_html() -> String {
     ownVote = null;
     clearVoteRollbacks();
     ownResetEchoes = 0;
+    ownVoteEchoes.clear();
     pendingResets.clear();
     evictedResets.clear();
     correlatedReplies = false;
@@ -349,6 +355,7 @@ pub fn poker_html() -> String {
         ownVote = null;
         clearVoteRollbacks();
         ownResetEchoes = 0;
+        ownVoteEchoes.clear();
         pendingResets.clear();
         setConnected(true);
         renderParticipants();
@@ -409,6 +416,14 @@ pub fn poker_html() -> String {
           break;
         }
         const participant = participants.get(message.participant_id);
+        // 自分の成功応答に対応する自己エコーは、reset をまたいでも状態に反映しない（#695）。
+        // 応答が先に has_voted を立てるので、エコーを捨てても表示は欠けない。
+        const echoes = ownVoteEchoes.get(message.participant_id) || 0;
+        if (echoes > 0) {
+          if (echoes === 1) ownVoteEchoes.delete(message.participant_id);
+          else ownVoteEchoes.set(message.participant_id, echoes - 1);
+          break;
+        }
         if (participant) {
           // broadcast_all は発行者本人にも配信するため、同じ vote_registered
           // が reply 経由と broadcast 経由の2回届く（#526）。has_voted は
