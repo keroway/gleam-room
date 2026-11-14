@@ -27,6 +27,17 @@ pub const shared =
   let lastJoin = null;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
+  // 接続開始から join 成立（最初の state）までの待機上限（#696）。通知が途絶えても
+  // socket が残り続けて再 join も自動再接続もできなくなるのを防ぐ。
+  const JOIN_TIMEOUT_MS = 10000;
+  let joinTimer = null;
+
+  function clearJoinTimer() {
+    if (joinTimer) {
+      clearTimeout(joinTimer);
+      joinTimer = null;
+    }
+  }
 
   function cancelReconnect() {
     if (reconnectTimer) {
@@ -85,6 +96,7 @@ pub const shared =
       code === \"invalid_display_name\" ||
       code === \"room_unavailable\"
     ) {
+      clearJoinTimer();
       if (socket) socket.close();
       socket = null;
       lastJoin = null;
@@ -115,6 +127,20 @@ pub const shared =
     // イベントが現行接続の状態を壊さないよう、各ハンドラで同一性を確認する（#645）。
     const isCurrent = () => socket === ws;
 
+    // join 成立（state 受信）・拒否・切断のいずれでも解除される。期限超過時は旧 socket を
+    // 破棄して既存の回数制限付き再接続へ進む。以後の旧 socket のイベントは isCurrent で無視。
+    clearJoinTimer();
+    joinTimer = setTimeout(() => {
+      joinTimer = null;
+      if (!isCurrent()) return;
+      log(\"join timed out\");
+      socket = null;
+      ws.close();
+      setConnected(false);
+      resetRoomView();
+      scheduleReconnect();
+    }, JOIN_TIMEOUT_MS);
+
     ws.addEventListener(\"open\", () => {
       if (!isCurrent()) return;
       // **ここでは setConnected(true) を呼ばない・試行回数も戻さない（#62, #87）。**
@@ -140,6 +166,7 @@ pub const shared =
         log(`could not parse server message: ${event.data}`);
         return;
       }
+      if (message && message.type === \"state\") clearJoinTimer();
       try {
         handleServerMessage(message);
       } catch (err) {
@@ -149,6 +176,7 @@ pub const shared =
 
     ws.addEventListener(\"close\", () => {
       if (!isCurrent()) return;
+      clearJoinTimer();
       setConnected(false);
       resetRoomView();
       socket = null;
