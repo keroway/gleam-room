@@ -59,6 +59,10 @@ At minimum:
 - The server can send the current room snapshot after join/rejoin.
 - Durable identity across browser restarts is not required.
 
+The browser clients wait at most 10 seconds from starting a connection until the
+first `state` (join success). On timeout they discard that socket and go through
+the same bounded automatic reconnect as a close (#696).
+
 Per ADR 0003, active in-memory Room state is authoritative for the MVP:
 reconnect recovers a current snapshot, not a durable event history.
 
