@@ -166,7 +166,7 @@ pub const shared =
         log(`could not parse server message: ${event.data}`);
         return;
       }
-      if (message && message.type === \"state\") clearJoinTimer();
+      // Join 期限の解除は各ページが state を妥当と確認した後に行う（#706）。
       try {
         handleServerMessage(message);
       } catch (err) {

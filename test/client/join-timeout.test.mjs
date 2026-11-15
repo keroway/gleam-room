@@ -54,4 +54,20 @@ for (const [name, page, state] of PAGES) {
       assert.ok(!client.logs.some((l) => l.includes("join timed out")));
     } finally { client.dispose(); }
   });
+
+  test(`${name}: 不正な state では期限が解除されず、期限超過で再接続する(#706)`, () => {
+    const client = startClient(page);
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      socket.handlers.message?.({ data: JSON.stringify({ type: "state" }) });
+      assert.ok(client.logs.some((l) => l.includes("state message missing expected fields")));
+      assert.deepEqual(client.timerDelays(), [JOIN_TIMEOUT_MS]);
+      client.runTimers(); // join 期限
+      assert.ok(client.logs.some((l) => l.includes("join timed out")));
+      client.runTimers(); // 再接続待ち
+      assert.equal(client.sockets.length, 2);
+    } finally { client.dispose(); }
+  });
 }

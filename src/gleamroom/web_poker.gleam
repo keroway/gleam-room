@@ -356,6 +356,7 @@ pub fn poker_html() -> String {
           break;
         }
         // join が成立した証拠。ここで初めて試行回数を戻す（web.gleam の #87 と同じ理由）。
+        clearJoinTimer();
         reconnectAttempts = 0;
         phase = message.phase;
         participants = new Map(

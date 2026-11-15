@@ -170,6 +170,7 @@ pub fn index_html() -> String {
           break;
         }
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
+        clearJoinTimer();
         reconnectAttempts = 0;
         hasBuzzed = false;
         setConnected(true);
