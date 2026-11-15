@@ -85,9 +85,12 @@ pub fn index_html() -> String {
   // 自分の参加者IDも渡さないため、クリック時に楽観的に立て、already_buzzed で
   // 確定させる。round_reset・state・切断で戻す（#576）。
   let hasBuzzed = false;
-  // 直近に送った操作。応答に相関 ID が無いため、error の対象を推定する唯一の
-  // 手がかり。reset の拒否で受理済み buzz の押下済み状態を解除しない（#690）。
-  let lastSentOp = null;
+  // 送信済みで未応答（buzz_accepted / already_buzzed / state / round_reset の
+  // いずれも未受信）の buzz があるか。応答に相関 ID が無いため error の対象推定に使う。
+  // 応答は送信順に届くので、未応答 buzz がある間の最初の error は buzz への拒否。
+  // 後続の reset 送信で上書きしない（#708）。受理済み buzz 後の reset 拒否で
+  // 押下済み状態を解除しない（#690）。
+  let buzzUnacked = false;
   let isConnected = false;
 
   const WS_PATH = \"/ws\";
@@ -172,6 +175,7 @@ pub fn index_html() -> String {
         // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
         clearJoinTimer();
         reconnectAttempts = 0;
+        buzzUnacked = false;
         hasBuzzed = false;
         setConnected(true);
         participants = new Map(message.participants.map((p) => [p.participant_id, p]));
@@ -218,6 +222,7 @@ pub fn index_html() -> String {
         // 間にメールボックスへ滞留したイベントが、state 受信後に再配送され
         // 重複表示されうる（#43）。position は round 内で一意なので、
         // それをキーに冪等化する。
+        buzzUnacked = false;
         if (!buzzes.some((b) => b.position === message.position)) {
           buzzes.push(message);
           renderBuzzes();
@@ -252,11 +257,13 @@ pub fn index_html() -> String {
         }
         if (message.code === \"already_buzzed\") {
           // 楽観的に立てた hasBuzzed をサーバーの判定で確定させる（#576）。
+          buzzUnacked = false;
           hasBuzzed = true;
           updateBuzzButton();
-        } else if (hasBuzzed && lastSentOp === \"buzz\") {
+        } else if (hasBuzzed && buzzUnacked) {
           // buzz が rate_limited 等で拒否された場合に備えて楽観状態を戻す。
           // 取り違えても、次のクリックで already_buzzed が返って再び確定する。
+          buzzUnacked = false;
           hasBuzzed = false;
           updateBuzzButton();
         }
@@ -268,13 +275,13 @@ pub fn index_html() -> String {
 
   buzzButton.addEventListener(\"click\", () => {
     if (!sendIfOpen({ type: \"buzz\" })) return;
-    lastSentOp = \"buzz\";
+    buzzUnacked = true;
     hasBuzzed = true;
     updateBuzzButton();
   });
 
   resetButton.addEventListener(\"click\", () => {
-    if (sendIfOpen({ type: \"reset\" })) lastSentOp = \"reset\";
+    sendIfOpen({ type: \"reset\" });
   });
 })();
 </script>
