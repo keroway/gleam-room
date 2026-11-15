@@ -477,6 +477,7 @@ fn handle_join(
           send_server_message(
             connection,
             protocol.State(
+              self_id: to_wire_participant_id(participant.id),
               participants: list.map(snapshot, to_wire_participant),
               buzzes: list.map(buzz_snapshot, to_wire_buzz_result),
             ),

@@ -30,7 +30,11 @@ pub type ClientMessage {
 
 /// A message sent from the server to a client.
 pub type ServerMessage {
-  State(participants: List(Participant), buzzes: List(BuzzResult))
+  State(
+    self_id: ParticipantId,
+    participants: List(Participant),
+    buzzes: List(BuzzResult),
+  )
   ParticipantJoined(participant: Participant)
   ParticipantLeft(participant_id: ParticipantId)
   BuzzAccepted(
@@ -78,9 +82,10 @@ pub fn encode_server_message(message: ServerMessage) -> String {
 
 fn server_message_to_json(message: ServerMessage) -> json.Json {
   case message {
-    State(participants, buzzes) ->
+    State(self_id, participants, buzzes) ->
       json.object([
         #("type", json.string("state")),
+        #("self_id", json.string(participant_id_to_string(self_id))),
         #("participants", json.array(participants, participant_to_json)),
         #("buzzes", json.array(buzzes, buzz_result_to_json)),
       ])

@@ -87,6 +87,35 @@ test("受理済み BUZZ 後の reset が rate_limited で拒否されても押�
   }
 });
 
+test("他参加者の buzz_accepted の後に自分の BUZZ が拒否されたらボタンが有効に戻る（#710）", () => {
+  const client = startClient();
+  try {
+    client.submitJoin();
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    send(socket, {
+      type: "state",
+      self_id: "alice",
+      participants: [
+        { participant_id: "alice", display_name: "Alice" },
+        { participant_id: "bob", display_name: "Bob" },
+      ],
+      buzzes: [],
+    });
+    client.click("buzz");
+    send(socket, {
+      type: "buzz_accepted",
+      participant_id: "bob",
+      display_name: "Bob",
+      position: 1,
+    });
+    send(socket, { type: "error", code: "rate_limited", message: "slow down" });
+    assert.equal(client.isDisabled("buzz"), false, "他参加者の通知後の拒否でボタンが無効のまま");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("round_reset でボタンが有効に戻る", () => {
   const client = startClient();
   try {

@@ -185,12 +185,14 @@ pub fn decode_malformed_json_test() {
 
 pub fn encode_state_test() {
   let message =
-    State(participants: [Participant(ParticipantId("p1"), "Alice")], buzzes: [
-      BuzzResult(ParticipantId("p1"), "Alice", 1),
-    ])
+    State(
+      self_id: ParticipantId("p1"),
+      participants: [Participant(ParticipantId("p1"), "Alice")],
+      buzzes: [BuzzResult(ParticipantId("p1"), "Alice", 1)],
+    )
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"self_id\":\"p1\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
 }
 
 pub fn encode_participant_joined_test() {
