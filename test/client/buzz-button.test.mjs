@@ -54,6 +54,20 @@ test("rate_limited などで buzz が拒否されたらボタンが有効に戻�
   }
 });
 
+test("未応答 BUZZ の直後に reset を送り両方拒否されたらボタンが有効に戻る（#708）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    client.click("buzz");
+    client.click("reset");
+    send(socket, { type: "error", code: "rate_limited", message: "slow down" });
+    send(socket, { type: "error", code: "rate_limited", message: "slow down" });
+    assert.equal(client.isDisabled("buzz"), false, "両操作の拒否後もボタンが無効のまま");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("受理済み BUZZ 後の reset が rate_limited で拒否されても押下済みのまま（#690）", () => {
   const client = startClient();
   try {
