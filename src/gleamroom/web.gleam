@@ -91,6 +91,7 @@ pub fn index_html() -> String {
   // 後続の reset 送信で上書きしない（#708）。受理済み buzz 後の reset 拒否で
   // 押下済み状態を解除しない（#690）。
   let buzzUnacked = false;
+  let selfId = null;
   let isConnected = false;
 
   const WS_PATH = \"/ws\";
@@ -177,6 +178,7 @@ pub fn index_html() -> String {
         reconnectAttempts = 0;
         buzzUnacked = false;
         hasBuzzed = false;
+        selfId = typeof message.self_id === \"string\" ? message.self_id : null;
         setConnected(true);
         participants = new Map(message.participants.map((p) => [p.participant_id, p]));
         buzzes = message.buzzes;
@@ -222,7 +224,13 @@ pub fn index_html() -> String {
         // 間にメールボックスへ滞留したイベントが、state 受信後に再配送され
         // 重複表示されうる（#43）。position は round 内で一意なので、
         // それをキーに冪等化する。
-        buzzUnacked = false;
+        // 他参加者の成功通知は自分の BUZZ への応答ではないので、未応答の
+        // 追跡を解除しない。解除すると、その後の rate_limited 拒否で
+        // 押下済み表示を戻せずボタンが無効のまま残る（#710）。
+        // self_id が不明なときだけ従来どおり区別せず解除する。
+        if (selfId === null || message.participant_id === selfId) {
+          buzzUnacked = false;
+        }
         if (!buzzes.some((b) => b.position === message.position)) {
           buzzes.push(message);
           renderBuzzes();
