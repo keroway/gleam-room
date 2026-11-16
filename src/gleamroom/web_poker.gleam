@@ -137,6 +137,9 @@ pub fn poker_html() -> String {
   // reset で捨てた旧ラウンドの公開結果。reset 後に遅れて届く旧 revealed の自己エコーを
   // 新ラウンドの reveal と取り違えて旧結果を復活させない（#692）。
   let staleRevealJson = null;
+  // 自分が reveal を送ったラウンドだけ旧自己エコーが遅れて届きうる。他参加者の reveal は
+  // broadcast 1通なので旧エコーを持たない（#712）。
+  let ownRevealSent = false;
   let nextResetId = 0;
   // 自分の vote の成功応答を受けた数ぶん、後続の自己エコー vote_registered を捨てる。
   // reset をまたいで届いた旧ラウンドの自己エコーで has_voted が復活しないようにする（#695）。
@@ -167,7 +170,10 @@ pub fn poker_html() -> String {
   // vote_registered を返すため、消すと選択表示が復元されない（#683）。
   function applyRoundReset(keepAfterId = Infinity) {
     const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
-    if (phase === \"revealed\" && votes.length > 0) staleRevealJson = JSON.stringify(votes);
+    if (phase === \"revealed\" && votes.length > 0 && ownRevealSent) {
+      staleRevealJson = JSON.stringify(votes);
+    }
+    ownRevealSent = false;
     phase = \"voting\";
     votes = [];
     ownVote = null;
@@ -266,6 +272,7 @@ pub fn poker_html() -> String {
     clearVoteRollbacks();
     ownResetEchoes = 0;
     staleRevealJson = null;
+    ownRevealSent = false;
     ownVoteEchoes.clear();
     pendingResets.clear();
     evictedResets.clear();
@@ -370,6 +377,7 @@ pub fn poker_html() -> String {
         clearVoteRollbacks();
         ownResetEchoes = 0;
         staleRevealJson = null;
+        ownRevealSent = false;
         ownVoteEchoes.clear();
         pendingResets.clear();
         setConnected(true);
@@ -618,7 +626,12 @@ pub fn poker_html() -> String {
   }
 
   revealButton.addEventListener(\"click\", () => {
-    sendIfOpen({ type: \"reveal\" });
+    // 自分が reveal を送ったので、以降に届く同内容の revealed は新ラウンドの正規通知
+    // として受ける（未投票のまま Reveal→Reset→Reveal でも捨てない、#712）。
+    if (sendIfOpen({ type: \"reveal\" })) {
+      ownRevealSent = true;
+      staleRevealJson = null;
+    }
   });
 
   resetButton.addEventListener(\"click\", () => {
