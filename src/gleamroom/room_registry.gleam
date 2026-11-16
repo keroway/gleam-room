@@ -48,8 +48,15 @@ pub type LookupError {
 pub type ExitKind {
   /// room のクラッシュ（または通常終了・kill）。
   RoomExited(pid: process.Pid)
-  /// 親（supervisor）からの shutdown 要求。
-  ParentShutdownRequested
+  /// reason が shutdown の exit。送信元が監視中の room なら room の終了、
+  /// それ以外なら親（supervisor）からの停止要求（#714）。判定は `core` を
+  /// 持つ呼び出し側が `is_monitored` で行う。
+  ParentShutdownRequested(pid: process.Pid)
+}
+
+/// `pid` が監視中の room のものか（#714）。
+pub fn is_monitored(core: Core(m), pid: process.Pid) -> Bool {
+  dict.has_key(core.monitored, pid)
 }
 
 /// 監視中の room actor の pid → 登録時の room 情報（#39）。
@@ -100,7 +107,8 @@ pub fn classify_exit(exit: process.ExitMessage) -> ExitKind {
   case exit.reason {
     process.Abnormal(reason) ->
       case decode.run(reason, atom.decoder()) {
-        Ok(reason_atom) if reason_atom == shutdown -> ParentShutdownRequested
+        Ok(reason_atom) if reason_atom == shutdown ->
+          ParentShutdownRequested(exit.pid)
         _ -> RoomExited(exit.pid)
       }
     process.Normal | process.Killed -> RoomExited(exit.pid)

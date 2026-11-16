@@ -83,7 +83,10 @@ pub type Message {
   /// 応答せず生き続け、supervisor は既定の shutdown タイムアウト（5秒）を
   /// 使い切ってから brutal kill するしかなくなる。reason が `shutdown` の
   /// 場合だけこの別メッセージにして、即座に `actor.stop()` する。
-  ParentShutdown
+  ///
+  /// 送信元 pid が監視中の room なら、room の shutdown 終了なので `RoomDown` と
+  /// 同じく登録を回収して生き続ける（#714）。
+  ParentShutdown(pid: process.Pid)
   /// `Release` が投げた空判定（`room.shutdown_if_empty`）の結果（#71）。
   ///
   /// 判定自体は registry のメールボックスの外（別プロセス）で待ち、結果だけを
@@ -161,7 +164,7 @@ pub fn start_with_max_rooms(
 fn exit_to_message(kind: room_registry.ExitKind) -> Message {
   case kind {
     room_registry.RoomExited(pid) -> RoomDown(pid)
-    room_registry.ParentShutdownRequested -> ParentShutdown
+    room_registry.ParentShutdownRequested(pid) -> ParentShutdown(pid)
   }
 }
 
@@ -271,12 +274,21 @@ fn handle_message(
           core: room_registry.record_probe(state.core, key, subject, ok),
         ),
       )
-    ParentShutdown -> {
-      // 親（supervisor）からの shutdown 要求。無視して生き続けると
-      // supervisor は既定の shutdown タイムアウト（5秒）を待ってから
-      // brutal kill するしかない（#117）。即座に止まって応答する。
-      actor.stop()
-    }
+    ParentShutdown(pid) ->
+      case room_registry.is_monitored(state.core, pid) {
+        // room 自身が shutdown で終了した（#714）。registry は生き続ける。
+        True ->
+          actor.continue(
+            State(
+              ..state,
+              core: room_registry.room_down(state.core, pid, "room"),
+            ),
+          )
+        // 親（supervisor）からの shutdown 要求。無視して生き続けると
+        // supervisor は既定の shutdown タイムアウト（5秒）を待ってから
+        // brutal kill するしかない（#117）。即座に止まって応答する。
+        False -> actor.stop()
+      }
     Release(id, subject) -> {
       let key = room_id_to_string(id)
       // 登録中のものと同一の actor のときだけ対象にする。ABA 問題への対処で、

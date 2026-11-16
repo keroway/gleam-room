@@ -328,6 +328,25 @@ pub fn parent_shutdown_stops_the_registry_promptly_test() {
   wait.until_dead(pid, "shutdown要求を受けたpoker registryが即座に終了する")
 }
 
+/// `registry_test.gleam` の同名テストと同じ理由（#714）: room の shutdown 終了で
+/// registry が止まらず、他の room も維持される。
+pub fn room_shutdown_does_not_stop_the_registry_test() {
+  let assert Ok(started) = poker_registry.start()
+  let reg = started.data
+  let assert Ok(a) = poker_registry.lookup(reg, poker_registry.room_id("a"))
+  let assert Ok(b) = poker_registry.lookup(reg, poker_registry.room_id("b"))
+  let assert Ok(a_pid) = process.subject_owner(a)
+  let assert Ok(b_pid) = process.subject_owner(b)
+
+  process.send_abnormal_exit(a_pid, atom.create("shutdown"))
+  wait.until_dead(a_pid, "shutdownしたroomが終了する")
+
+  assert poker_registry.health(reg)
+    == Ok(poker_registry.HealthSnapshot(rooms: 1, stuck: 0))
+  assert poker_registry.lookup(reg, poker_registry.room_id("b")) == Ok(b)
+  assert process.is_alive(b_pid)
+}
+
 /// `registry_test.gleam`'s `health_reports_the_number_of_registered_rooms_test`
 /// と同じ理由（#93, #285）: `/health` の poker 側応答を配線するにはまず
 /// 登録数を正しく返す必要がある。

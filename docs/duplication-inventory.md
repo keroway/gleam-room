@@ -69,7 +69,7 @@ Log strings keep their `poker ` prefix via a `label` argument.
 
 Update (#391 / PR #399, superseded by #586): `poker_registry.gleam` still does
 `import gleamroom/registry` solely for `registry.get_default_max_rooms()`
-(`poker_registry.gleam:79,87,127`), a narrow one-value dependency on the
+(`poker_registry.gleam:80,88,128`), a narrow one-value dependency on the
 default capacity.
 
 Resolution of the open question: `RoomId` became one shared type. Mixing a

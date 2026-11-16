@@ -403,6 +403,24 @@ pub fn lookup_still_resolves_an_existing_room_once_max_rooms_is_reached_test() {
   assert registry.lookup(reg, registry.room_id("room-a")) == Ok(first)
 }
 
+/// room が shutdown で終了しても registry は親からの停止要求と誤認せず、
+/// 登録だけ回収して生き続けること（#714）。他の room も維持される。
+pub fn room_shutdown_does_not_stop_the_registry_test() {
+  let assert Ok(started) = registry.start()
+  let reg = started.data
+  let assert Ok(a) = registry.lookup(reg, registry.room_id("a"))
+  let assert Ok(b) = registry.lookup(reg, registry.room_id("b"))
+  let assert Ok(a_pid) = process.subject_owner(a)
+  let assert Ok(b_pid) = process.subject_owner(b)
+
+  process.send_abnormal_exit(a_pid, atom.create("shutdown"))
+  wait.until_dead(a_pid, "shutdownしたroomが終了する")
+
+  assert registry.health(reg) == Ok(registry.HealthSnapshot(rooms: 1, stuck: 0))
+  assert registry.lookup(reg, registry.room_id("b")) == Ok(b)
+  assert process.is_alive(b_pid)
+}
+
 pub fn health_reports_the_number_of_registered_rooms_test() {
   let assert Ok(started) = registry.start()
   let reg = started.data

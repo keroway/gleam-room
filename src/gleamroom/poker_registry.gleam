@@ -36,7 +36,8 @@ pub type Message {
   /// `trap_exits(True)` は supervisor からの shutdown 要求も room のクラッシュ
   /// と区別なく届けるため、`registry.gleam`'s `ParentShutdown` と同じ理由
   /// （#117）で別扱いにし、即座に `actor.stop()` する。
-  ParentShutdown
+  /// 送信元が監視中の room なら RoomDown と同じ扱い（#714）。
+  ParentShutdown(pid: process.Pid)
   /// `Release` が投げた空判定（`poker.shutdown_if_empty`）の結果。
   /// `registry.gleam`'s `RoomEmptyChecked` と同じ理由（#71）: registry の
   /// メールボックスを詰まった room 1つでブロックしないよう、判定は別プロセスへ
@@ -100,7 +101,7 @@ pub fn start_with_max_rooms(
 fn exit_to_message(kind: room_registry.ExitKind) -> Message {
   case kind {
     room_registry.RoomExited(pid) -> RoomDown(pid)
-    room_registry.ParentShutdownRequested -> ParentShutdown
+    room_registry.ParentShutdownRequested(pid) -> ParentShutdown(pid)
   }
 }
 
@@ -158,7 +159,17 @@ fn handle_message(
           core: room_registry.room_down(state.core, pid, "poker room"),
         ),
       )
-    ParentShutdown -> actor.stop()
+    ParentShutdown(pid) ->
+      case room_registry.is_monitored(state.core, pid) {
+        True ->
+          actor.continue(
+            State(
+              ..state,
+              core: room_registry.room_down(state.core, pid, "poker room"),
+            ),
+          )
+        False -> actor.stop()
+      }
     Release(id, subject) -> {
       case
         room_registry.is_registered(state.core, room_id_to_string(id), subject)
