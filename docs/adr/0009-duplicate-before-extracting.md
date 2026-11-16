@@ -41,7 +41,7 @@ needs; collapsing it prematurely would destroy the evidence.
 Update (#391 / PR #399): one narrow exception existed. `poker_registry.gleam`
 imports `gleamroom/registry` and calls `registry.get_default_max_rooms()`
 directly instead of keeping its own copy of the default max-rooms value
-(`poker_registry.gleam:79,87,127`). This was a one-value dependency on the
+(`poker_registry.gleam:80,88,128`). This was a one-value dependency on the
 default capacity, not a general one. See `docs/duplication-inventory.md` §1.1
 for the full analysis.
 
