@@ -143,6 +143,8 @@ pub fn poker_html() -> String {
   // 自分の reveal に対する revealed は直接応答と自己エコーの2通届く。reset 前に2通とも
   // 受信済みなら reset 後に旧エコーは来ないので、旧結果として捨ててはならない（#716）。
   let ownRevealedCount = 0;
+  // 直近の reveal 送信前の追跡状態。rate_limited の拒否で戻す（#718）。
+  let revealRollback = null;
   let nextResetId = 0;
   // 自分の vote の成功応答を受けた数ぶん、後続の自己エコー vote_registered を捨てる。
   // reset をまたいで届いた旧ラウンドの自己エコーで has_voted が復活しないようにする（#695）。
@@ -531,6 +533,14 @@ pub fn poker_html() -> String {
         if (handleConnectionError(message.code)) {
           break;
         }
+        // 直前に送ったのが reveal なら、その rate_limited は reveal への拒否とみなす（#718）。
+        if (message.code === \"rate_limited\" && lastSentType === \"reveal\" && revealRollback !== null) {
+          ownRevealSent = revealRollback.sent;
+          ownRevealedCount = revealRollback.count;
+          staleRevealJson = revealRollback.stale;
+          revealRollback = null;
+          break;
+        }
         // Compatibility fallback only: the updated server always correlates
         // this client's vote errors, so card values are never used to match them.
         if (!correlatedReplies && (
@@ -634,6 +644,9 @@ pub fn poker_html() -> String {
     // 自分が reveal を送ったので、以降に届く同内容の revealed は新ラウンドの正規通知
     // として受ける（未投票のまま Reveal→Reset→Reveal でも捨てない、#712）。
     if (sendIfOpen({ type: \"reveal\" })) {
+      // rate_limited で拒否されたら、この再送は未到着の自己エコーを生まないので
+      // 送信前の追跡状態へ戻す（#718）。
+      revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson };
       ownRevealSent = true;
       ownRevealedCount = 0;
       staleRevealJson = null;
