@@ -215,6 +215,25 @@ test("#712: an unvoted Reveal-Reset-Reveal still shows the second round result",
   } finally { client.dispose(); }
 });
 
+test("#716: another participant's unvoted Reveal after my Reveal-Reset still shows", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: null }] };
+    client.click("reveal");
+    receive(revealed);
+    receive(revealed);
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("votes"), []);
+    // Bob reveals the next round; this client sends no reveal
+    receive(revealed);
+    assert.equal(client.childTextContents("votes").length, 1);
+    assert.equal(client.isDisabled("card-8"), true);
+  } finally { client.dispose(); }
+});
+
 test("#693: a success reply for a vote evicted at the 65th vote keeps the selection", () => {
   const { client, receive, socket } = setup();
   try {

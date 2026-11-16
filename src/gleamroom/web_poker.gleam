@@ -140,6 +140,9 @@ pub fn poker_html() -> String {
   // 自分が reveal を送ったラウンドだけ旧自己エコーが遅れて届きうる。他参加者の reveal は
   // broadcast 1通なので旧エコーを持たない（#712）。
   let ownRevealSent = false;
+  // 自分の reveal に対する revealed は直接応答と自己エコーの2通届く。reset 前に2通とも
+  // 受信済みなら reset 後に旧エコーは来ないので、旧結果として捨ててはならない（#716）。
+  let ownRevealedCount = 0;
   let nextResetId = 0;
   // 自分の vote の成功応答を受けた数ぶん、後続の自己エコー vote_registered を捨てる。
   // reset をまたいで届いた旧ラウンドの自己エコーで has_voted が復活しないようにする（#695）。
@@ -170,10 +173,11 @@ pub fn poker_html() -> String {
   // vote_registered を返すため、消すと選択表示が復元されない（#683）。
   function applyRoundReset(keepAfterId = Infinity) {
     const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
-    if (phase === \"revealed\" && votes.length > 0 && ownRevealSent) {
+    if (phase === \"revealed\" && votes.length > 0 && ownRevealSent && ownRevealedCount < 2) {
       staleRevealJson = JSON.stringify(votes);
     }
     ownRevealSent = false;
+    ownRevealedCount = 0;
     phase = \"voting\";
     votes = [];
     ownVote = null;
@@ -473,6 +477,7 @@ pub fn poker_html() -> String {
         // 同じ理由（#526）で revealed も自己エコーが2回届く。round には
         // position のような一意キーが無いため、直前の revealed と phase・
         // votes 内容が両方一致するかどうかを冪等化キーとして使う。
+        if (ownRevealSent) ownRevealedCount++;
         const alreadyRevealed =
           phase === \"revealed\" && JSON.stringify(votes) === JSON.stringify(message.votes);
         if (alreadyRevealed) {
@@ -630,6 +635,7 @@ pub fn poker_html() -> String {
     // として受ける（未投票のまま Reveal→Reset→Reveal でも捨てない、#712）。
     if (sendIfOpen({ type: \"reveal\" })) {
       ownRevealSent = true;
+      ownRevealedCount = 0;
       staleRevealJson = null;
     }
   });
