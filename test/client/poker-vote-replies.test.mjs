@@ -195,6 +195,24 @@ test("#692: a stale revealed echo after reset does not restore the old result", 
   } finally { client.dispose(); }
 });
 
+test("#720: after the stale reveal echo is dropped, another participant's identical Reveal still shows", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: null }] };
+    client.click("reveal");
+    receive(revealed);
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive(revealed); // late echo of the old reveal: dropped
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("votes"), []);
+    receive(revealed); // Bob reveals the next round
+    assert.equal(client.childTextContents("votes").length, 1);
+    assert.equal(client.isDisabled("card-8"), true);
+  } finally { client.dispose(); }
+});
+
 test("#712: an unvoted Reveal-Reset-Reveal still shows the second round result", () => {
   const { client, receive, socket } = setup();
   try {

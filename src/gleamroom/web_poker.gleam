@@ -137,6 +137,7 @@ pub fn poker_html() -> String {
   // reset で捨てた旧ラウンドの公開結果。reset 後に遅れて届く旧 revealed の自己エコーを
   // 新ラウンドの reveal と取り違えて旧結果を復活させない（#692）。
   let staleRevealJson = null;
+  let staleRevealLeft = 0;
   // 自分が reveal を送ったラウンドだけ旧自己エコーが遅れて届きうる。他参加者の reveal は
   // broadcast 1通なので旧エコーを持たない（#712）。
   let ownRevealSent = false;
@@ -177,6 +178,8 @@ pub fn poker_html() -> String {
     const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
     if (phase === \"revealed\" && votes.length > 0 && ownRevealSent && ownRevealedCount < 2) {
       staleRevealJson = JSON.stringify(votes);
+      // 自己エコーは直接応答+broadcast の計2通。未到着の分だけ除外する（#720）。
+      staleRevealLeft = 2 - ownRevealedCount;
     }
     ownRevealSent = false;
     ownRevealedCount = 0;
@@ -492,9 +495,14 @@ pub fn poker_html() -> String {
             JSON.stringify(message.votes) === staleRevealJson &&
             ownVote === null && pendingVotes.size === 0 &&
             ![...participants.values()].some((p) => p.has_voted)) {
+          // 未到着の旧エコーを1通消費した。残りが無ければ以後の同内容の revealed は
+          // 新ラウンドの正規通知として受ける（#720）。
+          staleRevealLeft--;
+          if (staleRevealLeft <= 0) staleRevealJson = null;
           break;
         }
         staleRevealJson = null;
+        staleRevealLeft = 0;
         phase = \"revealed\";
         votes = message.votes;
         updateCardButtons();
@@ -538,6 +546,7 @@ pub fn poker_html() -> String {
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
           staleRevealJson = revealRollback.stale;
+          staleRevealLeft = revealRollback.left;
           revealRollback = null;
           break;
         }
@@ -646,10 +655,11 @@ pub fn poker_html() -> String {
     if (sendIfOpen({ type: \"reveal\" })) {
       // rate_limited で拒否されたら、この再送は未到着の自己エコーを生まないので
       // 送信前の追跡状態へ戻す（#718）。
-      revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson };
+      revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson, left: staleRevealLeft };
       ownRevealSent = true;
       ownRevealedCount = 0;
       staleRevealJson = null;
+      staleRevealLeft = 0;
     }
   });
 
