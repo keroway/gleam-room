@@ -156,6 +156,59 @@ test("reset 応答後に送った BUZZ は reset の自己エコーで押下可�
   }
 });
 
+function joinAsAliceWithBobBuzz(client) {
+  client.submitJoin();
+  const socket = client.latestSocket();
+  socket.handlers.open?.();
+  send(socket, {
+    type: "state",
+    self_id: "alice",
+    participants: [
+      { participant_id: "alice", display_name: "Alice" },
+      { participant_id: "bob", display_name: "Bob" },
+    ],
+    buzzes: [{ participant_id: "bob", display_name: "Bob", position: 1 }],
+  });
+  return socket;
+}
+
+test("reset の直接応答前に送った BUZZ が成功したらボタンは無効のまま（#724）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAsAliceWithBobBuzz(client);
+    client.click("reset");
+    client.click("buzz");
+    send(socket, { type: "round_reset" });
+    send(socket, {
+      type: "buzz_accepted",
+      participant_id: "alice",
+      display_name: "Alice",
+      position: 1,
+    });
+    assert.equal(client.isDisabled("buzz"), true, "成功した本人のボタンが有効に戻った");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("reset 後の他参加者の成功通知では自分のボタンは有効のまま（#724）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAsAliceWithBobBuzz(client);
+    client.click("reset");
+    send(socket, { type: "round_reset" });
+    send(socket, {
+      type: "buzz_accepted",
+      participant_id: "bob",
+      display_name: "Bob",
+      position: 1,
+    });
+    assert.equal(client.isDisabled("buzz"), false, "他参加者の通知で無効化された");
+  } finally {
+    client.dispose();
+  }
+});
+
 test("切断後の再 join（state 受信）でボタンが有効に戻る", () => {
   const client = startClient();
   try {
