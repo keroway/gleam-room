@@ -234,6 +234,13 @@ pub fn index_html() -> String {
         if (!buzzes.some((b) => b.position === message.position)) {
           buzzes.push(message);
           renderBuzzes();
+          // reset の直接応答より先に送った BUZZ が成功すると、後着の round_reset が
+          // 楽観的な押下済みを解除済みのまま自分の成功通知だけが届く（#724）。
+          // 自己IDの新規成功通知は、現ラウンドで押下済みの確定証拠として戻す。
+          if (selfId !== null && message.participant_id === selfId && !hasBuzzed) {
+            hasBuzzed = true;
+            updateBuzzButton();
+          }
           log(`buzz accepted: ${message.participant_id} (#${message.position})`);
         }
         break;
