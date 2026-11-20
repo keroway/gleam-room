@@ -482,7 +482,12 @@ pub fn poker_html() -> String {
         // 同じ理由（#526）で revealed も自己エコーが2回届く。round には
         // position のような一意キーが無いため、直前の revealed と phase・
         // votes 内容が両方一致するかどうかを冪等化キーとして使う。
-        if (ownRevealSent) ownRevealedCount++;
+        if (ownRevealSent) {
+          ownRevealedCount++;
+          // revealed を受けたので reveal は受理済み。以後の rate_limited を reveal への拒否と
+          // 取り違えないよう戻し先を捨てる（#726）。
+          revealRollback = null;
+        }
         const alreadyRevealed =
           phase === \"revealed\" && JSON.stringify(votes) === JSON.stringify(message.votes);
         if (alreadyRevealed) {
@@ -541,8 +546,10 @@ pub fn poker_html() -> String {
         if (handleConnectionError(message.code)) {
           break;
         }
-        // 直前に送ったのが reveal なら、その rate_limited は reveal への拒否とみなす（#718）。
-        if (message.code === \"rate_limited\" && lastSentType === \"reveal\" && revealRollback !== null) {
+        // 未決の reveal があるときの rate_limited は reveal への拒否とみなす（#718）。
+        // 応答前に reset を送って lastSentType が上書きされても、reset の拒否は request_id 付きの
+        // 直接応答で返るので、vote 以外なら reveal 側として扱う（#726）。
+        if (message.code === \"rate_limited\" && lastSentType !== \"vote\" && revealRollback !== null) {
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
           staleRevealJson = revealRollback.stale;
