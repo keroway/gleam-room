@@ -175,6 +175,27 @@ test("#695: a vote echo arriving after reset does not restore the voted mark", (
   } finally { client.dispose(); }
 });
 
+test("#732: two success replies before their echoes do not let a late echo restore the voted mark after reset", () => {
+  const { client, vote, reply, receive, socket } = setup();
+  try {
+    const first = vote("5");
+    const second = vote("8");
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    reply(first);
+    reply(second);
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "vote_registered", participant_id: "p1" });
+    receive({ type: "vote_registered", participant_id: "p1" });
+    assert.deepEqual(client.childTextContents("participants"), ["Alice", "Bob"]);
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("participants"), ["Alice", "Bob"]);
+    // a legitimate vote in the new round still marks the participant
+    reply(vote("5"));
+    assert.deepEqual(client.childTextContents("participants"), ["Alice ✓", "Bob"]);
+  } finally { client.dispose(); }
+});
+
 test("#692: a stale revealed echo after reset does not restore the old result", () => {
   const { client, receive, socket } = setup();
   try {

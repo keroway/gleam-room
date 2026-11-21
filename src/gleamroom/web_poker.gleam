@@ -268,7 +268,8 @@ pub fn poker_html() -> String {
       log(`error [${result.code}]: ${result.message}`);
       handleConnectionError(result.code);
     } else {
-      handleServerMessage(result);
+      // 直接応答は未到着の自己エコー枠を消費しない（連続投票で枠が減るのを防ぐ。#732）。
+      handleServerMessage(result, true);
       ownVoteEchoes.set(result.participant_id,
         (ownVoteEchoes.get(result.participant_id) || 0) + 1);
     }
@@ -347,7 +348,7 @@ pub fn poker_html() -> String {
     );
   }
 
-  function handleServerMessage(message) {
+  function handleServerMessage(message, isDirectReply = false) {
     switch (message.type) {
       case \"state\":
         // 妥当な JSON でも phase/participants フィールドが欠落・型不一致の
@@ -450,7 +451,7 @@ pub fn poker_html() -> String {
         const participant = participants.get(message.participant_id);
         // 自分の成功応答に対応する自己エコーは、reset をまたいでも状態に反映しない（#695）。
         // 応答が先に has_voted を立てるので、エコーを捨てても表示は欠けない。
-        const echoes = ownVoteEchoes.get(message.participant_id) || 0;
+        const echoes = isDirectReply ? 0 : ownVoteEchoes.get(message.participant_id) || 0;
         if (echoes > 0) {
           if (echoes === 1) ownVoteEchoes.delete(message.participant_id);
           else ownVoteEchoes.set(message.participant_id, echoes - 1);
