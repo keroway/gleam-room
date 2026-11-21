@@ -552,6 +552,10 @@ pub fn poker_html() -> String {
         // サーバーは vote の拒否を request_id 付きの vote_reply で返し、通常の error は
         // 受信順で先行する未決の reveal への拒否だけになる（#728）。
         if (message.code === \"rate_limited\" && revealRollback !== null) {
+          // 未応答の再送が残っている間は、後続の受理で自己エコーが届きうるので戻さない（#730）。
+          if (--revealRollback.pending > 0) {
+            break;
+          }
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
           staleRevealJson = revealRollback.stale;
@@ -664,7 +668,12 @@ pub fn poker_html() -> String {
     if (sendIfOpen({ type: \"reveal\" })) {
       // rate_limited で拒否されたら、この再送は未到着の自己エコーを生まないので
       // 送信前の追跡状態へ戻す（#718）。
-      revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson, left: staleRevealLeft };
+      // 未応答の再送が複数あるときは最初の送信前の状態を保ち、全件が拒否されたときに戻す（#730）。
+      if (revealRollback === null) {
+        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson, left: staleRevealLeft, pending: 1 };
+      } else {
+        revealRollback.pending++;
+      }
       ownRevealSent = true;
       ownRevealedCount = 0;
       staleRevealJson = null;
