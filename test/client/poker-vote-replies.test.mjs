@@ -292,6 +292,27 @@ test("#726: a Reveal rejection arriving after a Reset was sent is not counted as
   } finally { client.dispose(); }
 });
 
+test("#728: a Reveal rejection arriving after a vote was sent is not counted as an unarrived echo", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const limited = { type: "error", code: "rate_limited", message: "slow down" };
+    const revealed = { type: "revealed", votes: [
+      { participant_id: "p1", display_name: "Alice", value: null },
+      { participant_id: "p2", display_name: "Bob", value: null },
+    ] };
+    client.click("reveal");
+    client.click("card-8");
+    const voteId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive(limited);
+    receive({ type: "vote_reply", request_id: voteId, result: limited });
+    receive(revealed); // Bob reveals
+    receive({ type: "round_reset" });
+    receive(revealed); // Bob reveals the next round
+    assert.equal(client.childTextContents("votes").length, 2);
+    assert.equal(client.isDisabled("card-8"), true);
+  } finally { client.dispose(); }
+});
+
 test("#693: a success reply for a vote evicted at the 65th vote keeps the selection", () => {
   const { client, receive, socket } = setup();
   try {
