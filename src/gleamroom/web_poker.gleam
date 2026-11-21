@@ -548,8 +548,10 @@ pub fn poker_html() -> String {
         }
         // 未決の reveal があるときの rate_limited は reveal への拒否とみなす（#718）。
         // 応答前に reset を送って lastSentType が上書きされても、reset の拒否は request_id 付きの
-        // 直接応答で返るので、vote 以外なら reveal 側として扱う（#726）。
-        if (message.code === \"rate_limited\" && lastSentType !== \"vote\" && revealRollback !== null) {
+        // 直接応答で返るので reveal 側として扱う（#726）。応答前に vote を送っても同じ:
+        // サーバーは vote の拒否を request_id 付きの vote_reply で返し、通常の error は
+        // 受信順で先行する未決の reveal への拒否だけになる（#728）。
+        if (message.code === \"rate_limited\" && revealRollback !== null) {
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
           staleRevealJson = revealRollback.stale;
