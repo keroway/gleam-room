@@ -144,6 +144,8 @@ pub fn poker_html() -> String {
   // 自分の reveal に対する revealed は直接応答と自己エコーの2通届く。reset 前に2通とも
   // 受信済みなら reset 後に旧エコーは来ないので、旧結果として捨ててはならない（#716）。
   let ownRevealedCount = 0;
+  // 受理されうる自分の reveal 数 × 2（直接応答+自己エコー）。応答前に複数送ると増える（#734）。
+  let ownRevealExpected = 2;
   // 直近の reveal 送信前の追跡状態。rate_limited の拒否で戻す（#718）。
   let revealRollback = null;
   let nextResetId = 0;
@@ -176,13 +178,14 @@ pub fn poker_html() -> String {
   // vote_registered を返すため、消すと選択表示が復元されない（#683）。
   function applyRoundReset(keepAfterId = Infinity) {
     const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
-    if (phase === \"revealed\" && votes.length > 0 && ownRevealSent && ownRevealedCount < 2) {
+    if (phase === \"revealed\" && votes.length > 0 && ownRevealSent && ownRevealedCount < ownRevealExpected) {
       staleRevealJson = JSON.stringify(votes);
-      // 自己エコーは直接応答+broadcast の計2通。未到着の分だけ除外する（#720）。
-      staleRevealLeft = 2 - ownRevealedCount;
+      // 自己エコーは1 reveal あたり直接応答+broadcast の計2通。未到着の分だけ除外する（#720, #734）。
+      staleRevealLeft = ownRevealExpected - ownRevealedCount;
     }
     ownRevealSent = false;
     ownRevealedCount = 0;
+    ownRevealExpected = 2;
     phase = \"voting\";
     votes = [];
     ownVote = null;
@@ -555,10 +558,12 @@ pub fn poker_html() -> String {
         if (message.code === \"rate_limited\" && revealRollback !== null) {
           // 未応答の再送が残っている間は、後続の受理で自己エコーが届きうるので戻さない（#730）。
           if (--revealRollback.pending > 0) {
+            ownRevealExpected = Math.max(2, ownRevealExpected - 2);
             break;
           }
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
+          ownRevealExpected = revealRollback.expected;
           staleRevealJson = revealRollback.stale;
           staleRevealLeft = revealRollback.left;
           revealRollback = null;
@@ -671,10 +676,13 @@ pub fn poker_html() -> String {
       // 送信前の追跡状態へ戻す（#718）。
       // 未応答の再送が複数あるときは最初の送信前の状態を保ち、全件が拒否されたときに戻す（#730）。
       if (revealRollback === null) {
-        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, stale: staleRevealJson, left: staleRevealLeft, pending: 1 };
+        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, expected: ownRevealExpected, stale: staleRevealJson, left: staleRevealLeft, pending: 1 };
       } else {
         revealRollback.pending++;
       }
+      // 未到着の通知が残っている間の再送は、その分に新しい2通を足す（#734）。
+      const outstanding = ownRevealSent ? Math.max(0, ownRevealExpected - ownRevealedCount) : 0;
+      ownRevealExpected = outstanding + 2;
       ownRevealSent = true;
       ownRevealedCount = 0;
       staleRevealJson = null;
