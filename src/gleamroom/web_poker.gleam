@@ -490,7 +490,14 @@ pub fn poker_html() -> String {
           ownRevealedCount++;
           // revealed を受けたので reveal は受理済み。以後の rate_limited を reveal への拒否と
           // 取り違えないよう戻し先を捨てる（#726）。
-          revealRollback = null;
+          // 未応答の再送が複数あるときは、到着数から確実に受理済みと言える件数
+          // （1件の受理につき2通届くので切り上げ）を引いた残りが無くなるまで保つ（#738）。
+          if (revealRollback !== null) {
+            revealRollback.arrived++;
+            if (revealRollback.pending <= Math.ceil(revealRollback.arrived / 2)) {
+              revealRollback = null;
+            }
+          }
         }
         const alreadyRevealed =
           phase === \"revealed\" && JSON.stringify(votes) === JSON.stringify(message.votes);
@@ -559,6 +566,10 @@ pub fn poker_html() -> String {
           // 未応答の再送が残っている間は、後続の受理で自己エコーが届きうるので戻さない（#730）。
           if (--revealRollback.pending > 0) {
             ownRevealExpected = Math.max(2, ownRevealExpected - 2);
+            // 先に受理の通知が届いていて、残りも全て受理済みと確定したら追跡を終える（#738）。
+            if (revealRollback.pending <= Math.ceil(revealRollback.arrived / 2)) {
+              revealRollback = null;
+            }
             break;
           }
           ownRevealSent = revealRollback.sent;
@@ -676,7 +687,7 @@ pub fn poker_html() -> String {
       // 送信前の追跡状態へ戻す（#718）。
       // 未応答の再送が複数あるときは最初の送信前の状態を保ち、全件が拒否されたときに戻す（#730）。
       if (revealRollback === null) {
-        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, expected: ownRevealExpected, stale: staleRevealJson, left: staleRevealLeft, pending: 1 };
+        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, expected: ownRevealExpected, stale: staleRevealJson, left: staleRevealLeft, pending: 1, arrived: 0 };
       } else {
         revealRollback.pending++;
       }

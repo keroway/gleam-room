@@ -238,6 +238,47 @@ test("#734: two accepted Reveals before Reset leave two stale echoes that do not
   } finally { client.dispose(); }
 });
 
+test("#738: one accepted and one rate-limited Reveal before Reset leave two stale echoes that do not restore the old result", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: null }] };
+    client.click("reveal");
+    client.click("reveal");
+    receive(revealed);
+    receive({ type: "error", code: "rate_limited", message: "slow down" });
+    receive(revealed);
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "round_reset" });
+    assert.equal(client.isDisabled("card-8"), false);
+    assert.deepEqual(client.childTextContents("votes"), []);
+    // the next round's identical Reveal now applies
+    receive(revealed);
+    assert.equal(client.isDisabled("card-8"), true);
+    assert.equal(client.childTextContents("votes").length, 1);
+  } finally { client.dispose(); }
+});
+
+test("#738: a rate-limited Reveal arriving after both echoes of the accepted one is still counted", () => {
+  const { client, receive, socket } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: null }] };
+    client.click("reveal");
+    client.click("reveal");
+    receive(revealed);
+    receive(revealed);
+    receive({ type: "error", code: "rate_limited", message: "slow down" });
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("votes"), []);
+    receive(revealed);
+    assert.equal(client.childTextContents("votes").length, 1);
+  } finally { client.dispose(); }
+});
+
 test("#720: after the stale reveal echo is dropped, another participant's identical Reveal still shows", () => {
   const { client, receive, socket } = setup();
   try {
