@@ -8,14 +8,15 @@ shares the buzzer's shape (one room, multiple WebSocket clients, a
 server-authoritative round) while introducing a requirement the buzzer never
 needed: **secrecy until reveal**.
 
-Per ADR 0009, Planning Poker duplicates the buzzer's registry/transport/
-client rather than sharing code with it, with one narrow exception:
-`poker_registry.gleam` calls `registry.get_default_max_rooms()` directly
-instead of keeping its own copy of the default max-rooms value (see
-`docs/duplication-inventory.md` §1.1). This document, plus
-[`docs/mvp.md`](mvp.md) for the buzzer, are the two data points step 4
-(extracting reusable room/presence/lifecycle primitives) will compare before
-generalizing anything.
+Per ADR 0009, Planning Poker initially duplicated the buzzer's registry/
+transport/client rather than sharing code with it. Once both apps worked, the
+common parts were extracted (ADR 0009 Updates, #586〜#589): `room_registry`,
+`wire`, `ws_guard` and `client_js` are now shared by both apps. The registry
+actors stay independent per app; domain modules, phase machines, wire message
+vocabularies and per-app HTML/client logic remain app-specific. No general
+room framework has been extracted (see `docs/duplication-inventory.md`).
+This document, plus [`docs/mvp.md`](mvp.md) for the buzzer, are the two data
+points any further generalization should be judged against.
 
 ## Primary user flow
 
