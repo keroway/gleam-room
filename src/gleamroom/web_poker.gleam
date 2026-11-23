@@ -278,14 +278,24 @@ pub fn poker_html() -> String {
     }
   }
 
+  // 接続をまたいで Reveal の追跡状態を持ち越さない（#744）。旧接続の未応答 Reveal が
+  // 残ると、新接続での拒否処理後も自己エコー待ちが残り正規の公開通知を捨ててしまう。
+  function clearRevealTracking() {
+    staleRevealJson = null;
+    staleRevealLeft = 0;
+    ownRevealSent = false;
+    ownRevealedCount = 0;
+    ownRevealExpected = 2;
+    revealRollback = null;
+  }
+
   function resetRoomView() {
     participants = new Map();
     votes = [];
     ownVote = null;
     clearVoteRollbacks();
     ownResetEchoes = 0;
-    staleRevealJson = null;
-    ownRevealSent = false;
+    clearRevealTracking();
     ownVoteEchoes.clear();
     pendingResets.clear();
     evictedResets.clear();
@@ -389,8 +399,7 @@ pub fn poker_html() -> String {
         ownVote = null;
         clearVoteRollbacks();
         ownResetEchoes = 0;
-        staleRevealJson = null;
-        ownRevealSent = false;
+        clearRevealTracking();
         ownVoteEchoes.clear();
         pendingResets.clear();
         setConnected(true);
