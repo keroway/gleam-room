@@ -371,7 +371,7 @@ pub fn poker_html() -> String {
         // 配列要素も検証する。null 要素などで setConnected(true) の前後に
         // 例外終了すると部分適用状態が残る（#647）。votes は省略されうる。
         if (
-          typeof message.phase !== \"string\" ||
+          (message.phase !== \"voting\" && message.phase !== \"revealed\") ||
           !Array.isArray(message.participants) ||
           !message.participants.every(
             (p) =>
