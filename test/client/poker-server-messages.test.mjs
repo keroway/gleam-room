@@ -838,6 +838,35 @@ test("state の participants/votes に不正な要素があると、connected �
   }
 });
 
+test("state の phase が voting/revealed 以外だと、connected にならず Join 期限を維持する（#746）", () => {
+  for (const phase of ["unknown", "", 42, null]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      const before = client.timerDelays();
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "state",
+          phase,
+          participants: [{ participant_id: "p1", display_name: "Alice", has_voted: false }],
+          votes: [],
+        }),
+      });
+
+      assert.notEqual(client.connectionState(), "connected");
+      assert.deepEqual(client.timerDelays(), before, "Join 期限タイマーが解除されている");
+      assert.ok(
+        client.logs.some((line) => line.includes("state message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("revealed の votes に不正な要素があると、phase・カード状態・votes を更新しない（#647）", () => {
   const client = startClient(POKER_MODULE);
   try {
