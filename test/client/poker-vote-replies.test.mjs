@@ -280,6 +280,28 @@ test("#740: a stale Reveal echo after a new-round vote does not restore the old 
   } finally { client.dispose(); }
 });
 
+test("#742: a stale Reveal echo with valued votes after a new-round vote does not restore the old result", () => {
+  const { client, receive, vote, reply, socket } = setup();
+  try {
+    const first = vote("5");
+    reply(first);
+    receive({ type: "vote_registered", participant_id: "p1" });
+    client.click("reveal");
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    const revealed = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: "5" }] };
+    receive(revealed);
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    const voteId = vote("8");
+    receive(revealed);
+    receive({ type: "round_reset" });
+    reply(voteId);
+    receive({ type: "vote_registered", participant_id: "p1" });
+    assert.equal(client.isDisabled("card-8"), false);
+    assert.deepEqual(client.childTextContents("votes"), []);
+  } finally { client.dispose(); }
+});
+
 test("#738: a rate-limited Reveal arriving after both echoes of the accepted one is still counted", () => {
   const { client, receive, socket } = setup();
   try {
