@@ -507,14 +507,12 @@ pub fn poker_html() -> String {
         // reset 済みで誰も新ラウンドの票を持たない間に、旧ラウンドと同一内容の revealed が
         // 届いたら旧 reveal の自己エコーとして捨てる（#692）。新ラウンドの reveal は
         // 票が入るので内容が変わるか、票の痕跡（has_voted 等）がある。
-        // 新ラウンドで票を入れた痕跡があっても、旧 reveal に値のある票が1つも無ければ
-        // 同内容の通知は旧エコーとみなす: 新ラウンドの正規の reveal なら票の値を含むので
-        // 内容が変わる（#740）。
+        // 新ラウンドで票を入れた痕跡（ownVote・pendingVotes・has_voted）があっても、
+        // 未到着の旧エコーが残っている間は同内容の通知を旧エコーとみなす。サーバーは
+        // reveal・reset・vote を受信順に処理して配信するので、旧エコーは新ラウンドの
+        // 正規の reveal より必ず先に届く。値のある旧投票でも同じ（#740, #742）。
         if (staleRevealJson !== null && phase === \"voting\" &&
-            JSON.stringify(message.votes) === staleRevealJson &&
-            (message.votes.every((v) => v.value === null) ||
-              (ownVote === null && pendingVotes.size === 0 &&
-                ![...participants.values()].some((p) => p.has_voted)))) {
+            JSON.stringify(message.votes) === staleRevealJson) {
           // 未到着の旧エコーを1通消費した。残りが無ければ以後の同内容の revealed は
           // 新ラウンドの正規通知として受ける（#720）。
           staleRevealLeft--;
