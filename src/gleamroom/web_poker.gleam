@@ -380,7 +380,8 @@ pub fn poker_html() -> String {
               typeof p.participant_id === \"string\" &&
               typeof p.display_name === \"string\",
           ) ||
-          (Array.isArray(message.votes) && !message.votes.every(isValidVote))
+          (message.votes !== undefined &&
+            (!Array.isArray(message.votes) || !message.votes.every(isValidVote)))
         ) {
           log(`state message missing expected fields: ${JSON.stringify(message)}`);
           break;
