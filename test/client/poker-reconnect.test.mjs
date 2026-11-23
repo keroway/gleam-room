@@ -145,3 +145,38 @@ test("接続中は保留中の再接続タイマーが残らない", () => {
     client.dispose();
   }
 });
+
+test("#744: 切断前の未応答Revealの追跡は再接続後に持ち越されない", () => {
+  const client = startClient(POKER_MODULE);
+  try {
+    client.submitJoin();
+    const first = client.latestSocket();
+    first.handlers.open();
+    first.handlers.message({ data: JSON.stringify({
+      type: "state", phase: "voting",
+      participants: [{ participant_id: "p1", display_name: "Alice", has_voted: false }], votes: [],
+    }) });
+    client.click("reveal");
+    first.handlers.close();
+    client.runTimers();
+
+    const socket = client.latestSocket();
+    socket.handlers.open();
+    const receive = (message) => socket.handlers.message({ data: JSON.stringify(message) });
+    const revealed = { type: "revealed", votes: [{ participant_id: "p2", display_name: "Alice", value: null }] };
+    receive({ type: "state", phase: "revealed",
+      participants: [{ participant_id: "p2", display_name: "Alice", has_voted: false }], votes: revealed.votes });
+    client.click("reveal");
+    receive({ type: "error", code: "rate_limited", message: "Too many messages. Please slow down." });
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    receive({ type: "round_reset" });
+    receive(revealed);
+
+    assert.deepEqual(client.childTextContents("votes"), ["Alice: (no vote)"]);
+    assert.equal(client.isDisabled("card-8"), true);
+  } finally {
+    client.dispose();
+  }
+});
