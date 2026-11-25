@@ -501,10 +501,11 @@ pub fn poker_html() -> String {
           // revealed を受けたので reveal は受理済み。以後の rate_limited を reveal への拒否と
           // 取り違えないよう戻し先を捨てる（#726）。
           // 未応答の再送が複数あるときは、到着数から確実に受理済みと言える件数
-          // （1件の受理につき2通届くので切り上げ）を引いた残りが無くなるまで保つ（#738）。
+          // （1件の受理につき2通届くので切り捨て）を引いた残りが無くなるまで保つ（#738）。
+          // 1通目は他参加者の公開通知かもしれず、自分の拒否が後から来うる（#750）。
           if (revealRollback !== null) {
             revealRollback.arrived++;
-            if (revealRollback.pending <= Math.ceil(revealRollback.arrived / 2)) {
+            if (revealRollback.pending <= Math.floor(revealRollback.arrived / 2)) {
               revealRollback = null;
             }
           }
@@ -579,7 +580,7 @@ pub fn poker_html() -> String {
           if (--revealRollback.pending > 0) {
             ownRevealExpected = Math.max(2, ownRevealExpected - 2);
             // 先に受理の通知が届いていて、残りも全て受理済みと確定したら追跡を終える（#738）。
-            if (revealRollback.pending <= Math.ceil(revealRollback.arrived / 2)) {
+            if (revealRollback.pending <= Math.floor(revealRollback.arrived / 2)) {
               revealRollback = null;
             }
             break;
