@@ -496,6 +496,14 @@ pub fn poker_html() -> String {
         // 同じ理由（#526）で revealed も自己エコーが2回届く。round には
         // position のような一意キーが無いため、直前の revealed と phase・
         // votes 内容が両方一致するかどうかを冪等化キーとして使う。
+        // 旧ラウンドの自己エコーは、reset 後に reveal を再送していても新しい reveal の
+        // 到着数に数えない。再送の送信・拒否とは独立に、未到着数だけ捨てる（#752）。
+        if (staleRevealJson !== null && phase === \"voting\" &&
+            JSON.stringify(message.votes) === staleRevealJson) {
+          staleRevealLeft--;
+          if (staleRevealLeft <= 0) staleRevealJson = null;
+          break;
+        }
         if (ownRevealSent) {
           ownRevealedCount++;
           // revealed を受けたので reveal は受理済み。以後の rate_limited を reveal への拒否と
@@ -522,14 +530,7 @@ pub fn poker_html() -> String {
         // 未到着の旧エコーが残っている間は同内容の通知を旧エコーとみなす。サーバーは
         // reveal・reset・vote を受信順に処理して配信するので、旧エコーは新ラウンドの
         // 正規の reveal より必ず先に届く。値のある旧投票でも同じ（#740, #742）。
-        if (staleRevealJson !== null && phase === \"voting\" &&
-            JSON.stringify(message.votes) === staleRevealJson) {
-          // 未到着の旧エコーを1通消費した。残りが無ければ以後の同内容の revealed は
-          // 新ラウンドの正規通知として受ける（#720）。
-          staleRevealLeft--;
-          if (staleRevealLeft <= 0) staleRevealJson = null;
-          break;
-        }
+        // 旧エコーの消費は上（#720: 残りが無ければ以後の同内容は新ラウンドの正規通知）。
         staleRevealJson = null;
         staleRevealLeft = 0;
         phase = \"revealed\";
@@ -588,8 +589,7 @@ pub fn poker_html() -> String {
           ownRevealSent = revealRollback.sent;
           ownRevealedCount = revealRollback.count;
           ownRevealExpected = revealRollback.expected;
-          staleRevealJson = revealRollback.stale;
-          staleRevealLeft = revealRollback.left;
+          // 旧エコーの除外は再送と独立なので戻さない（#752）。
           revealRollback = null;
           break;
         }
@@ -700,7 +700,7 @@ pub fn poker_html() -> String {
       // 送信前の追跡状態へ戻す（#718）。
       // 未応答の再送が複数あるときは最初の送信前の状態を保ち、全件が拒否されたときに戻す（#730）。
       if (revealRollback === null) {
-        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, expected: ownRevealExpected, stale: staleRevealJson, left: staleRevealLeft, pending: 1, arrived: 0 };
+        revealRollback = { sent: ownRevealSent, count: ownRevealedCount, expected: ownRevealExpected, pending: 1, arrived: 0 };
       } else {
         revealRollback.pending++;
       }
@@ -709,8 +709,6 @@ pub fn poker_html() -> String {
       ownRevealExpected = outstanding + 2;
       ownRevealSent = true;
       ownRevealedCount = 0;
-      staleRevealJson = null;
-      staleRevealLeft = 0;
     }
   });
 
