@@ -89,6 +89,29 @@ test("participant_joined メッセージが妥当なJSONだが participant フ�
   }
 });
 
+test("participant_joined の display_name が欠落・null・数値だと、participants に追加せず警告を残す（#754）", () => {
+  for (const displayName of [undefined, null, 5]) {
+    const client = startClient();
+    try {
+      const socket = joinAndConnect(client);
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "participant_joined",
+          participant: { participant_id: "p2", display_name: displayName },
+        }),
+      });
+
+      assert.ok(
+        client.logs.some((line) => line.includes("participant_joined message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+      assert.deepEqual(client.childTextContents("participants"), []);
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
   const client = startClient();
   try {

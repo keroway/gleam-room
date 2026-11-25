@@ -197,6 +197,35 @@ test("Voting中にparticipant_joinedを受信しても、結果一覧には行�
   }
 });
 
+test("participant_joined の display_name が欠落・null・数値だと、participants・公開中のvotesを変えず警告を残す（#754）", () => {
+  for (const displayName of [undefined, null, 5]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(
+        client,
+        [{ participant_id: "p1", display_name: "Alice", has_voted: false }],
+        "revealed",
+        [{ participant_id: "p1", display_name: "Alice", value: null }],
+      );
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "participant_joined",
+          participant: { participant_id: "p2", display_name: displayName },
+        }),
+      });
+
+      assert.ok(
+        client.logs.some((line) => line.includes("participant_joined message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+      assert.deepEqual(client.childTextContents("participants"), ["Alice"]);
+      assert.deepEqual(client.childTextContents("votes"), ["Alice: (no vote)"]);
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
   const client = startClient(POKER_MODULE);
   try {

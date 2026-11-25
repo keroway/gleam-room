@@ -415,7 +415,8 @@ pub fn poker_html() -> String {
         if (
           typeof message.participant !== \"object\" ||
           message.participant === null ||
-          typeof message.participant.participant_id !== \"string\"
+          typeof message.participant.participant_id !== \"string\" ||
+          typeof message.participant.display_name !== \"string\"
         ) {
           log(`participant_joined message missing expected fields: ${JSON.stringify(message)}`);
           break;
