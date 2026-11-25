@@ -439,6 +439,23 @@ test("#728: a Reveal rejection arriving after a vote was sent is not counted as 
   } finally { client.dispose(); }
 });
 
+test("#750: another participant's Reveal arriving before our Reveal rejection does not drop the next round's Reveal", () => {
+  const { client, receive } = setup();
+  try {
+    const revealed = { type: "revealed", votes: [
+      { participant_id: "p1", display_name: "Alice", value: null },
+      { participant_id: "p2", display_name: "Bob", value: null },
+    ] };
+    client.click("reveal");
+    receive(revealed); // Bob's reveal, not our reply
+    receive({ type: "error", code: "rate_limited", message: "Too many messages. Please slow down." });
+    receive({ type: "round_reset" });
+    receive(revealed);
+    assert.equal(client.childTextContents("votes").length, 2);
+    assert.equal(client.isDisabled("card-8"), true);
+  } finally { client.dispose(); }
+});
+
 test("#730: two unanswered Reveal resends both rejected do not make the next Reveal a stale echo", () => {
   const { client, receive, socket } = setup();
   try {
