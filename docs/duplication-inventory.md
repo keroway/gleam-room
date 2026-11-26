@@ -192,18 +192,18 @@ Still duplicated because they read or update `ConnectionState` (whose
 `ConnectionEvent`/registry types differ per app), left in place by #588:
 
 - `on_init` heartbeat subject + `send_after` scheduling
-  (`websocket.gleam:114-133`, `poker_websocket.gleam:109-131`).
-- `mark_active`/`record_message` (`websocket.gleam:225-238`,
-  `poker_websocket.gleam:204-215`).
-- `handle_heartbeat_tick` (`websocket.gleam:240-263`,
-  `poker_websocket.gleam:217-243`).
+  (`websocket.gleam:118-138`, `poker_websocket.gleam:113-136`).
+- `mark_active`/`record_message` (`websocket.gleam:226-237`,
+  `poker_websocket.gleam:209-220`).
+- `handle_heartbeat_tick` (`websocket.gleam:239-266`,
+  `poker_websocket.gleam:222-249`).
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:660-693`,
-  `poker_websocket.gleam:732-750`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:707-832`,
-  `poker_websocket.gleam:748-844`) — these encode "how to talk to a room
+- `release_room` (`websocket.gleam:686-719`,
+  `poker_websocket.gleam:758-776`) and the `with_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:733-858`,
+  `poker_websocket.gleam:799-889`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.
   Generalizing this needs a room-operations interface (dispatch function,

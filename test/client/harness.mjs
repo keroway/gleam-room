@@ -72,6 +72,7 @@ export function startClient({ modulePath, functionName } = {}) {
 
   const sockets = [];
   let timers = [];
+  let intervals = [];
   let nextTimerId = 1;
 
   const sandbox = {
@@ -92,6 +93,18 @@ export function startClient({ modulePath, functionName } = {}) {
     },
     clearTimeout: (id) => {
       timers = timers.filter((timer) => timer.id !== id);
+    },
+    // setInterval は setTimeout とは別管理にする。keepalive ping（#764）の
+    // タイマーが pendingTimers()/runTimers()/timerDelays() に混ざると、
+    // 再接続・join 期限の既存アサートが崩れるため。
+    setInterval: (fn, delay) => {
+      const id = nextTimerId;
+      nextTimerId += 1;
+      intervals.push({ id, fn, delay });
+      return id;
+    },
+    clearInterval: (id) => {
+      intervals = intervals.filter((interval) => interval.id !== id);
     },
     WebSocket: class {
       static CONNECTING = 0;
@@ -196,6 +209,14 @@ export function startClient({ modulePath, functionName } = {}) {
     /// アサートするためのアクセサ。
     timerDelays() {
       return timers.map((timer) => timer.delay);
+    },
+    /// 稼働中の setInterval の delay 一覧（keepalive ping 用、#764）。
+    intervalDelays() {
+      return intervals.map((interval) => interval.delay);
+    },
+    /// 稼働中の setInterval を1周ぶん発火させる。
+    tickIntervals() {
+      [...intervals].forEach(({ fn }) => fn());
     },
     /// 差し替えたグローバルを元に戻す。テストごとに必ず呼ぶ。
     dispose() {

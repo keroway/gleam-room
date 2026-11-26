@@ -667,7 +667,7 @@ fn recv_text_message(
 }
 
 /// ハートビート間隔（実時間では30秒）を差し替えたサーバを起動し、実ポートを返す。
-/// 短い間隔にすることで、`RoomBroadcast` 受信による延命（#581）を gleeunit の
+/// 短い間隔にすることで、keepalive ping による延命（#764）などを gleeunit の
 /// テスト時間上限（約50秒）内で検証できる（#613）。
 fn start_server_with_heartbeat_interval(interval_ms: Int) -> Int {
   let assert Ok(registry_started) = registry.start()
@@ -691,36 +691,153 @@ fn start_server_with_heartbeat_interval(interval_ms: Int) -> Int {
   port
 }
 
-/// join だけして以後は何も送らない接続は、他参加者の操作による room 配信を
-/// 受け取り続ける限りハートビートで切断されない（#581 / #613）。
+/// join だけして以後は何も操作しない接続でも、keepalive `ping` を送り続ける限り
+/// ハートビートで切断されず、そのつど `pong` が返る（#764）。
 ///
-/// 間隔は300ms。Bob が100msごとに `reset` を送り、Alice は5窓分（1.5秒）の間
-/// 一切何も送らずに配信だけを受け取る。`RoomBroadcast` 分岐の `mark_active`
-/// が落ちると Alice は2回目の tick（600ms）で閉じられ、以降のフレームを
-/// 受け取れなくなる。
-pub fn ws_room_broadcast_keeps_silent_connection_alive_test() {
+/// 間隔は300ms。Alice は5窓分（1.5秒）の間、100msごとの `ping` 以外は何も
+/// 送らない。`ping` が生存の根拠にならなければ2回目の tick（600ms）で閉じられる。
+pub fn ws_ping_keeps_silent_connection_alive_test() {
+  let port = start_server_with_heartbeat_interval(300)
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
+
+  let _buffer = ping_n_times(alice, alice_buffer, 16)
+
+  tcp_close(alice)
+}
+
+/// 他参加者の操作による room 配信だけでは延命されない（#764。#581 の
+/// 「room 配信で延命」を廃止）。応答しない接続が他参加者の活動で永久に残らない。
+///
+/// Bob が100msごとに `reset` を送り続け、Alice は何も送らない。Alice は
+/// 配信を受け取りつつ、2回目の tick で `idle_timeout` で閉じられる。
+pub fn ws_room_broadcast_does_not_keep_silent_connection_alive_test() {
   let port = start_server_with_heartbeat_interval(300)
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
   let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
   let _bob_buffer = join_and_drain(bob, bob_buffer, "Bob")
-  // Bob の join は Alice にも配信される。以降の assert を単純にするため読み捨てる。
-  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
-  assert string.contains(joined, "\"type\":\"participant_joined\"")
 
-  let alice_buffer = relay_resets(bob, alice, alice_buffer, 15)
+  send_resets(bob, 10)
 
-  // 1.5秒後（tick 5回分）でも Alice は生きていて、最後の配信も届く。
-  send_client_message(bob, json.object([#("type", json.string("reset"))]))
-  let #(reply, _buffer) = recv_text_message(alice, alice_buffer)
-  assert reply == "{\"type\":\"round_reset\"}"
-
+  let #(reason, _rest) = recv_until_close(alice, alice_buffer)
+  assert reason
+    == ws.CustomCloseReason(4000, bit_array.from_string("idle_timeout"))
   tcp_close(alice)
   tcp_close(bob)
 }
 
-/// 上のテストの対照実験。何も送らず、room 配信も無い接続は、同じ間隔設定で
-/// 2回目の tick に閉じられる。これが成り立つから、上のテストが「延命された」
+/// 上限までの `ping` は通常操作のレート枠（窓あたり30件）を消費しない（#764）。
+/// 未参加の接続で4回 `ping` した後でも、`reset`（`not_joined` で拒否される）を
+/// 30回受け付け、31回目で初めて `rate_limited` になる。
+pub fn ws_pings_do_not_consume_message_rate_budget_test() {
+  let port = start_server_with_heartbeat_interval(30_000)
+  let #(socket, buffer) = handshake(port, 50)
+
+  let buffer = ping_n_times_without_delay(socket, buffer, 4)
+  let buffer = reset_n_times_expecting(socket, buffer, 30, "not_joined")
+  send_client_message(socket, json.object([#("type", json.string("reset"))]))
+  let #(reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"code\":\"rate_limited\"")
+  tcp_close(socket)
+}
+
+/// 無料枠を超えた `ping` は通常のメッセージとして数えられ、`ping` の大量送信も
+/// `rate_limited` に行き着く（#764）。無料4回 + 計数30回の34回は `pong`、35回目が拒否。
+pub fn ws_ping_flood_is_rate_limited_test() {
+  let port = start_server_with_heartbeat_interval(30_000)
+  let #(socket, buffer) = handshake(port, 50)
+
+  let buffer = ping_n_times_without_delay(socket, buffer, 34)
+  send_client_message(socket, json.object([#("type", json.string("ping"))]))
+  let #(reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"code\":\"rate_limited\"")
+  tcp_close(socket)
+}
+
+/// 100msごとに `ping` を送り、`pong` が返ることを確かめる。
+fn ping_n_times(socket: TcpSocket, buffer: BitArray, count: Int) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      process.sleep(100)
+      let buffer = ping_n_times_without_delay(socket, buffer, 1)
+      ping_n_times(socket, buffer, count - 1)
+    }
+  }
+}
+
+fn ping_n_times_without_delay(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      send_client_message(socket, json.object([#("type", json.string("ping"))]))
+      let #(reply, buffer) = recv_text_message(socket, buffer)
+      assert reply == "{\"type\":\"pong\"}"
+      ping_n_times_without_delay(socket, buffer, count - 1)
+    }
+  }
+}
+
+fn reset_n_times_expecting(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+  expected_code: String,
+) -> BitArray {
+  case count {
+    0 -> buffer
+    _ -> {
+      send_client_message(
+        socket,
+        json.object([#("type", json.string("reset"))]),
+      )
+      let #(reply, buffer) = recv_text_message(socket, buffer)
+      assert string.contains(reply, "\"code\":\"" <> expected_code <> "\"")
+      reset_n_times_expecting(socket, buffer, count - 1, expected_code)
+    }
+  }
+}
+
+/// `sender` が100msごとに `reset` を `count` 回送る。返信は読まない。
+fn send_resets(sender: TcpSocket, count: Int) -> Nil {
+  case count {
+    0 -> Nil
+    _ -> {
+      process.sleep(100)
+      send_client_message(
+        sender,
+        json.object([#("type", json.string("reset"))]),
+      )
+      send_resets(sender, count - 1)
+    }
+  }
+}
+
+/// close frame が来るまでテキストフレームを読み捨て、その理由を返す。
+fn recv_until_close(
+  socket: TcpSocket,
+  buffer: BitArray,
+) -> #(ws.CloseReason, BitArray) {
+  case ws.decode_frame(buffer, None) {
+    Ok(#(ws.Complete(ws.Control(ws.CloseFrame(reason))), rest)) -> #(
+      reason,
+      rest,
+    )
+    Ok(#(_, rest)) -> recv_until_close(socket, rest)
+    Error(_) -> {
+      let assert Ok(chunk) = tcp_recv(socket, 2000)
+      recv_until_close(socket, <<buffer:bits, chunk:bits>>)
+    }
+  }
+}
+
+/// 対照実験。何も送らず、room 配信も無い接続は、同じ間隔設定で
+/// 2回目の tick に閉じられる。これが成り立つから、ping のテストが「延命された」
 /// ことを意味する（間隔の差し替えが効いている証拠にもなる）。
 pub fn ws_silent_connection_without_broadcast_times_out_test() {
   let port = start_server_with_heartbeat_interval(300)
@@ -749,27 +866,4 @@ fn join_and_drain(
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
   buffer
-}
-
-/// `sender` が100msごとに `reset` を `count` 回送り、`receiver` はそのたびに
-/// 届く `round_reset` 配信を読み捨てる。`receiver` 側は何も送らない。
-fn relay_resets(
-  sender: TcpSocket,
-  receiver: TcpSocket,
-  buffer: BitArray,
-  count: Int,
-) -> BitArray {
-  case count {
-    0 -> buffer
-    _ -> {
-      process.sleep(100)
-      send_client_message(
-        sender,
-        json.object([#("type", json.string("reset"))]),
-      )
-      let #(reply, buffer) = recv_text_message(receiver, buffer)
-      assert reply == "{\"type\":\"round_reset\"}"
-      relay_resets(sender, receiver, buffer, count - 1)
-    }
-  }
 }

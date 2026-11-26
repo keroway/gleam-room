@@ -57,6 +57,15 @@ pub fn frame_size_outcome_over_the_limit_is_rejected_test() {
   assert ws_guard.frame_size_outcome(text) == ws_guard.FrameTooLarge
 }
 
+/// keepalive ping は窓あたり4回まではレート枠を消費しない（#764）。
+pub fn ping_outcome_at_the_free_limit_is_free_test() {
+  assert ws_guard.ping_outcome(4) == ws_guard.PingFree
+}
+
+pub fn ping_outcome_over_the_free_limit_is_counted_test() {
+  assert ws_guard.ping_outcome(5) == ws_guard.PingCounted
+}
+
 /// ハートビート窓内のメッセージ数が上限ちょうどなら受理する（#156）。
 pub fn message_rate_outcome_at_the_limit_is_accepted_test() {
   assert ws_guard.message_rate_outcome(30) == ws_guard.MessageRateAccepted

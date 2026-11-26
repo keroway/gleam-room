@@ -18,6 +18,15 @@ pub fn decode_buzz_test() {
     == Ok(protocol.Buzz)
 }
 
+pub fn decode_ping_test() {
+  assert protocol.decode_client_message("{\"type\":\"ping\"}")
+    == Ok(protocol.Ping)
+}
+
+pub fn encode_pong_test() {
+  assert protocol.encode_server_message(protocol.Pong) == "{\"type\":\"pong\"}"
+}
+
 pub fn decode_reset_test() {
   assert protocol.decode_client_message("{\"type\":\"reset\"}")
     == Ok(protocol.Reset)

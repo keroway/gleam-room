@@ -26,6 +26,10 @@ pub type ClientMessage {
   Join(room_id: RoomId, display_name: String)
   Buzz
   Reset
+  /// アプリレベルのkeepalive（#764）。ブラウザはWebSocketのping frameを送れず、
+  /// 無操作の部屋ではサーバ側のハートビートが30〜60秒で接続を閉じるため、
+  /// クライアントが定期的に送る。ドメイン（Room）には届かない。
+  Ping
 }
 
 /// A message sent from the server to a client.
@@ -43,6 +47,8 @@ pub type ServerMessage {
     position: Int,
   )
   RoundReset
+  /// `Ping` への応答（#764）。
+  Pong
   ProtocolErrorMessage(code: String, message: String)
 }
 
@@ -64,6 +70,7 @@ fn client_message_decoder() -> decode.Decoder(ClientMessage) {
     "join" -> join_decoder()
     "buzz" -> decode.success(Buzz)
     "reset" -> decode.success(Reset)
+    "ping" -> decode.success(Ping)
     _ -> decode.failure(Buzz, "ClientMessage")
   }
 }
@@ -113,6 +120,7 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("position", json.int(position)),
       ])
     RoundReset -> json.object([#("type", json.string("round_reset"))])
+    Pong -> json.object([#("type", json.string("pong"))])
     ProtocolErrorMessage(code, message) ->
       json.object([
         #("type", json.string("error")),

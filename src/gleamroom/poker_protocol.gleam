@@ -99,6 +99,8 @@ pub type ClientMessage {
   Vote(card: Card)
   Reveal
   Reset
+  /// Application-level keepalive (#764); never reaches the poker room.
+  Ping
 }
 
 /// A message sent from the server to a client.
@@ -122,6 +124,8 @@ pub type ServerMessage {
   VoteRegistered(participant_id: ParticipantId)
   RoundRevealed(votes: List(RevealedVote))
   RoundReset
+  /// Direct reply to `Ping` (#764).
+  Pong
   ProtocolErrorMessage(code: String, message: String)
   /// A vote rejected before dispatch (rate limit). Carries the rejected card
   /// so a client with several unanswered votes can tell which one was
@@ -138,6 +142,7 @@ type RawClientMessage {
   RawVote(value: String)
   RawReveal
   RawReset
+  RawPing
 }
 
 pub fn decode_client_message(
@@ -153,6 +158,7 @@ pub fn decode_client_message(
     Ok(RawVote(raw_value)) -> validate_vote(raw_value)
     Ok(RawReveal) -> Ok(Reveal)
     Ok(RawReset) -> Ok(Reset)
+    Ok(RawPing) -> Ok(Ping)
     Error(error) -> Error(wire.decode_error(error))
   }
 }
@@ -164,6 +170,7 @@ fn client_message_decoder() -> decode.Decoder(RawClientMessage) {
     "vote" -> vote_decoder()
     "reveal" -> decode.success(RawReveal)
     "reset" -> decode.success(RawReset)
+    "ping" -> decode.success(RawPing)
     _ -> decode.failure(RawReveal, "ClientMessage")
   }
 }
@@ -268,6 +275,7 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("votes", json.array(votes, revealed_vote_to_json)),
       ])
     RoundReset -> json.object([#("type", json.string("round_reset"))])
+    Pong -> json.object([#("type", json.string("pong"))])
     ProtocolErrorMessage(code, message) ->
       json.object([
         #("type", json.string("error")),
