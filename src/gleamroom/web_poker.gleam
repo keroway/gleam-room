@@ -378,7 +378,8 @@ pub fn poker_html() -> String {
               typeof p === \"object\" &&
               p !== null &&
               typeof p.participant_id === \"string\" &&
-              typeof p.display_name === \"string\",
+              typeof p.display_name === \"string\" &&
+              typeof p.has_voted === \"boolean\",
           ) ||
           (message.votes !== undefined &&
             (!Array.isArray(message.votes) || !message.votes.every(isValidVote)))
@@ -416,7 +417,8 @@ pub fn poker_html() -> String {
           typeof message.participant !== \"object\" ||
           message.participant === null ||
           typeof message.participant.participant_id !== \"string\" ||
-          typeof message.participant.display_name !== \"string\"
+          typeof message.participant.display_name !== \"string\" ||
+          typeof message.participant.has_voted !== \"boolean\"
         ) {
           log(`participant_joined message missing expected fields: ${JSON.stringify(message)}`);
           break;
