@@ -499,7 +499,9 @@ pub fn poker_html() -> String {
         // votes 内容が両方一致するかどうかを冪等化キーとして使う。
         // 旧ラウンドの自己エコーは、reset 後に reveal を再送していても新しい reveal の
         // 到着数に数えない。再送の送信・拒否とは独立に、未到着数だけ捨てる（#752）。
-        if (staleRevealJson !== null && phase === \"voting\" &&
+        // 新ラウンドの異なる公開結果を先に受理した後でも、未到着の旧エコーは捨てる。
+        // phase は問わない（revealed でも旧結果で最新を上書きしない。#756）。
+        if (staleRevealJson !== null &&
             JSON.stringify(message.votes) === staleRevealJson) {
           staleRevealLeft--;
           if (staleRevealLeft <= 0) staleRevealJson = null;
@@ -532,8 +534,7 @@ pub fn poker_html() -> String {
         // reveal・reset・vote を受信順に処理して配信するので、旧エコーは新ラウンドの
         // 正規の reveal より必ず先に届く。値のある旧投票でも同じ（#740, #742）。
         // 旧エコーの消費は上（#720: 残りが無ければ以後の同内容は新ラウンドの正規通知）。
-        staleRevealJson = null;
-        staleRevealLeft = 0;
+        // 旧エコーの追跡は新しい公開結果の受理では消さない（#756）。
         phase = \"revealed\";
         votes = message.votes;
         updateCardButtons();
