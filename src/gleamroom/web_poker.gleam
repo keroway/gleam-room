@@ -136,7 +136,7 @@ pub fn poker_html() -> String {
   let ownResetEchoes = 0;
   // reset で捨てた旧ラウンドの公開結果。reset 後に遅れて届く旧 revealed の自己エコーを
   // 新ラウンドの reveal と取り違えて旧結果を復活させない（#692）。
-  let staleRevealJson = null;
+  let staleRevealJsons = [];
   let staleRevealLeft = 0;
   // 自分が reveal を送ったラウンドだけ旧自己エコーが遅れて届きうる。他参加者の reveal は
   // broadcast 1通なので旧エコーを持たない（#712）。
@@ -146,6 +146,9 @@ pub fn poker_html() -> String {
   let ownRevealedCount = 0;
   // 受理されうる自分の reveal 数 × 2（直接応答+自己エコー）。応答前に複数送ると増える（#734）。
   let ownRevealExpected = 2;
+  // 自分の reveal 送信後に受理した公開結果の JSON（重複なし）。内容が異なる連続 reveal の
+  // 旧通知を reset 後にすべて捨てるため、最後の votes だけでなく全種類を覚える（#760）。
+  let ownRevealSeen = [];
   // 直近の reveal 送信前の追跡状態。rate_limited の拒否で戻す（#718）。
   let revealRollback = null;
   let nextResetId = 0;
@@ -179,13 +182,15 @@ pub fn poker_html() -> String {
   function applyRoundReset(keepAfterId = Infinity) {
     const kept = [...pendingVotes.values()].filter((vote) => vote.id > keepAfterId);
     if (phase === \"revealed\" && votes.length > 0 && ownRevealSent && ownRevealedCount < ownRevealExpected) {
-      staleRevealJson = JSON.stringify(votes);
+      const current = JSON.stringify(votes);
+      staleRevealJsons = ownRevealSeen.includes(current) ? [...ownRevealSeen] : [...ownRevealSeen, current];
       // 自己エコーは1 reveal あたり直接応答+broadcast の計2通。未到着の分だけ除外する（#720, #734）。
       staleRevealLeft = ownRevealExpected - ownRevealedCount;
     }
     ownRevealSent = false;
     ownRevealedCount = 0;
     ownRevealExpected = 2;
+    ownRevealSeen = [];
     phase = \"voting\";
     votes = [];
     ownVote = null;
@@ -281,11 +286,12 @@ pub fn poker_html() -> String {
   // 接続をまたいで Reveal の追跡状態を持ち越さない（#744）。旧接続の未応答 Reveal が
   // 残ると、新接続での拒否処理後も自己エコー待ちが残り正規の公開通知を捨ててしまう。
   function clearRevealTracking() {
-    staleRevealJson = null;
+    staleRevealJsons = [];
     staleRevealLeft = 0;
     ownRevealSent = false;
     ownRevealedCount = 0;
     ownRevealExpected = 2;
+    ownRevealSeen = [];
     revealRollback = null;
   }
 
@@ -503,14 +509,15 @@ pub fn poker_html() -> String {
         // 到着数に数えない。再送の送信・拒否とは独立に、未到着数だけ捨てる（#752）。
         // 新ラウンドの異なる公開結果を先に受理した後でも、未到着の旧エコーは捨てる。
         // phase は問わない（revealed でも旧結果で最新を上書きしない。#756）。
-        if (staleRevealJson !== null &&
-            JSON.stringify(message.votes) === staleRevealJson) {
+        if (staleRevealJsons.includes(JSON.stringify(message.votes))) {
           staleRevealLeft--;
-          if (staleRevealLeft <= 0) staleRevealJson = null;
+          if (staleRevealLeft <= 0) staleRevealJsons = [];
           break;
         }
         if (ownRevealSent) {
           ownRevealedCount++;
+          const seen = JSON.stringify(message.votes);
+          if (!ownRevealSeen.includes(seen)) ownRevealSeen.push(seen);
           // revealed を受けたので reveal は受理済み。以後の rate_limited を reveal への拒否と
           // 取り違えないよう戻し先を捨てる（#726）。
           // 未応答の再送が複数あるときは、到着数から確実に受理済みと言える件数

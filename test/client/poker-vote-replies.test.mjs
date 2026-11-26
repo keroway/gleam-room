@@ -346,6 +346,31 @@ test("#756: a stale Reveal echo arriving after the next round's Reveal does not 
   } finally { client.dispose(); }
 });
 
+test("#760: stale echoes of two Reveals with different results are all dropped after Reset", () => {
+  const { client, receive, vote, reply, socket } = setup();
+  try {
+    const first = vote("5");
+    reply(first);
+    receive({ type: "vote_registered", participant_id: "p1" });
+    const a = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: "5" }, { participant_id: "p2", display_name: "Bob", value: "8" }] };
+    const b = { type: "revealed", votes: [{ participant_id: "p1", display_name: "Alice", value: "5" }] };
+    client.click("reveal");
+    receive(a);
+    client.click("reveal");
+    receive(b);
+    client.click("reset");
+    const resetId = JSON.parse(socket.sent.at(-1)).request_id;
+    receive({ type: "vote_reply", request_id: resetId, result: { type: "round_reset" } });
+    assert.deepEqual(client.childTextContents("votes"), []);
+    receive(a);
+    receive({ type: "participant_left", participant_id: "p2" });
+    receive(b);
+    receive({ type: "round_reset" });
+    assert.deepEqual(client.childTextContents("votes"), []);
+    assert.equal(client.isDisabled("card-5"), false);
+  } finally { client.dispose(); }
+});
+
 test("#738: a rate-limited Reveal arriving after both echoes of the accepted one is still counted", () => {
   const { client, receive, socket } = setup();
   try {
