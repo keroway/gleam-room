@@ -137,6 +137,29 @@ pub fn message_rate_outcome(
   }
 }
 
+/// 1ハートビート窓で「通常操作のレート枠を消費しない」keepalive ping の上限
+/// （#764）。クライアントは窓（30秒）あたり2回（15秒間隔）送るので、再接続直後の
+/// 揺らぎを見込んで4回まで許す。超過分は通常のメッセージとして数え、
+/// `max_messages_per_heartbeat_window` で頭打ちにする（ping の大量送信が
+/// 無制限に room 外の処理を強いないようにするため）。
+const max_free_pings_per_heartbeat_window = 4
+
+pub type PingOutcome {
+  /// レート枠を消費しない keepalive として扱う。
+  PingFree
+  /// 上限超過。通常のメッセージと同じ扱いでレート制限に数える。
+  PingCounted
+}
+
+/// Pure and thus testable without a live `WebsocketConnection`.
+/// `pings_after_this` は今回の ping を含む、この窓での ping 数。
+pub fn ping_outcome(pings_after_this: Int) -> PingOutcome {
+  case pings_after_this > max_free_pings_per_heartbeat_window {
+    True -> PingCounted
+    False -> PingFree
+  }
+}
+
 /// ログの中で同一 WebSocket 接続の open/close を突き合わせるための識別子。
 ///
 /// クライアントへは出さない内部ログ専用の値なので、接続プロセスの PID を

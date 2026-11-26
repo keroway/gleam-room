@@ -14,10 +14,11 @@ import gleamroom/room_registry
 import gleamroom/wire
 import gleamroom/ws_guard.{
   FrameSizeAccepted, FrameTooLarge, HeartbeatContinues, HeartbeatTimedOut,
-  MessageRateAccepted, MessageRateLimited, binary_frame_code_and_message,
-  connection_tag, default_heartbeat_interval_ms, frame_size_outcome,
-  frame_size_outcome_for_byte_size, frame_too_large_code_and_message,
-  heartbeat_outcome, message_rate_outcome, new_participant_id, origin_allowed,
+  MessageRateAccepted, MessageRateLimited, PingCounted, PingFree,
+  binary_frame_code_and_message, connection_tag, default_heartbeat_interval_ms,
+  frame_size_outcome, frame_size_outcome_for_byte_size,
+  frame_too_large_code_and_message, heartbeat_outcome, message_rate_outcome,
+  new_participant_id, origin_allowed, ping_outcome,
   rate_limited_code_and_message,
 }
 import logging
@@ -50,6 +51,9 @@ type ConnectionState {
     // クロック読み取りを新設せず、既存のハートビート窓をレート制限の
     // 単位としてそのまま流用する。
     messages_since_heartbeat: Int,
+    // 直近のハートビート窓で受けた keepalive ping の数（#764）。上限までは
+    // `messages_since_heartbeat` を消費しない。tick ごとに 0 へ戻す。
+    pings_since_heartbeat: Int,
   )
 }
 
@@ -128,6 +132,7 @@ fn on_init(
       heartbeat_interval_ms: heartbeat_interval_ms,
       active_since_heartbeat: True,
       messages_since_heartbeat: 0,
+      pings_since_heartbeat: 0,
     ),
     Some(selector),
   )
@@ -207,13 +212,10 @@ fn handle_message(
         Some(server_message) -> send_server_message(connection, server_message)
         None -> Nil
       }
-      // 他参加者の活動によるroom配信も「生きている」印として扱う（#581）。
-      // クライアントから何も送らず結果を眺めているだけの参加者が、部屋に
-      // 何らかの動きがある限りハートビートタイムアウトで蹴られないように
-      // するため。ただし他参加者の活動も一切無い部屋では、この配信自体が
-      // 発生しないため引き続き30〜60秒でタイムアウトする（未解決、要
-      // クライアント側keepalive）。
-      mist.continue(mark_active(state))
+      // room配信は「生きている」印にしない（#764）。#581 では他参加者の活動で
+      // 延命していたが、それだと応答しない接続が他参加者の活動で永久に残る。
+      // 生存の根拠はこの接続自身からのフレーム（keepalive ping を含む）のみ。
+      mist.continue(state)
     }
     mist.Custom(HeartbeatTick) -> handle_heartbeat_tick(state)
     mist.Closed -> mist.stop()
@@ -221,8 +223,7 @@ fn handle_message(
   }
 }
 
-/// クライアントから届いたフレーム、またはroom配信の受信を「生きている」
-/// 印として記録する（#35, #581）。
+/// クライアントから届いたフレームを「生きている」印として記録する（#35, #764）。
 fn mark_active(state: ConnectionState) -> ConnectionState {
   ConnectionState(..state, active_since_heartbeat: True)
 }
@@ -257,6 +258,7 @@ fn handle_heartbeat_tick(
           ..state,
           active_since_heartbeat: False,
           messages_since_heartbeat: 0,
+          pings_since_heartbeat: 0,
         ),
       )
     }
@@ -318,9 +320,33 @@ fn handle_text(
               handle_join(state, connection, wire_room_id, display_name)
             Ok(protocol.Buzz) -> handle_buzz(state, connection)
             Ok(protocol.Reset) -> handle_reset(state, connection)
+            Ok(protocol.Ping) -> handle_ping(state, connection)
           }
       }
   }
+}
+
+/// keepalive ping に `pong` を返す（#764）。生存の根拠はこのフレームを
+/// 受信したことだけで（`handle_message` の `mark_active`）、room 配信や送信
+/// 成功は根拠にしない。上限までの ping は `record_message` で数えた分を
+/// 取り消し、通常操作のレート枠を使い切らせない。上限超過分は通常の
+/// メッセージとして数え、ping の大量送信も `rate_limited` に行き着く。
+fn handle_ping(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let pings = state.pings_since_heartbeat + 1
+  let state = ConnectionState(..state, pings_since_heartbeat: pings)
+  let state = case ping_outcome(pings) {
+    PingFree ->
+      ConnectionState(
+        ..state,
+        messages_since_heartbeat: state.messages_since_heartbeat - 1,
+      )
+    PingCounted -> state
+  }
+  send_server_message(connection, protocol.Pong)
+  mist.continue(state)
 }
 
 /// Applies the same frame size (#126) and message rate (#156) accounting as

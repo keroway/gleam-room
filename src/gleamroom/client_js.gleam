@@ -32,6 +32,33 @@ pub const shared =
   const JOIN_TIMEOUT_MS = 10000;
   let joinTimer = null;
 
+  // アプリレベルの keepalive（#764）。サーバは30秒窓で、窓内にクライアントから
+  // 1フレームも届かなければ接続を閉じる。無操作でも窓あたり2回送れる間隔にする。
+  // ブラウザが背面タブでタイマーを間引いた場合は切断されうるが、close から
+  // 既存の自動再接続（lastJoin）で再 join する。
+  const PING_INTERVAL_MS = 15000;
+  let pingTimer = null;
+
+  function stopPing() {
+    if (pingTimer) {
+      clearInterval(pingTimer);
+      pingTimer = null;
+    }
+  }
+
+  function startPing(ws, isCurrent) {
+    stopPing();
+    const timer = setInterval(() => {
+      if (!isCurrent() || ws.readyState !== WebSocket.OPEN) {
+        clearInterval(timer);
+        if (pingTimer === timer) pingTimer = null;
+        return;
+      }
+      ws.send(JSON.stringify({ type: \"ping\" }));
+    }, PING_INTERVAL_MS);
+    pingTimer = timer;
+  }
+
   function clearJoinTimer() {
     if (joinTimer) {
       clearTimeout(joinTimer);
@@ -97,6 +124,7 @@ pub const shared =
       code === \"room_unavailable\"
     ) {
       clearJoinTimer();
+      stopPing();
       if (socket) socket.close();
       socket = null;
       lastJoin = null;
@@ -134,6 +162,7 @@ pub const shared =
       joinTimer = null;
       if (!isCurrent()) return;
       log(\"join timed out\");
+      stopPing();
       socket = null;
       ws.close();
       setConnected(false);
@@ -149,6 +178,7 @@ pub const shared =
       // join が通らずサーバ側から即切断される状況では open → close が
       // 繰り返され、open ごとに試行回数を 0 に戻すと上限に永久に到達せず、
       // 「5 回で諦める」という約束が効かなくなる。
+      startPing(ws, isCurrent);
       log(`connected, joining room ${roomId} as ${displayName}`);
       ws.send(JSON.stringify({
         type: \"join\",
@@ -166,6 +196,8 @@ pub const shared =
         log(`could not parse server message: ${event.data}`);
         return;
       }
+      // keepalive への応答。画面にもログにも出さない（#764）。
+      if (message && message.type === \"pong\") return;
       // Join 期限の解除は各ページが state を妥当と確認した後に行う（#706）。
       try {
         handleServerMessage(message);
@@ -177,6 +209,7 @@ pub const shared =
     ws.addEventListener(\"close\", () => {
       if (!isCurrent()) return;
       clearJoinTimer();
+      stopPing();
       setConnected(false);
       resetRoomView();
       socket = null;

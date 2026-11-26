@@ -100,9 +100,10 @@ sends the current room snapshot, including the current phase (`Voting` or
 
 Same idle heartbeat timeout as the buzzer's "Idle heartbeat timeout" section
 in `docs/mvp.md`: a participant who has voted and is only waiting for reveal
-stays connected as long as another participant votes or the room otherwise
-broadcasts (#581); a room where nobody acts for 30+ seconds still disconnects
-and rejoins everyone in it.
+stays connected (and the vote is kept) because the client sends a keepalive
+`ping` every 15 seconds and the server replies `pong` (#764). Room broadcasts
+no longer count as liveness; a connection that stops responding is closed
+within 30–60 seconds. Ping rate rules are the same as the buzzer's.
 
 ## Suggested wire protocol
 

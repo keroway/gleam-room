@@ -167,6 +167,16 @@ pub fn decode_reveal_test() {
     == Ok(Reveal)
 }
 
+pub fn decode_ping_test() {
+  assert poker_protocol.decode_client_message("{\"type\":\"ping\"}")
+    == Ok(poker_protocol.Ping)
+}
+
+pub fn encode_pong_test() {
+  assert poker_protocol.encode_server_message(poker_protocol.Pong)
+    == "{\"type\":\"pong\"}"
+}
+
 pub fn decode_reset_test() {
   assert poker_protocol.decode_client_message("{\"type\":\"reset\"}")
     == Ok(Reset)

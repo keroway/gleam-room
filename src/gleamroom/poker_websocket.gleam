@@ -13,10 +13,11 @@ import gleamroom/room_registry
 import gleamroom/wire
 import gleamroom/ws_guard.{
   FrameSizeAccepted, FrameTooLarge, HeartbeatContinues, HeartbeatTimedOut,
-  MessageRateAccepted, MessageRateLimited, binary_frame_code_and_message,
-  connection_tag, default_heartbeat_interval_ms, frame_size_outcome,
-  frame_size_outcome_for_byte_size, frame_too_large_code_and_message,
-  heartbeat_outcome, message_rate_outcome, new_participant_id, origin_allowed,
+  MessageRateAccepted, MessageRateLimited, PingCounted, PingFree,
+  binary_frame_code_and_message, connection_tag, default_heartbeat_interval_ms,
+  frame_size_outcome, frame_size_outcome_for_byte_size,
+  frame_too_large_code_and_message, heartbeat_outcome, message_rate_outcome,
+  new_participant_id, origin_allowed, ping_outcome,
   rate_limited_code_and_message,
 }
 import logging
@@ -44,6 +45,9 @@ type ConnectionState {
     // 直近のハートビート窓で受理したテキストフレームの数
     // （`websocket.gleam`'s `messages_since_heartbeat` と同じ理由、#156）。
     messages_since_heartbeat: Int,
+    // 直近のハートビート窓で受けた keepalive ping の数
+    // （`websocket.gleam`'s `pings_since_heartbeat` と同じ理由、#764）。
+    pings_since_heartbeat: Int,
   )
 }
 
@@ -125,6 +129,7 @@ fn on_init(
       heartbeat_interval_ms: heartbeat_interval_ms,
       active_since_heartbeat: True,
       messages_since_heartbeat: 0,
+      pings_since_heartbeat: 0,
     ),
     Some(selector),
   )
@@ -191,8 +196,9 @@ fn handle_message(
         Some(server_message) -> send_server_message(connection, server_message)
         None -> Nil
       }
-      // `websocket.gleam`'s 同名の分岐と同じ理由（#581）。
-      mist.continue(mark_active(state))
+      // room配信は「生きている」印にしない（#764。`websocket.gleam`'s 同名の
+      // 分岐と同じ理由）。生存の根拠はこの接続自身からのフレームのみ。
+      mist.continue(state)
     }
     mist.Custom(HeartbeatTick) -> handle_heartbeat_tick(state)
     mist.Closed -> mist.stop()
@@ -200,7 +206,7 @@ fn handle_message(
   }
 }
 
-/// `websocket.gleam`'s `mark_active` と同じ理由（#35, #581）。
+/// `websocket.gleam`'s `mark_active` と同じ理由（#35, #764）。
 fn mark_active(state: ConnectionState) -> ConnectionState {
   ConnectionState(..state, active_since_heartbeat: True)
 }
@@ -236,6 +242,7 @@ fn handle_heartbeat_tick(
           ..state,
           active_since_heartbeat: False,
           messages_since_heartbeat: 0,
+          pings_since_heartbeat: 0,
         ),
       )
     }
@@ -312,6 +319,7 @@ fn handle_text(
                 card,
                 poker_protocol.vote_request_id(text),
               )
+            Ok(poker_protocol.Ping) -> handle_ping(state, connection)
             Ok(poker_protocol.Reveal) -> handle_reveal(state, connection)
             Ok(poker_protocol.Reset) ->
               handle_reset(
@@ -322,6 +330,25 @@ fn handle_text(
           }
       }
   }
+}
+
+/// `websocket.gleam`'s `handle_ping` と同じ理由・実装（#764）。
+fn handle_ping(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let pings = state.pings_since_heartbeat + 1
+  let state = ConnectionState(..state, pings_since_heartbeat: pings)
+  let state = case ping_outcome(pings) {
+    PingFree ->
+      ConnectionState(
+        ..state,
+        messages_since_heartbeat: state.messages_since_heartbeat - 1,
+      )
+    PingCounted -> state
+  }
+  send_server_message(connection, poker_protocol.Pong)
+  mist.continue(state)
 }
 
 /// `websocket.gleam`'s `handle_binary` と同じ理由・実装（#500）。

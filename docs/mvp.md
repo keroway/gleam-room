@@ -95,19 +95,28 @@ reconnect recovers a current snapshot, not a durable event history.
 
 ### Idle heartbeat timeout
 
-Each connection is closed if no frame arrives from its client and no room
-broadcast (another participant's join/buzz/reset) is delivered to it within a
+Each connection is closed if no frame arrives *from its own client* within a
 30-second heartbeat window (see `heartbeat_interval_ms` in
-`websocket.gleam`/`poker_websocket.gleam`). A participant who only watches —
-never sending a message — stays connected as long as *someone else* in the
-room is active, because receiving a broadcast counts as activity too (#581).
+`websocket.gleam`/`poker_websocket.gleam`), so the actual grace is 30–60
+seconds. Room broadcasts and successful sends do **not** count as liveness: a
+connection that stops responding is removed in bounded time even while other
+participants stay active (#764; this replaces #581's "broadcast keeps a silent
+connection alive").
 
-There is currently no client-side keepalive ping. In a room where nobody
-sends anything for 30+ seconds (including a solo participant sitting alone in
-a room), every connection in it is closed on the next heartbeat tick; the
-browser client's reconnect strategy above then rejoins automatically, so this
-surfaces as a brief, repeating disconnect/rejoin rather than a permanent
-failure.
+To stay connected while nobody does anything (reading a question aloud,
+discussing a card), the browser client sends an application-level keepalive
+`{"type":"ping"}` every 15 seconds from the moment the socket opens, and the
+server answers `{"type":"pong"}`. Browsers cannot send WebSocket ping frames,
+hence the JSON message. A `ping` never reaches the room actor.
+
+- Up to 4 pings per heartbeat window do not consume the 30-message rate
+  budget; pings beyond that are counted as ordinary messages, so a ping flood
+  ends in `rate_limited` like any other flood. Frame size limits still apply.
+- The client's ping timer is stopped on close, join timeout and permanent
+  rejection, and an older socket's timer never sends on the current socket.
+- If the browser throttles timers (for example a background tab) and the
+  server closes the connection, the reconnect strategy above rejoins
+  automatically as a new participant.
 
 ## Suggested wire protocol
 
