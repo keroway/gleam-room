@@ -226,6 +226,60 @@ test("participant_joined の display_name が欠落・null・数値だと、part
   }
 });
 
+test("participant_joined の has_voted が boolean でないと、participants を変えず警告を残す（#758）", () => {
+  for (const hasVoted of [undefined, null, "false", 0]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      const socket = joinAndConnect(client, [
+        { participant_id: "p1", display_name: "Alice", has_voted: false },
+      ]);
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "participant_joined",
+          participant: { participant_id: "p2", display_name: "Bob", has_voted: hasVoted },
+        }),
+      });
+
+      assert.ok(
+        client.logs.some((line) => line.includes("participant_joined message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+      assert.deepEqual(client.childTextContents("participants"), ["Alice"]);
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
+test("state の participants[].has_voted が boolean でないと、connected にならず Join 期限を維持する（#758）", () => {
+  for (const hasVoted of [undefined, null, "false", 1]) {
+    const client = startClient(POKER_MODULE);
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      const before = client.timerDelays();
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "state",
+          phase: "voting",
+          participants: [{ participant_id: "p1", display_name: "Alice", has_voted: hasVoted }],
+          votes: [],
+        }),
+      });
+
+      assert.notEqual(client.connectionState(), "connected");
+      assert.deepEqual(client.timerDelays(), before);
+      assert.ok(
+        client.logs.some((line) => line.includes("state message missing expected fields")),
+        "形状不正を示すログが残っていない",
+      );
+    } finally {
+      client.dispose();
+    }
+  }
+});
+
 test("participant_left メッセージが妥当なJSONだが participant_id フィールド欠落だと、participants から誤って削除しない（#527）", () => {
   const client = startClient(POKER_MODULE);
   try {
