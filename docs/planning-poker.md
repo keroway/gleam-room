@@ -44,9 +44,9 @@ points any further generalization should be judged against.
 - Joining an unknown room may create it lazily, in the `Voting` phase with no
   votes cast.
 - A participant supplies a display name.
-- The server assigns a `ParticipantId`, transient per connection — identical
-  identity model to the buzzer (see `docs/mvp.md`'s Reconnect section); this
-  document does not repeat that reasoning.
+- The server assigns a `ParticipantId`, transient per connection — the
+  buzzer's MVP identity model. (The buzzer has since moved to resumable
+  participants, #766; Planning Poker deliberately keeps the transient model.)
 
 ### Presence
 
@@ -92,8 +92,8 @@ points any further generalization should be judged against.
 
 ### Reconnect
 
-Same transient-identity model as the buzzer's Reconnect section in
-`docs/mvp.md`: a reconnect is a new `Join` with a new `ParticipantId`, not a
+Transient identity, as in the buzzer before #766: a dropped connection is a
+`Leave`, and a reconnect is a new `Join` with a new `ParticipantId`, not a
 resumption of the previous connection's identity. On join/rejoin, the server
 sends the current room snapshot, including the current phase (`Voting` or
 `Revealed`) and, if `Revealed`, every already-cast vote.

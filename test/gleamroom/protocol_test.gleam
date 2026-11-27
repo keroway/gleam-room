@@ -257,20 +257,21 @@ pub fn encode_state_test() {
       self_id: ParticipantId("p1"),
       round_id: 2,
       revision: 7,
-      participants: [Participant(ParticipantId("p1"), "Alice")],
+      participants: [Participant(ParticipantId("p1"), "Alice", True)],
       buzzes: [BuzzResult(ParticipantId("p1"), "Alice", 1)],
+      resume_token: None,
     )
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"protocol_version\":2,\"room_instance_id\":\"i1\",\"self_id\":\"p1\",\"round_id\":2,\"revision\":7,\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"protocol_version\":2,\"room_instance_id\":\"i1\",\"self_id\":\"p1\",\"round_id\":2,\"revision\":7,\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
 }
 
 pub fn encode_participant_joined_test() {
   let message =
-    ParticipantJoined("i1", 3, Participant(ParticipantId("p1"), "Alice"))
+    ParticipantJoined("i1", 3, Participant(ParticipantId("p1"), "Alice", True))
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"participant_joined\",\"room_instance_id\":\"i1\",\"revision\":3,\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}}"
+    == "{\"type\":\"participant_joined\",\"room_instance_id\":\"i1\",\"revision\":3,\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true}}"
 }
 
 pub fn encode_participant_left_test() {

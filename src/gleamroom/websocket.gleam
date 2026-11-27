@@ -160,37 +160,14 @@ fn on_close(state: ConnectionState) -> Nil {
           <> ", participant="
           <> room.participant_id_to_string(handle.participant_id),
       )
-      // 応答が無くても切断処理は続ける。room が死んでいれば #39 の経路で
-      // registry から外れる。
-      case
-        room.dispatch(
-          handle.subject,
-          room.Leave(handle.participant_id),
-          handle.session,
-        )
-      {
-        Ok(_) -> Nil
-        Error(Nil) ->
-          logging.log(
-            logging.Warning,
-            "leave dispatch failed: room="
-              <> registry.room_id_to_string(handle.room_id)
-              <> ", participant="
-              <> room.participant_id_to_string(handle.participant_id),
-          )
-      }
-      // 最後の参加者が抜けたら registry から外す（#26）。外さないと、
-      // 一度でも join された RoomId の Room actor と Dict エントリが
-      // プロセス終了まで残り続ける。
+      // 切断は退出ではない（#766）。room は参加者を切断中にして猶予を始め、
+      // 猶予内に同じ resume token で戻れば同じ参加者として扱う。退出は
+      // 明示的な `leave` か猶予切れだけ。最後の参加者の猶予が切れたら room
+      // 自身が止まり、registry は `RoomDown` で登録を外す（ADR 0006 / 0010）。
       //
-      // **ここで空かどうかを判定しない**（#36）。以前は get_snapshot で
-      // 確かめてから Release を送っていたが、判定と停止が別プロセスに
-      // またがるため、その隙に join した参加者ごと room が停止しうる。
-      // 判定は room actor が自分のメールボックスの中で行う。
-      //
-      // 切断を知っているのはこの層なので、きっかけを送るのはここでよい。
-      release_room(state.registry, handle.room_id, handle.subject)
-      Nil
+      // 非同期に送る。閉じる接続は応答を待つ必要がなく、既に別の接続へ
+      // 付け替わっていれば room が無視する。
+      room.detach(handle.subject, handle.participant_id, handle.session)
     }
   }
 }
@@ -210,6 +187,23 @@ fn handle_message(
     // connection sending binary frames instead of text bypasses both limits
     // entirely (#500).
     mist.Binary(data) -> handle_binary(mark_active(state), data, connection)
+    mist.Custom(RoomBroadcast(room.SessionReplaced)) -> {
+      // 同じ参加者が新しい接続で復帰した（#766）。この接続はもう参加者の
+      // ものではないので、理由を伝えて閉じる。room 側は既にこの接続を
+      // 外しているので、on_close で Detach を送らないよう handle を消す。
+      logging.log(
+        logging.Info,
+        "websocket session replaced by a resume: " <> connection_tag(),
+      )
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(
+          "session_replaced",
+          session_replaced_message,
+        ),
+      )
+      mist.stop()
+    }
     mist.Custom(RoomBroadcast(event)) -> {
       // 配信は join 成立後にしか届かないので handle は必ずある。
       case state.room {
@@ -344,6 +338,9 @@ fn handle_text(
               handle_buzz(state, connection, round_id, request_id)
             Ok(protocol.Reset(round_id, request_id)) ->
               handle_reset(state, connection, round_id, request_id)
+            Ok(protocol.Resume(wire_room_id, instance_id, token)) ->
+              handle_resume(state, connection, wire_room_id, instance_id, token)
+            Ok(protocol.Leave) -> handle_leave(state, connection)
             Ok(protocol.Sync) -> handle_sync(state, connection)
             Ok(protocol.Ping) -> handle_ping(state, connection)
           }
@@ -492,7 +489,11 @@ fn handle_join(
         room.join(room_subject, participant_id, display_name, session),
       )
       case reply {
-        #(room.ParticipantJoined(participant, _), snapshot) -> {
+        room.JoinReply(
+          room.ParticipantJoined(participant, _),
+          snapshot,
+          resume_token,
+        ) -> {
           logging.log(
             logging.Info,
             "join accepted: room="
@@ -503,28 +504,21 @@ fn handle_join(
           // スナップショットは join と同じ room メッセージの中で取られている
           // （`room.join`、#765）。以後この接続に届く配信は必ずこの revision
           // より新しく、取得時点のずれ（#121）や二重適用（#43）は起きない。
+          // resume token はこの応答でだけ本人に渡す（#766）。配信にもログにも出さない。
           send_server_message(
             connection,
-            snapshot_message(snapshot, participant.id),
+            snapshot_message(snapshot, participant.id, resume_token),
           )
-          let next_state =
-            ConnectionState(
-              ..state,
-              room: Some(RoomHandle(
-                room_subject,
-                participant_id,
-                session,
-                room_id,
-                snapshot.instance_id,
-              )),
-            )
-          let selector =
-            process.new_selector()
-            |> process.select(state.heartbeat_subject)
-            |> process.select_map(session, RoomBroadcast)
-          mist.continue(next_state) |> mist.with_selector(selector)
+          attached(
+            state,
+            room_subject,
+            participant_id,
+            session,
+            room_id,
+            snapshot,
+          )
         }
-        #(room.JoinRejected(_, reason), _) -> {
+        room.JoinReply(room.JoinRejected(_, reason), _, _) -> {
           logging.log(
             logging.Info,
             "join rejected: room="
@@ -547,10 +541,178 @@ fn handle_join(
   }
 }
 
+/// Records the room this connection is now attached to and starts receiving
+/// its broadcasts (join and resume, #766).
+fn attached(
+  state: ConnectionState,
+  room_subject: Subject(room.Message),
+  participant_id: room.ParticipantId,
+  session: Subject(room.RoomEvent),
+  room_id: registry.RoomId,
+  snapshot: room.Snapshot,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let next_state =
+    ConnectionState(
+      ..state,
+      room: Some(RoomHandle(
+        room_subject,
+        participant_id,
+        session,
+        room_id,
+        snapshot.instance_id,
+      )),
+    )
+  let selector =
+    process.new_selector()
+    |> process.select(state.heartbeat_subject)
+    |> process.select_map(session, RoomBroadcast)
+  mist.continue(next_state) |> mist.with_selector(selector)
+}
+
+/// Maps a `room.ResumeRejectReason` to the `code`/`message` pair sent to the
+/// client (#766). Every reason leads the client to offer joining as a new
+/// participant.
+pub fn resume_reject_code_and_message(
+  reason: room.ResumeRejectReason,
+) -> #(String, String) {
+  case reason {
+    room.RoomGone -> #(
+      "room_gone",
+      "The room you were in has ended. Join as a new participant.",
+    )
+    room.ResumeExpired -> #(
+      "resume_expired",
+      "You were away too long and have left the room. Join as a new participant.",
+    )
+    room.InvalidToken -> #(
+      protocol.invalid_token_error.code,
+      protocol.invalid_token_error.message,
+    )
+  }
+}
+
+/// Sent before closing a connection whose participant resumed on another
+/// connection (#766).
+pub const session_replaced_message =
+  "You reconnected from another tab or device, so this one was disconnected."
+
+/// 保存済みの resume token で、同じ参加者として付け直す（#766）。
+///
+/// 部屋が無ければ registry は新しい room を作るが、その room の世代は
+/// クライアントが持つものと一致しないので `room_gone` になる。作られた
+/// 空の room は Release で片付ける（join の拒否と同じ）。
+fn handle_resume(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  wire_room_id: wire.RoomId,
+  instance_id: String,
+  token: String,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case state.room {
+    Some(_) -> {
+      let #(code, message) = join_reject_code_and_message(room.AlreadyJoined)
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(code, message),
+      )
+      mist.continue(state)
+    }
+    None -> {
+      let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
+      use room_subject <- with_room(state, connection, room_id)
+      let session = process.new_subject()
+      use reply <- with_join_reply(
+        state.registry,
+        room_id,
+        room_subject,
+        connection,
+        room.resume_session(room_subject, token, instance_id, session),
+      )
+      case reply {
+        room.Resumed(participant_id, snapshot) -> {
+          logging.log(
+            logging.Info,
+            "resume accepted: room="
+              <> registry.room_id_to_string(room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(participant_id),
+          )
+          send_server_message(
+            connection,
+            snapshot_message(snapshot, participant_id, None),
+          )
+          attached(
+            state,
+            room_subject,
+            participant_id,
+            session,
+            room_id,
+            snapshot,
+          )
+        }
+        room.ResumeRejected(reason) -> {
+          logging.log(
+            logging.Info,
+            "resume rejected: room="
+              <> registry.room_id_to_string(room_id)
+              <> ", reason="
+              <> string.inspect(reason),
+          )
+          release_room(state.registry, room_id, room_subject)
+          let #(code, message) = resume_reject_code_and_message(reason)
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(code, message),
+          )
+          mist.continue(state)
+        }
+      }
+    }
+  }
+}
+
+/// 明示的な退出（#766）。参加者をすぐに外し、resume token を無効にする。
+/// 退出した接続には用が無いので閉じる。最後の参加者なら room も止まる。
+fn handle_leave(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case state.room {
+    None -> {
+      send_not_joined_error(connection, "leave", None)
+      mist.continue(state)
+    }
+    Some(handle) -> {
+      case
+        room.dispatch(
+          handle.subject,
+          room.Leave(handle.participant_id),
+          handle.session,
+        )
+      {
+        Ok(_) -> Nil
+        Error(Nil) ->
+          logging.log(
+            logging.Warning,
+            "leave dispatch failed: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", participant="
+              <> room.participant_id_to_string(handle.participant_id),
+          )
+      }
+      // 空になったかどうかは room が自分のメールボックスの中で判定する（#36）。
+      release_room(state.registry, handle.room_id, handle.subject)
+      mist.stop()
+    }
+  }
+}
+
 /// The `state` message for a snapshot, seen from participant `self_id`.
+/// `resume_token` is set only when answering that participant's own join.
 fn snapshot_message(
   snapshot: room.Snapshot,
   self_id: room.ParticipantId,
+  resume_token: Option(String),
 ) -> protocol.ServerMessage {
   protocol.State(
     instance_id: snapshot.instance_id,
@@ -559,6 +721,7 @@ fn snapshot_message(
     revision: snapshot.revision,
     participants: list.map(snapshot.participants, to_wire_participant),
     buzzes: list.map(snapshot.buzzes, to_wire_buzz_result),
+    resume_token:,
   )
 }
 
@@ -582,7 +745,7 @@ fn handle_sync(
           // 適用される）なので、後から送れば表示が巻き戻らない。
           send_server_message(
             connection,
-            snapshot_message(snapshot, handle.participant_id),
+            snapshot_message(snapshot, handle.participant_id, None),
           )
           flush_queued_broadcasts(connection, handle)
           mist.continue(state)
@@ -756,6 +919,10 @@ fn send_direct_reply(
         }
         room.ResetRejected(room.ResetStaleRound) ->
           Some(protocol.ProtocolErrorMessage("stale_round", stale_round_message))
+        // 付け替え済みの古い接続からの reset（#766）。応答しないと要求が
+        // 解決されないまま残る。
+        room.ResetRejected(room.ResetNotJoined) ->
+          Some(protocol.ProtocolErrorMessage("not_joined", not_joined_message))
         _ -> None
       }
   }
@@ -1048,6 +1215,21 @@ pub fn room_event_to_server_message(
       ))
     room.RoundReset(round_id, revision) ->
       Some(protocol.RoundReset(instance_id, revision, round_id))
+    room.ParticipantDisconnected(id, revision) ->
+      Some(protocol.ParticipantDisconnected(
+        instance_id,
+        revision,
+        to_wire_participant_id(id),
+      ))
+    room.ParticipantReconnected(id, revision) ->
+      Some(protocol.ParticipantReconnected(
+        instance_id,
+        revision,
+        to_wire_participant_id(id),
+      ))
+    room.PresenceRejected(_) -> None
+    // `handle_message` が配信を受けた時点で接続を閉じる。ワイヤには載せない。
+    room.SessionReplaced -> None
     room.JoinRejected(_, _) -> None
     room.LeaveRejected(_, _) -> None
     room.BuzzRejected(_, _) -> None
@@ -1063,6 +1245,7 @@ pub fn to_wire_participant(
   protocol.Participant(
     id: to_wire_participant_id(participant.id),
     display_name: participant.display_name,
+    connected: participant.connected,
   )
 }
 

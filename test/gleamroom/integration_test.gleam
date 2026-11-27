@@ -34,31 +34,32 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
   let alice_join =
     room.dispatch(room_subject, room.Join(alice, "Alice"), alice_session)
   assert alice_join
-    == Ok(room.ParticipantJoined(room.Participant(alice, "Alice"), 1))
+    == Ok(room.ParticipantJoined(room.Participant(alice, "Alice", True), 1))
 
   let assert Ok(bob_join) =
     room.dispatch(room_subject, room.Join(bob, "Bob"), bob_session)
-  assert bob_join == room.ParticipantJoined(room.Participant(bob, "Bob"), 2)
+  assert bob_join
+    == room.ParticipantJoined(room.Participant(bob, "Bob", True), 2)
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(bob, "Bob"), 2))
+    == Ok(room.ParticipantJoined(room.Participant(bob, "Bob", True), 2))
 
   let carol_join =
     room.dispatch(room_subject, room.Join(carol, "Carol"), carol_session)
   assert carol_join
-    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol"), 3))
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol", True), 3))
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol"), 3))
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol", True), 3))
   assert process.receive(bob_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol"), 3))
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol", True), 3))
 
   // A second lookup of the same room id (as a fresh connection joining
   // later would perform) resolves to the same room actor, and every
   // connected client observes the same presence snapshot.
   let assert Ok(looked_up_again) = registry.lookup(registry_subject, room_id)
   let expected_presence = [
-    room.Participant(alice, "Alice"),
-    room.Participant(bob, "Bob"),
-    room.Participant(carol, "Carol"),
+    room.Participant(alice, "Alice", True),
+    room.Participant(bob, "Bob", True),
+    room.Participant(carol, "Carol", True),
   ]
   assert room.get_snapshot(looked_up_again) == Ok(expected_presence)
   assert room.get_snapshot(room_subject) == Ok(expected_presence)
@@ -147,11 +148,14 @@ pub fn three_clients_buzz_reset_and_reconnect_scenario_test() {
       carol_rejoin_session,
     )
   assert rejoin_event
-    == Ok(room.ParticipantJoined(room.Participant(carol_rejoined, "Carol"), 10))
+    == Ok(room.ParticipantJoined(
+      room.Participant(carol_rejoined, "Carol", True),
+      10,
+    ))
   assert room.get_snapshot(room_subject)
     == Ok([
-      room.Participant(alice, "Alice"),
-      room.Participant(bob, "Bob"),
-      room.Participant(carol_rejoined, "Carol"),
+      room.Participant(alice, "Alice", True),
+      room.Participant(bob, "Bob", True),
+      room.Participant(carol_rejoined, "Carol", True),
     ])
 }

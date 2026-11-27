@@ -29,7 +29,8 @@ pub fn different_room_ids_resolve_to_isolated_rooms_test() {
 
   let assert Ok(_) = room.dispatch(room_a, room.Join(alice, "Alice"), session)
 
-  assert room.get_snapshot(room_a) == Ok([room.Participant(alice, "Alice")])
+  assert room.get_snapshot(room_a)
+    == Ok([room.Participant(alice, "Alice", True)])
   assert room.get_snapshot(room_b) == Ok([])
 }
 
@@ -116,8 +117,12 @@ pub fn release_with_a_stale_subject_does_not_remove_the_current_room_test() {
 /// `a_participant_whose_session_dies_is_removed_test`（room_test.gleam）は
 /// 生存者を残す分岐しか通らず、`release_stops_the_room_actor_process_test`
 /// （このファイル）は `Release` からの停止しか検証していない。
+///
+/// #766 以降、接続の死は退出ではなく「切断中」で、猶予が切れてから外れる。
+/// 猶予を短くした room で、猶予切れ → 無人 → 自己終了 → `RoomDown` を確かめる。
 pub fn the_last_participants_session_dying_stops_the_room_via_registry_test() {
-  let assert Ok(started) = registry.start()
+  let assert Ok(started) =
+    registry.start_with_room_starter(fn() { room.start_with_grace(50) })
   let id = registry.room_id("room-last-participant-session-down")
 
   let assert Ok(subject) = registry.lookup(started.data, id)
@@ -136,7 +141,8 @@ pub fn the_last_participants_session_dying_stops_the_room_via_registry_test() {
 
   wait.until(
     fn() {
-      room.get_snapshot(subject) == Ok([room.Participant(doomed, "Doomed")])
+      room.get_snapshot(subject)
+      == Ok([room.Participant(doomed, "Doomed", True)])
     },
     "唯一の参加者が join し終わる",
   )
@@ -335,8 +341,11 @@ pub fn lookup_returns_error_instead_of_crashing_the_caller_test() {
 /// 再起動まで残る（プロセス・メモリリーク）。
 ///
 /// 修正後は room が自分で止まり、registry の `RoomDown`（#39）が拾って外す。
+///
+/// #766 以降は猶予（ここでは短くした 50ms）が切れてから空になる。
 pub fn a_room_emptied_by_a_dead_session_is_removed_from_the_registry_test() {
-  let assert Ok(started) = registry.start()
+  let assert Ok(started) =
+    registry.start_with_room_starter(fn() { room.start_with_grace(50) })
   let reg = started.data
   let id = registry.room_id("room-session-down")
 

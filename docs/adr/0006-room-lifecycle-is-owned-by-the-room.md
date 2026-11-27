@@ -1,6 +1,6 @@
 # ADR 0006: The room decides when it stops; the registry reacts to that
 
-- Status: Accepted
+- Status: Accepted (trigger amended by [ADR 0010](0010-buzzer-session-model.md), implemented in #766)
 - Date: 2026-08-12
 - Recorded retroactively for #26, #36, #39, and #91.
 
@@ -55,3 +55,23 @@ A guard written against one race only stops that race. The subject-equality
 check was correct and still did not cover the case above, because it answered
 "is this the same actor?" and the open question was "did someone join since I
 looked?".
+
+## Amendment (ADR 0010, #766)
+
+For the buzzer, a closed connection no longer means a participant left. The
+room keeps a disconnected participant for a resume grace period (60 s) and
+checks a generation-tagged `GraceExpired` timer **inside the actor**, so the
+rule of this ADR still holds: the room judges and acts in one message.
+
+- A dead session marks its participant disconnected; it no longer empties
+  the room by itself.
+- When the last participant's grace expires, the room stops itself, and the
+  registry drops it on `RoomDown` as before.
+- `ShutdownIfEmpty` counts participants within grace as present, so a
+  `Release` cannot stop a room someone may still resume.
+- A room with no participants at all (everyone left explicitly, or a lazily
+  created room whose join was rejected) still stops immediately through
+  `Release`. A separate empty-room timer is not needed until rooms can exist
+  without participants (explicit creation, #767).
+
+Planning Poker keeps the original trigger.

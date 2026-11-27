@@ -22,7 +22,9 @@ export function flapWithoutJoining(client, rounds) {
   return null;
 }
 
-export function startClient({ modulePath, functionName } = {}) {
+/// `storage` は sessionStorage の初期内容（key → 文字列）。ページを開き直した
+/// 場面（#766 の自動復帰）を作るのに使う。
+export function startClient({ modulePath, functionName, storage = {} } = {}) {
   const knownIds = extractElementIds(modulePath, functionName);
   const nodes = new Map();
   const listeners = new Map();
@@ -71,6 +73,7 @@ export function startClient({ modulePath, functionName } = {}) {
   };
 
   const sockets = [];
+  const stored = new Map(Object.entries(storage));
   let timers = [];
   let intervals = [];
   let nextTimerId = 1;
@@ -85,6 +88,15 @@ export function startClient({ modulePath, functionName } = {}) {
       createElement: () => makeNode("created"),
     },
     location: { protocol: "http:", host: "127.0.0.1:4000" },
+    sessionStorage: {
+      getItem: (key) => (stored.has(key) ? stored.get(key) : null),
+      setItem: (key, value) => {
+        stored.set(key, String(value));
+      },
+      removeItem: (key) => {
+        stored.delete(key);
+      },
+    },
     setTimeout: (fn, delay) => {
       const id = nextTimerId;
       nextTimerId += 1;
@@ -158,6 +170,12 @@ export function startClient({ modulePath, functionName } = {}) {
   return {
     logs,
     sockets,
+    /// sessionStorage の現在の内容（#766）。
+    storage: stored,
+    /// 指定した id の要素の textContent。
+    textOf(id) {
+      return nodes.get(id)?.textContent;
+    },
     /// 参加フォームを送信して最初の接続を開始する。
     submitJoin(roomId = "R", displayName = "N") {
       nodes.get("room-id").value = roomId;

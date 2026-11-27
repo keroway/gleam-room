@@ -161,12 +161,13 @@ room):
    three clients should display the identical ordering B → A → C.
 4. Press buzz again from Bob. The ordering should not change or duplicate.
 5. Reset again; the results should clear on all three clients.
-6. Close one tab. The remaining two should reflect that participant leaving.
-7. Reopen a tab and rejoin the same room with the same display name. The
-   rejoining client receives the current room snapshot; per
-   [`docs/mvp.md`](docs/mvp.md#reconnect) this is a new participant
-   identity, not a restored one, so the other clients briefly see a
-   leave/join rather than a seamless reconnect.
+6. Close one tab. The remaining two show that participant as （切断中）
+   (disconnected); after 60 seconds without a return they see the
+   participant leave.
+7. Reload a tab instead: it resumes as the same participant (same id, its
+   buzz kept) and the others see it reconnect, not a leave/join
+   ([`docs/mvp.md`](docs/mvp.md#reconnect), #766). A newly opened tab joins
+   as a new participant; the **Leave** button leaves for good.
 
 `test/gleamroom/integration_test.gleam` automates this same scenario against
 the Registry + Room actor boundary (without opening real sockets); run it

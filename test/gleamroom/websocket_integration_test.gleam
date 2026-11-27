@@ -12,6 +12,7 @@ import gleam/string
 import gleamroom
 import gleamroom/poker_registry
 import gleamroom/registry
+import gleamroom/room
 import gleamroom/wait
 import gleamroom/websocket
 import gramps/websocket as ws
@@ -205,7 +206,9 @@ pub fn ws_keeps_connection_after_room_lookup_failed_test() {
 /// **生きたまま**応答不能にする —— `ReplyTimedOut` が実際に起こる状況
 /// （GC やメッセージ滞留で詰まっているだけで死んではいない）により近い。
 pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
-  let assert Ok(registry_started) = registry.start()
+  // 接続の死は切断中で、猶予が切れてから無人になる（#766）。猶予を短くする。
+  let assert Ok(registry_started) =
+    registry.start_with_room_starter(fn() { room.start_with_grace(50) })
   let registry_subject = registry_started.data
   let assert Ok(poker_registry_started) = poker_registry.start()
   let assert Ok(#(port, _)) =
@@ -271,7 +274,9 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
 /// できない（room が詰まっている間は `shutdown_if_empty` も応答しない）。
 /// 検証しているのは、この経路の終端状態（エラー・切断・registry の空き）である。
 pub fn ws_closes_and_cleans_up_after_join_timeout_test() {
-  let assert Ok(registry_started) = registry.start()
+  // 接続の死は切断中で、猶予が切れてから無人になる（#766）。猶予を短くする。
+  let assert Ok(registry_started) =
+    registry.start_with_room_starter(fn() { room.start_with_grace(50) })
   let registry_subject = registry_started.data
   let assert Ok(poker_registry_started) = poker_registry.start()
   let assert Ok(#(port, _)) =
@@ -1066,4 +1071,170 @@ fn collect_revisions(
       collect_revisions(socket, buffer, count - 1, [revision, ..acc])
     }
   }
+}
+
+// --- #766: 短時間の切断からの復帰（実ソケット） ------------------------------
+
+fn start_buzzer_server() -> Int {
+  let assert Ok(registry_started) = registry.start()
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_started.data,
+      poker_registry_started.data,
+    )
+  port
+}
+
+fn string_field(text: String, name: String) -> String {
+  let assert Ok(value) =
+    json.parse(text, {
+      use value <- decode.field(name, decode.string)
+      decode.success(value)
+    })
+  value
+}
+
+fn resume_message(room_id: String, instance_id: String, token: String) {
+  json.object([
+    #("type", json.string("resume")),
+    #("v", json.int(2)),
+    #("room_id", json.string(room_id)),
+    #("room_instance_id", json.string(instance_id)),
+    #("resume_token", json.string(token)),
+  ])
+}
+
+/// 参加して、state の (resume_token, room_instance_id, self_id) を返す。
+fn join_for_resume(
+  socket: TcpSocket,
+  buffer: BitArray,
+  room_id: String,
+  name: String,
+) -> #(String, String, String, BitArray) {
+  send_client_message(socket, join_message(room_id, name))
+  let #(state, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(state, "\"type\":\"state\"")
+  #(
+    string_field(state, "resume_token"),
+    string_field(state, "room_instance_id"),
+    string_field(state, "self_id"),
+    buffer,
+  )
+}
+
+pub fn ws_resume_keeps_the_participant_and_their_buzz_test() {
+  let port = start_buzzer_server()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let #(token, instance, alice_id, alice_buffer) =
+    join_for_resume(alice, alice_buffer, "RES1", "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, "RES1", "Bob")
+  let #(_joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+
+  send_client_message(alice, with_request_id("buzz", 1, "b1"))
+  let #(_, alice_buffer) = recv_text_message(alice, alice_buffer)
+  let #(_, _alice_buffer) = recv_text_message(alice, alice_buffer)
+  let #(bob_seen_buzz, bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(bob_seen_buzz, "\"type\":\"buzz_accepted\"")
+
+  // 一時切断。Bob には「切断中」として見える（退出ではない）。
+  tcp_close(alice)
+  let #(disconnected, bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(disconnected, "\"type\":\"participant_disconnected\"")
+  assert string_field(disconnected, "participant_id") == alice_id
+
+  // 新しい接続で同じ参加者として戻る。
+  let #(again, again_buffer) = handshake(port, 50)
+  send_client_message(again, resume_message("RES1", instance, token))
+  let #(state, again_buffer) = recv_text_message(again, again_buffer)
+  assert string.contains(state, "\"type\":\"state\"")
+  assert string_field(state, "self_id") == alice_id
+  // token は join の応答でだけ渡す。
+  assert !string.contains(state, "resume_token")
+  assert string.contains(
+    state,
+    "\"buzzes\":[{\"participant_id\":\"" <> alice_id,
+  )
+  let #(reconnected, _bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(reconnected, "\"type\":\"participant_reconnected\"")
+  // Bob が受け取った通知に token は含まれない。
+  assert !string.contains(bob_seen_buzz <> disconnected <> reconnected, token)
+
+  // 押下済みは引き継がれている。
+  send_client_message(again, with_request_id("buzz", 1, "b2"))
+  let #(reply, _) = recv_text_message(again, again_buffer)
+  assert string.contains(reply, "\"code\":\"already_buzzed\"")
+  tcp_close(again)
+  tcp_close(bob)
+}
+
+pub fn ws_a_second_resume_replaces_the_older_connection_test() {
+  let port = start_buzzer_server()
+  let #(first, first_buffer) = handshake(port, 50)
+  let #(token, instance, alice_id, first_buffer) =
+    join_for_resume(first, first_buffer, "RES2", "Alice")
+
+  let #(second, second_buffer) = handshake(port, 50)
+  send_client_message(second, resume_message("RES2", instance, token))
+  let #(state, _) = recv_text_message(second, second_buffer)
+  assert string_field(state, "self_id") == alice_id
+
+  let #(replaced, first_buffer) = recv_text_message(first, first_buffer)
+  assert string.contains(replaced, "\"code\":\"session_replaced\"")
+  let assert <<>> = recv_close_frame(first, first_buffer)
+  tcp_close(first)
+  tcp_close(second)
+}
+
+pub fn ws_resume_rejections_name_the_reason_test() {
+  let port = start_buzzer_server()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(token, instance, _, alice_buffer) =
+    join_for_resume(alice, alice_buffer, "RES3", "Alice")
+
+  let #(other, other_buffer) = handshake(port, 50)
+  send_client_message(other, resume_message("RES3", "old-instance", token))
+  let #(gone, other_buffer) = recv_text_message(other, other_buffer)
+  assert string.contains(gone, "\"code\":\"room_gone\"")
+  send_client_message(other, resume_message("RES3", instance, "forged"))
+  let #(invalid, other_buffer) = recv_text_message(other, other_buffer)
+  assert string.contains(invalid, "\"code\":\"invalid_token\"")
+
+  // 明示的に退出すると接続は閉じられ、token は使えなくなる。
+  send_client_message(alice, json.object([#("type", json.string("leave"))]))
+  let assert <<>> = recv_close_frame(alice, alice_buffer)
+  tcp_close(alice)
+  send_client_message(other, resume_message("RES3", instance, token))
+  let #(expired, _) = recv_text_message(other, other_buffer)
+  // 最後の参加者が退出した room は止まるので、世代が違う room_gone になる
+  // こともある。どちらでも新規参加の導線になる。
+  assert string.contains(expired, "\"code\":\"resume_expired\"")
+    || string.contains(expired, "\"code\":\"room_gone\"")
+  tcp_close(other)
+}
+
+pub fn ws_leave_tells_others_the_participant_left_test() {
+  let port = start_buzzer_server()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let #(token, instance, alice_id, alice_buffer) =
+    join_for_resume(alice, alice_buffer, "RES4", "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, "RES4", "Bob")
+  let #(_joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+
+  send_client_message(alice, json.object([#("type", json.string("leave"))]))
+  let assert <<>> = recv_close_frame(alice, alice_buffer)
+  let #(left, _) = recv_text_message(bob, bob_buffer)
+  assert string.contains(left, "\"type\":\"participant_left\"")
+  assert string_field(left, "participant_id") == alice_id
+  tcp_close(alice)
+
+  // Bob が残っているので room は生きており、退出者の token は期限切れ。
+  let #(other, other_buffer) = handshake(port, 50)
+  send_client_message(other, resume_message("RES4", instance, token))
+  let #(expired, _) = recv_text_message(other, other_buffer)
+  assert string.contains(expired, "\"code\":\"resume_expired\"")
+  tcp_close(other)
+  tcp_close(bob)
 }

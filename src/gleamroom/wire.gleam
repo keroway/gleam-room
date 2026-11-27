@@ -66,14 +66,10 @@ pub fn validate_join(
   room_id: String,
   display_name: String,
 ) -> Result(#(RoomId, String), ProtocolError) {
-  case is_valid_field(room_id), is_valid_field(display_name) {
-    True, True -> Ok(#(RoomId(room_id), display_name))
-    False, _ ->
-      Error(ProtocolError(
-        code: "invalid_room_id",
-        message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
-      ))
-    True, False ->
+  case validate_room_id(room_id), is_valid_field(display_name) {
+    Ok(room_id), True -> Ok(#(room_id, display_name))
+    Error(error), _ -> Error(error)
+    Ok(_), False ->
       Error(ProtocolError(
         code: "invalid_display_name",
         message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
@@ -81,7 +77,21 @@ pub fn validate_join(
   }
 }
 
-fn is_valid_field(value: String) -> Bool {
+/// Validates a trimmed room id on its own, for messages that name a room
+/// without a display name (the buzzer's `resume`, #766).
+pub fn validate_room_id(room_id: String) -> Result(RoomId, ProtocolError) {
+  case is_valid_field(room_id) {
+    True -> Ok(RoomId(room_id))
+    False ->
+      Error(ProtocolError(
+        code: "invalid_room_id",
+        message: "room_id must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
+      ))
+  }
+}
+
+/// Whether `value` is 1-64 characters and at most 64 UTF-8 bytes.
+pub fn is_valid_field(value: String) -> Bool {
   !string.is_empty(value)
   && string.length(value) <= max_field_length
   && string.byte_size(value) <= max_field_length
