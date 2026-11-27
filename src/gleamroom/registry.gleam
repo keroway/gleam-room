@@ -1,12 +1,15 @@
+import gleam/crypto
 import gleam/dict
 import gleam/erlang/process.{type Subject}
 import gleam/list
 import gleam/otp/actor
 import gleam/result
 import gleam/set
+import gleam/string
 import gleamroom/call
 import gleamroom/room
 import gleamroom/room_registry.{type Core}
+import logging
 
 /// 実体は `room_registry` が持つ（#586）。`poker_registry.RoomId` と同じ型。
 pub type RoomId =
@@ -22,10 +25,26 @@ pub fn room_id_to_string(id: RoomId) -> String {
 }
 
 pub type Message {
+  /// 指定した ID の room を引き、無ければ起動する。WebSocket の経路はもう
+  /// 使わない（#767: 部屋は `Create` で明示的に作り、参加は `Find` で引く）。
+  /// テストが既知の ID で部屋を用意するのに使う。
   Lookup(
     id: RoomId,
     reply_to: Subject(Result(Subject(room.Message), room_registry.LookupError)),
   )
+  /// 新しい部屋コードを発行して room を起動する（#767）。
+  ///
+  /// コードの発行と登録を registry の 1 メッセージに閉じるので、同時に
+  /// 作成しても同じコードの部屋が 2 つできることはない。使用中のコードを
+  /// 引いたら引き直す。
+  Create(
+    reply_to: Subject(
+      Result(#(RoomId, Subject(room.Message)), room_registry.LookupError),
+    ),
+  )
+  /// 既存の room だけを引く（#767）。無ければ作らずに `Error(Nil)`。
+  /// 期限切れのコードや打ち間違いから、無断で同じコードの部屋を作らない。
+  Find(id: RoomId, reply_to: Subject(Result(Subject(room.Message), Nil)))
   /// 最後の参加者が抜けた room を登録から外す（#26）。
   ///
   /// `subject` を一緒に受け取り、**登録中のものと一致するときだけ削除する**。
@@ -114,7 +133,42 @@ type State {
     /// registry 自身の subject（#71）。`Release` が空判定を別プロセスへ
     /// 投げるとき、結果（`RoomEmptyChecked`）の返送先として渡す。
     self: Subject(Message),
+    /// 部屋コードの発行（#767）。衝突時の引き直しを試すためテストから
+    /// 差し替えられる。
+    new_code: fn() -> String,
   )
+}
+
+/// 使用中のコードを引いたときに引き直す回数（#767）。コード空間（32^6）に
+/// 対して部屋数は `max_rooms` で抑えられているので、引き直しが尽きるのは
+/// 発行関数が壊れているときだけ。
+const create_attempts = 8
+
+/// 部屋コードに使う文字（#767）。読み間違えやすい I・O・0・1 を除いた 32 文字。
+/// 32 文字なので乱数 1 バイトの下位 5 ビットで偏りなく選べる。
+const room_code_alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+const room_code_length = 6
+
+/// 新しい部屋コード（#767）。招待 URL と QR に載る公開情報で、秘密ではない。
+/// 推測で他人の部屋に入られにくいよう、暗号論的乱数から作る。
+pub fn generate_room_code() -> String {
+  let alphabet = string.to_graphemes(room_code_alphabet)
+  crypto.strong_random_bytes(room_code_length)
+  |> bytes_to_ints([])
+  |> list.map(fn(byte) {
+    let assert Ok(char) = list.drop(alphabet, byte % 32) |> list.first
+      as "room_code_alphabet has 32 characters"
+    char
+  })
+  |> string.concat
+}
+
+fn bytes_to_ints(bytes: BitArray, acc: List(Int)) -> List(Int) {
+  case bytes {
+    <<byte, rest:bits>> -> bytes_to_ints(rest, [byte, ..acc])
+    _ -> list.reverse(acc)
+  }
 }
 
 /// `max_rooms` の既定値。運用上の実測に基づく値ではなく、単一プロセスが
@@ -135,7 +189,7 @@ pub fn get_default_max_rooms() -> Int {
 /// `RoomId` cannot race into starting two authoritative room actors (ADR
 /// 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  build(room.start, default_max_rooms)
+  build(room.start, default_max_rooms, generate_room_code)
   |> actor.start
 }
 
@@ -145,7 +199,16 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
 pub fn start_with_room_starter(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
 ) -> actor.StartResult(Subject(Message)) {
-  build(start_room, default_max_rooms)
+  build(start_room, default_max_rooms, generate_room_code)
+  |> actor.start
+}
+
+/// 部屋コードの発行関数を差し替えて開始する。**テスト専用**（#767）。
+/// コードの衝突と引き直しの上限を確かめるのに使う。
+pub fn start_with_code_generator(
+  new_code: fn() -> String,
+) -> actor.StartResult(Subject(Message)) {
+  build(room.start, default_max_rooms, new_code)
   |> actor.start
 }
 
@@ -156,7 +219,7 @@ pub fn start_with_room_starter(
 pub fn start_with_max_rooms(
   max_rooms: Int,
 ) -> actor.StartResult(Subject(Message)) {
-  build(room.start, max_rooms)
+  build(room.start, max_rooms, generate_room_code)
   |> actor.start
 }
 
@@ -177,6 +240,7 @@ fn exit_to_message(kind: room_registry.ExitKind) -> Message {
 fn build(
   start_room: fn() -> actor.StartResult(Subject(room.Message)),
   max_rooms: Int,
+  new_code: fn() -> String,
 ) -> actor.Builder(State, Message, Subject(Message)) {
   room_registry.build(
     room_registry.new(start_room, max_rooms),
@@ -184,7 +248,7 @@ fn build(
     handle_message,
     // `subject` は初期化中の自分自身の subject（#71）。ここでしか
     // 手に入らないため、`State` へ持たせるのは `build` の中に限る。
-    fn(core, subject) { State(core:, self: subject) },
+    fn(core, subject) { State(core:, self: subject, new_code:) },
   )
 }
 
@@ -213,7 +277,7 @@ pub fn start_named_with_max_rooms(
   name: process.Name(Message),
   max_rooms: Int,
 ) -> actor.StartResult(Subject(Message)) {
-  build(room.start, max_rooms)
+  build(room.start, max_rooms, generate_room_code)
   |> actor.named(name)
   |> actor.start
 }
@@ -228,6 +292,15 @@ fn handle_message(
         room_registry.lookup(state.core, room_id_to_string(id), "room")
       process.send(reply_to, result)
       actor.continue(State(..state, core:))
+    }
+    Create(reply_to) -> {
+      let #(result, core) = create_room(state, create_attempts)
+      process.send(reply_to, result)
+      actor.continue(State(..state, core:))
+    }
+    Find(id, reply_to) -> {
+      process.send(reply_to, dict.get(state.core.rooms, room_id_to_string(id)))
+      actor.continue(state)
     }
     RoomDown(pid) ->
       actor.continue(
@@ -338,6 +411,34 @@ fn handle_message(
   }
 }
 
+/// 未使用のコードを引くまで最大 `attempts` 回引き、そのコードで room を
+/// 起動する（#767）。上限と起動失敗の扱いは `Lookup` と同じ。
+fn create_room(
+  state: State,
+  attempts: Int,
+) -> #(
+  Result(#(RoomId, Subject(room.Message)), room_registry.LookupError),
+  Core(room.Message),
+) {
+  let code = state.new_code()
+  case dict.has_key(state.core.rooms, code), attempts > 1 {
+    True, True -> create_room(state, attempts - 1)
+    True, False -> {
+      logging.log(
+        logging.Warning,
+        "room create failed: no free room code after "
+          <> string.inspect(create_attempts)
+          <> " attempts",
+      )
+      #(Error(room_registry.Unavailable), state.core)
+    }
+    False, _ -> {
+      let #(result, core) = room_registry.lookup(state.core, code, "room")
+      #(result.map(result, fn(subject) { #(room_id(code), subject) }), core)
+    }
+  }
+}
+
 /// registry が応答することを確かめ、登録中の room 数と、直近の probe で
 /// 応答が無かった room の数を返す（#93, #138）。
 ///
@@ -380,4 +481,36 @@ pub fn lookup(
   call.try_call(subject, call.default_timeout, Lookup(id, _), "registry.lookup")
   |> result.replace_error(room_registry.Unavailable)
   |> result.flatten
+}
+
+/// 新しい部屋コードで room を作る（#767）。作れなければ理由を返す。
+/// 応答しない registry は `Unavailable` に平坦化する（`lookup` と同じ）。
+pub fn create(
+  subject: Subject(Message),
+) -> Result(#(RoomId, Subject(room.Message)), room_registry.LookupError) {
+  call.try_call(subject, call.default_timeout, Create, "registry.create")
+  |> result.replace_error(room_registry.Unavailable)
+  |> result.flatten
+}
+
+/// `find` が room を返せなかった理由（#767）。案内が違うので区別する。
+pub type FindError {
+  /// そのコードの部屋は無い（終了した・作られていない）。
+  RoomNotFound
+  /// registry が応答しなかった。
+  RegistryUnavailable
+}
+
+/// 既存の room を引く（#767）。無いコードの部屋は作らない。
+pub fn find(
+  subject: Subject(Message),
+  id: RoomId,
+) -> Result(Subject(room.Message), FindError) {
+  case
+    call.try_call(subject, call.default_timeout, Find(id, _), "registry.find")
+  {
+    Ok(Ok(room_subject)) -> Ok(room_subject)
+    Ok(Error(Nil)) -> Error(RoomNotFound)
+    Error(Nil) -> Error(RegistryUnavailable)
+  }
 }

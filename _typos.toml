@@ -1,0 +1,3 @@
+[files]
+# QR コードの参照行列（16進）。英単語ではない（#767）。
+extend-exclude = ["test/client/qr-fixtures.json"]

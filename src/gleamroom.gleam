@@ -309,18 +309,11 @@ fn handle_request(
   poker_registry_subject: Subject(poker_registry.Message),
 ) -> Response(ResponseData) {
   case request.path_segments(req) {
-    [] ->
-      case req.method {
-        Get | Head ->
-          response.new(200)
-          |> response.set_header("content-type", "text/html; charset=utf-8")
-          |> response.set_header("x-content-type-options", "nosniff")
-          |> response.set_body(
-            mist.Bytes(bytes_tree.from_string(web.index_html())),
-          )
-          |> empty_body_for_head(req.method)
-        _ -> method_not_allowed(["GET", "HEAD"])
-      }
+    [] -> buzzer_page(req)
+    // 招待 URL（#767）。ページは同じで、どの部屋に入るかはページの JS が
+    // パスから読む。部屋の有無はここでは見ない（参加時に WebSocket で
+    // `room_not_found` を返す）。招待 URL に載るのは部屋コードだけ。
+    ["r", _room_code] -> buzzer_page(req)
 
     // **registry に実際に問い合わせてから答える（#93）。**
     //
@@ -430,6 +423,20 @@ fn handle_request(
     _ ->
       response.new(404)
       |> response.set_body(mist.Bytes(bytes_tree.new()))
+  }
+}
+
+fn buzzer_page(req: Request(Connection)) -> Response(ResponseData) {
+  case req.method {
+    Get | Head ->
+      response.new(200)
+      |> response.set_header("content-type", "text/html; charset=utf-8")
+      |> response.set_header("x-content-type-options", "nosniff")
+      // 招待 URL のパス（部屋コード）を外部へのリンク先に渡さない。
+      |> response.set_header("referrer-policy", "no-referrer")
+      |> response.set_body(mist.Bytes(bytes_tree.from_string(web.index_html())))
+      |> empty_body_for_head(req.method)
+    _ -> method_not_allowed(["GET", "HEAD"])
   }
 }
 

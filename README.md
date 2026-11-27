@@ -132,10 +132,10 @@ tests extract it from there rather than keeping a second copy.
 ### Browser client
 
 Opening `http://localhost:4000/` in a browser serves a minimal HTML/CSS/JS
-client for manually exercising room join/presence and buzzer behavior. Enter
-a room ID and display name to join, then use the buzzer button; opening the
-same room in multiple tabs shows presence and buzz updates propagate to all
-of them. It is a thin wire-protocol client with no build tool or framework;
+client for manually exercising room join/presence and buzzer behavior. One
+person creates a room and shares the invite URL (`/r/<room code>`) or its QR
+code; others open it and only enter a name (#767). Opening the same room in
+multiple tabs shows presence and buzz updates propagate to all of them. It is a thin wire-protocol client with no build tool or framework;
 see `src/gleamroom/web.gleam`.
 
 ### Manual MVP acceptance procedure
@@ -151,12 +151,15 @@ this matters when deploying behind a reverse proxy that rewrites `Host`. The
 browser client above is the easiest way to exercise it manually. To validate
 the full MVP acceptance scenario from
 [`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running
-(room IDs are case-insensitive — `abcd`, `ABCD`, and `AbCd` all join the same
-room):
+(room codes are case-insensitive when typed):
 
-1. Open `http://localhost:4000/` in three browser tabs/windows.
-2. Join room `ABCD` in each with a different display name (e.g. Alice, Bob,
-   Carol). All three should show the same participant presence.
+1. Open `http://localhost:4000/`, enter a name (e.g. Alice) and press
+   「部屋を作る」. The page shows the room code, the invite URL and a QR code.
+2. Open the invite URL in two more tabs/windows (or scan the QR code with a
+   phone on the same network) and join as Bob and Carol by entering only a
+   name. All three should show the same participant presence. Opening
+   `/r/` with a code that has no room explains that the room was not found
+   and creates nothing.
 3. Reset the round, then press buzz in the order Bob, Alice, Carol. All
    three clients should display the identical ordering B → A → C.
 4. Press buzz again from Bob. The ordering should not change or duplicate.
@@ -173,9 +176,14 @@ room):
 the Registry + Room actor boundary (without opening real sockets); run it
 with `gleam test`.
 
+`test/http/buzzer-invite.hurl` checks the page routes, including the invite
+URL, against a running server:
+`PORT=4123 gleam run` and then
+`hurl --test --variable base=http://localhost:4123 test/http/buzzer-invite.hurl`.
+
 `test/gleamroom/routing_test.gleam` goes one layer further out: it starts the
 real supervision tree with `gleamroom.start/1` and sends real HTTP requests to
-`/`, `/poker`, `/health`, `/ws`, `/poker/ws`, and an unknown path — including
+`/`, `/r/<room code>`, `/poker`, `/health`, `/ws`, `/poker/ws`, and an unknown path — including
 poker-registry health branches (registry down, timeout, stuck rooms) that get
 as much coverage as the buzzer path. It also verifies that unsupported methods
 on those routes get a 405 with an `Allow` header, and that `HEAD` returns the

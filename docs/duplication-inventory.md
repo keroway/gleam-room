@@ -82,7 +82,7 @@ already prevents.
 
 **対象外（既に共有済み）.** `call.try_call`, `call.try_call_classified`,
 `classify`, and `Failure` live in one module and are imported by both sides
-(`registry.gleam:7`, `poker_registry.gleam:7`, `room.gleam:11`,
+(`registry.gleam:9`, `poker_registry.gleam:7`, `room.gleam:11`,
 `poker.gleam:7`). This is the existing precedent for how a shared boundary
 in this codebase looks; use it as the template when extracting the registry
 layer in 1.1.
@@ -102,10 +102,10 @@ Duplicated infrastructure (not domain state machine):
   (`room.gleam:853-878`), because a participant can now outlive and change
   its connection.
 - Broadcasting: Poker's `broadcast_all` (`poker.gleam:484-491`) vs the
-  buzzer's `broadcast_to_attached` (`room.gleam:1012-1027`), which skips
+  buzzer's `broadcast_to_attached` (`room.gleam:1075-1090`), which skips
   participants within the resume grace (#766).
-- `SessionDown` handler (`room.gleam:664-689`, `poker.gleam:365-411`) and
-  `ShutdownIfEmpty` handler (`room.gleam:690-702`, `poker.gleam:412-422`).
+- `SessionDown` handler (`room.gleam:727-752`, `poker.gleam:365-411`) and
+  `ShutdownIfEmpty` handler (`room.gleam:753-765`, `poker.gleam:412-422`).
   The buzzer's `SessionDown` now marks the participant disconnected and
   starts a grace timer instead of removing them (#766).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
@@ -166,13 +166,13 @@ modules use it.
 
 - `RoomId`/`ParticipantId` types and accessors (`wire.gleam:9-29`).
 - `max_field_length = 64` and `is_valid_field` (trim, 1-64 char/byte check)
-  (`wire.gleam:58,94-98`).
-- `validate_join` (room_id-first error precedence) (`wire.gleam:65-82`,
+  (`wire.gleam:59,107-111`).
+- `validate_join` (room_id-first error precedence) (`wire.gleam:61-76`,
   including the comment).
 - The `json.UnableToDecode`/error branching shape and `ProtocolError` type
   (`wire.gleam:33-35`, `wire.gleam:40-53` for `decode_error`).
 - The json-to-string skeleton behind `encode_server_message`, now
-  `encode_message` (`wire.gleam:100-104`).
+  `encode_message` (`wire.gleam:113-117`).
 
 This is pure string validation with no domain knowledge attached, which
 makes it the lowest-risk extraction candidate alongside the registry layer.
@@ -207,9 +207,9 @@ Still duplicated because they read or update `ConnectionState` (whose
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:941-964`,
-  `poker_websocket.gleam:758-776`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:996-1122`,
+- `release_room` (`websocket.gleam:1043-1058`,
+  `poker_websocket.gleam:758-776`) and the `with_existing_room`/`with_join_reply`/
+  `with_room_reply` family (`websocket.gleam:1088-1232`,
   `poker_websocket.gleam:799-889`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.

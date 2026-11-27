@@ -70,9 +70,12 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(socket, join_message("ROOM1", "Alice"))
+  // 部屋を作った本人には、発行された部屋コードと司会 token が返る（#767）。
+  send_client_message(socket, create_message("Alice"))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
+  assert string.length(string_field(join_reply, "room_id")) == 6
+  assert string_field(join_reply, "host_token") != ""
   assert string.contains(join_reply, "\"display_name\":\"Alice\"")
   assert string.contains(join_reply, "\"round_id\":1")
   assert string.contains(join_reply, "\"revision\":1")
@@ -112,8 +115,9 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
 /// buzz/reset は `room_unavailable` を返し続け、再 join も
 /// `already_joined` で拒否され続けて接続が永久にスタックしていた。
 /// 修正後は `room.dispatch` の失敗時に `state.room` を `None` へ戻すため、
-/// 同じ接続からの再 join が新しい room に参加できる。エラーコードは #570 で
-/// `room_unavailable` から専用の `room_busy` へ変更された。
+/// 同じ接続から再 join できる。エラーコードは #570 で `room_unavailable` から
+/// 専用の `room_busy` へ変更された。終了した部屋のコードは作り直さないので
+/// （#767）、再 join は `already_joined` ではなく `room_not_found` になる。
 pub fn ws_rejoins_after_room_actor_dies_test() {
   let assert Ok(registry_started) = registry.start()
   let registry_subject = registry_started.data
@@ -125,12 +129,10 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
     )
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(socket, join_message("ROOM1", "Alice"))
-  let #(join_reply, buffer) = recv_text_message(socket, buffer)
-  assert string.contains(join_reply, "\"type\":\"state\"")
+  let #(room_code, buffer) = create_and_drain(socket, buffer, "Alice")
 
   let assert Ok(room_subject) =
-    registry.lookup(registry_subject, registry.room_id("ROOM1"))
+    registry.find(registry_subject, registry.room_id(room_code))
   let assert Ok(room_pid) = process.subject_owner(room_subject)
   process.kill(room_pid)
   // room actor の死が registry/接続双方に伝播するのを待つ。
@@ -141,21 +143,21 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   assert string.contains(buzz_reply, "\"type\":\"error\"")
   assert string.contains(buzz_reply, "\"code\":\"room_busy\"")
 
-  send_client_message(socket, join_message("ROOM1", "Alice"))
+  send_client_message(socket, join_message(room_code, "Alice"))
   let #(rejoin_reply, _buffer) = recv_text_message(socket, buffer)
-  assert string.contains(rejoin_reply, "\"type\":\"state\"")
+  assert string.contains(rejoin_reply, "\"code\":\"room_not_found\"")
   assert !string.contains(rejoin_reply, "already_joined")
 
   tcp_close(socket)
 }
 
-/// room を引けない（MAX_ROOMS 到達で `registry.lookup` が `CapacityReached`）join は
-/// `room_unavailable` を返すが、接続は切らない（`with_room`、#32 / #572）。
+/// 部屋を作れない（MAX_ROOMS 到達で `registry.create` が `CapacityReached`）
+/// create は `room_unavailable` を返すが、接続は切らない（#32 / #572 / #767）。
 ///
 /// `with_join_reply` の `JoinTimedOut` は `mist.stop()` で接続を切るのと正反対の
 /// 挙動で、両者が入れ替わっても他のテストでは検知できなかった。上限1の
-/// registry で ROOM1 を埋め、同じ接続で ROOM2 に join して拒否された後、
-/// ROOM1 へ join し直せる（= 接続が生きている）ことを確かめる。
+/// registry を Alice の部屋で埋め、Bob の create が拒否された後、同じ接続から
+/// Alice の部屋へ join できる（= 接続が生きている）ことを確かめる。
 pub fn ws_keeps_connection_after_room_lookup_failed_test() {
   let assert Ok(registry_started) = registry.start_with_max_rooms(1)
   let assert Ok(poker_registry_started) = poker_registry.start()
@@ -167,19 +169,18 @@ pub fn ws_keeps_connection_after_room_lookup_failed_test() {
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
 
-  // Alice が ROOM1 を作り、上限（1）に達する。
-  send_client_message(alice, join_message("ROOM1", "Alice"))
-  let #(alice_reply, _alice_buffer) = recv_text_message(alice, alice_buffer)
-  assert string.contains(alice_reply, "\"type\":\"state\"")
+  // Alice が部屋を作り、上限（1）に達する。
+  let #(room_code, _alice_buffer) =
+    create_and_drain(alice, alice_buffer, "Alice")
 
-  send_client_message(bob, join_message("ROOM2", "Bob"))
+  send_client_message(bob, create_message("Bob"))
   let #(rejected, bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(rejected, "\"type\":\"error\"")
   assert string.contains(rejected, "\"code\":\"room_unavailable\"")
   assert string.contains(rejected, "The server is at room capacity.")
 
-  // 接続は維持されている: 既存の ROOM1 へは同じ接続から join できる。
-  send_client_message(bob, join_message("ROOM1", "Bob"))
+  // 接続は維持されている: 既存の部屋へは同じ接続から join できる。
+  send_client_message(bob, join_message(room_code, "Bob"))
   let #(joined, _bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(joined, "\"type\":\"state\"")
 
@@ -218,12 +219,10 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
     )
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(socket, join_message("STUCK1", "Alice"))
-  let #(join_reply, buffer) = recv_text_message(socket, buffer)
-  assert string.contains(join_reply, "\"type\":\"state\"")
+  let #(room_code, buffer) = create_and_drain(socket, buffer, "Alice")
 
-  let room_id = registry.room_id("STUCK1")
-  let assert Ok(room_subject) = registry.lookup(registry_subject, room_id)
+  let room_id = registry.room_id(room_code)
+  let assert Ok(room_subject) = registry.find(registry_subject, room_id)
   let assert Ok(room_pid) = process.subject_owner(room_subject)
 
   // room actor を生かしたまま応答不能にする。
@@ -249,9 +248,7 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
     fn() { !process.is_alive(room_pid) },
     "無人になった room actor が SessionDown 経由で自己停止する",
   )
-  // `registry.lookup` は cache miss だと room を新規に起動してしまう
-  // （get-or-create）ため、片付いたことの確認には使えない。実数を返す
-  // `registry.health` で見る。
+  // 登録数そのものを返す `registry.health` で、registry からも外れたことを見る。
   wait.until(
     fn() {
       case registry.health(registry_subject) {
@@ -576,6 +573,14 @@ fn join_message(room_id: String, display_name: String) -> json.Json {
   ])
 }
 
+fn create_message(display_name: String) -> json.Json {
+  json.object([
+    #("type", json.string("create")),
+    #("v", json.int(2)),
+    #("display_name", json.string(display_name)),
+  ])
+}
+
 fn buzz_message(round_id: Int) -> json.Json {
   json.object([
     #("type", json.string("buzz")),
@@ -702,7 +707,7 @@ fn start_server_with_heartbeat_interval(interval_ms: Int) -> Int {
 pub fn ws_ping_keeps_silent_connection_alive_test() {
   let port = start_server_with_heartbeat_interval(300)
   let #(alice, alice_buffer) = handshake(port, 50)
-  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
+  let #(_, alice_buffer) = create_and_drain(alice, alice_buffer, "Alice")
 
   let _buffer = ping_n_times(alice, alice_buffer, 16)
 
@@ -718,8 +723,9 @@ pub fn ws_room_broadcast_does_not_keep_silent_connection_alive_test() {
   let port = start_server_with_heartbeat_interval(300)
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
-  let _bob_buffer = join_and_drain(bob, bob_buffer, "Bob")
+  let #(room_code, alice_buffer) =
+    create_and_drain(alice, alice_buffer, "Alice")
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
 
   send_resets(bob, 10)
 
@@ -844,7 +850,7 @@ fn recv_until_close(
 pub fn ws_silent_connection_without_broadcast_times_out_test() {
   let port = start_server_with_heartbeat_interval(300)
   let #(alice, alice_buffer) = handshake(port, 50)
-  let alice_buffer = join_and_drain(alice, alice_buffer, "Alice")
+  let #(_, alice_buffer) = create_and_drain(alice, alice_buffer, "Alice")
 
   let #(reason, _rest) = recv_close_reason(alice, alice_buffer)
   assert reason
@@ -852,15 +858,16 @@ pub fn ws_silent_connection_without_broadcast_times_out_test() {
   tcp_close(alice)
 }
 
-fn join_and_drain(
+/// 部屋を作って参加し、発行された部屋コードを返す（#767）。
+fn create_and_drain(
   socket: TcpSocket,
   buffer: BitArray,
   display_name: String,
-) -> BitArray {
-  send_client_message(socket, join_message("HEARTBEAT", display_name))
-  let #(join_reply, buffer) = recv_text_message(socket, buffer)
-  assert string.contains(join_reply, "\"type\":\"state\"")
-  buffer
+) -> #(String, BitArray) {
+  send_client_message(socket, create_message(display_name))
+  let #(reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"type\":\"state\"")
+  #(string_field(reply, "room_id"), buffer)
 }
 
 /// 同じ変更は直接応答と配信の両方で届くが、どちらも同じ revision を持つ。
@@ -873,8 +880,9 @@ pub fn ws_reply_and_broadcast_carry_the_same_revision_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let alice_buffer = join_room_and_drain(alice, alice_buffer, "REV1", "Alice")
-  let bob_buffer = join_room_and_drain(bob, bob_buffer, "REV1", "Bob")
+  let #(room_code, alice_buffer) =
+    create_and_drain(alice, alice_buffer, "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(joined, "\"type\":\"participant_joined\"")
   assert string.contains(joined, "\"revision\":2")
@@ -899,7 +907,7 @@ pub fn ws_reply_and_broadcast_carry_the_same_revision_test() {
 pub fn ws_second_reset_of_the_same_round_is_stale_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(alice, alice_buffer) = handshake(port, 50)
-  let alice_buffer = join_room_and_drain(alice, alice_buffer, "STALE1", "Alice")
+  let #(_, alice_buffer) = create_and_drain(alice, alice_buffer, "Alice")
 
   send_client_message(alice, with_request_id("reset", 1, "r1"))
   let #(_broadcast_copy, alice_buffer) = recv_text_message(alice, alice_buffer)
@@ -979,13 +987,14 @@ pub fn ws_reply_does_not_overtake_queued_broadcasts_test() {
     )
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let alice_buffer = join_room_and_drain(alice, alice_buffer, "ORDER1", "Alice")
-  let _bob_buffer = join_room_and_drain(bob, bob_buffer, "ORDER1", "Bob")
+  let #(room_code, alice_buffer) =
+    create_and_drain(alice, alice_buffer, "Alice")
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(joined, "\"revision\":2")
 
   let assert Ok(room_subject) =
-    registry.lookup(registry_subject, registry.room_id("ORDER1"))
+    registry.find(registry_subject, registry.room_id(room_code))
   let assert Ok(room_pid) = process.subject_owner(room_subject)
   suspend_process(room_pid)
   send_client_message(bob, with_request_id("buzz", 1, "b1"))
@@ -1018,13 +1027,14 @@ pub fn ws_sync_state_is_sent_before_newer_queued_broadcasts_test() {
     )
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let alice_buffer = join_room_and_drain(alice, alice_buffer, "SYNC1", "Alice")
+  let #(room_code, alice_buffer) =
+    create_and_drain(alice, alice_buffer, "Alice")
   let assert Ok(room_subject) =
-    registry.lookup(registry_subject, registry.room_id("SYNC1"))
+    registry.find(registry_subject, registry.room_id(room_code))
   let assert Ok(room_pid) = process.subject_owner(room_subject)
   // この時点で room が監視しているのは Alice の接続だけ。
   let assert [alice_connection] = monitored_pids(room_pid)
-  let _bob_buffer = join_room_and_drain(bob, bob_buffer, "SYNC1", "Bob")
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(joined, "\"revision\":2")
 
@@ -1105,17 +1115,18 @@ fn resume_message(room_id: String, instance_id: String, token: String) {
   ])
 }
 
-/// 参加して、state の (resume_token, room_instance_id, self_id) を返す。
-fn join_for_resume(
+/// 部屋を作って参加し、state の (room_id, resume_token, room_instance_id,
+/// self_id) を返す。
+fn create_for_resume(
   socket: TcpSocket,
   buffer: BitArray,
-  room_id: String,
   name: String,
-) -> #(String, String, String, BitArray) {
-  send_client_message(socket, join_message(room_id, name))
+) -> #(String, String, String, String, BitArray) {
+  send_client_message(socket, create_message(name))
   let #(state, buffer) = recv_text_message(socket, buffer)
   assert string.contains(state, "\"type\":\"state\"")
   #(
+    string_field(state, "room_id"),
     string_field(state, "resume_token"),
     string_field(state, "room_instance_id"),
     string_field(state, "self_id"),
@@ -1127,9 +1138,9 @@ pub fn ws_resume_keeps_the_participant_and_their_buzz_test() {
   let port = start_buzzer_server()
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let #(token, instance, alice_id, alice_buffer) =
-    join_for_resume(alice, alice_buffer, "RES1", "Alice")
-  let bob_buffer = join_room_and_drain(bob, bob_buffer, "RES1", "Bob")
+  let #(room_code, token, instance, alice_id, alice_buffer) =
+    create_for_resume(alice, alice_buffer, "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(_joined, alice_buffer) = recv_text_message(alice, alice_buffer)
 
   send_client_message(alice, with_request_id("buzz", 1, "b1"))
@@ -1146,7 +1157,7 @@ pub fn ws_resume_keeps_the_participant_and_their_buzz_test() {
 
   // 新しい接続で同じ参加者として戻る。
   let #(again, again_buffer) = handshake(port, 50)
-  send_client_message(again, resume_message("RES1", instance, token))
+  send_client_message(again, resume_message(room_code, instance, token))
   let #(state, again_buffer) = recv_text_message(again, again_buffer)
   assert string.contains(state, "\"type\":\"state\"")
   assert string_field(state, "self_id") == alice_id
@@ -1172,11 +1183,11 @@ pub fn ws_resume_keeps_the_participant_and_their_buzz_test() {
 pub fn ws_a_second_resume_replaces_the_older_connection_test() {
   let port = start_buzzer_server()
   let #(first, first_buffer) = handshake(port, 50)
-  let #(token, instance, alice_id, first_buffer) =
-    join_for_resume(first, first_buffer, "RES2", "Alice")
+  let #(room_code, token, instance, alice_id, first_buffer) =
+    create_for_resume(first, first_buffer, "Alice")
 
   let #(second, second_buffer) = handshake(port, 50)
-  send_client_message(second, resume_message("RES2", instance, token))
+  send_client_message(second, resume_message(room_code, instance, token))
   let #(state, _) = recv_text_message(second, second_buffer)
   assert string_field(state, "self_id") == alice_id
 
@@ -1190,14 +1201,14 @@ pub fn ws_a_second_resume_replaces_the_older_connection_test() {
 pub fn ws_resume_rejections_name_the_reason_test() {
   let port = start_buzzer_server()
   let #(alice, alice_buffer) = handshake(port, 50)
-  let #(token, instance, _, alice_buffer) =
-    join_for_resume(alice, alice_buffer, "RES3", "Alice")
+  let #(room_code, token, instance, _, alice_buffer) =
+    create_for_resume(alice, alice_buffer, "Alice")
 
   let #(other, other_buffer) = handshake(port, 50)
-  send_client_message(other, resume_message("RES3", "old-instance", token))
+  send_client_message(other, resume_message(room_code, "old-instance", token))
   let #(gone, other_buffer) = recv_text_message(other, other_buffer)
   assert string.contains(gone, "\"code\":\"room_gone\"")
-  send_client_message(other, resume_message("RES3", instance, "forged"))
+  send_client_message(other, resume_message(room_code, instance, "forged"))
   let #(invalid, other_buffer) = recv_text_message(other, other_buffer)
   assert string.contains(invalid, "\"code\":\"invalid_token\"")
 
@@ -1205,7 +1216,7 @@ pub fn ws_resume_rejections_name_the_reason_test() {
   send_client_message(alice, json.object([#("type", json.string("leave"))]))
   let assert <<>> = recv_close_frame(alice, alice_buffer)
   tcp_close(alice)
-  send_client_message(other, resume_message("RES3", instance, token))
+  send_client_message(other, resume_message(room_code, instance, token))
   let #(expired, _) = recv_text_message(other, other_buffer)
   // 最後の参加者が退出した room は止まるので、世代が違う room_gone になる
   // こともある。どちらでも新規参加の導線になる。
@@ -1218,9 +1229,9 @@ pub fn ws_leave_tells_others_the_participant_left_test() {
   let port = start_buzzer_server()
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let #(token, instance, alice_id, alice_buffer) =
-    join_for_resume(alice, alice_buffer, "RES4", "Alice")
-  let bob_buffer = join_room_and_drain(bob, bob_buffer, "RES4", "Bob")
+  let #(room_code, token, instance, alice_id, alice_buffer) =
+    create_for_resume(alice, alice_buffer, "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(_joined, alice_buffer) = recv_text_message(alice, alice_buffer)
 
   send_client_message(alice, json.object([#("type", json.string("leave"))]))
@@ -1232,9 +1243,107 @@ pub fn ws_leave_tells_others_the_participant_left_test() {
 
   // Bob が残っているので room は生きており、退出者の token は期限切れ。
   let #(other, other_buffer) = handshake(port, 50)
-  send_client_message(other, resume_message("RES4", instance, token))
+  send_client_message(other, resume_message(room_code, instance, token))
   let #(expired, _) = recv_text_message(other, other_buffer)
   assert string.contains(expired, "\"code\":\"resume_expired\"")
   tcp_close(other)
   tcp_close(bob)
+}
+
+// --- #767: 部屋の作成と招待（実ソケット） ------------------------------------
+
+/// 招待（部屋コード）から入った参加者は司会 token も部屋コードの発行も
+/// 受け取らない。作成者の token は他の参加者への配信に出ない。
+pub fn ws_invite_join_gets_no_host_capability_test() {
+  let port = start_buzzer_server()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  send_client_message(alice, create_message("Alice"))
+  let #(created, alice_buffer) = recv_text_message(alice, alice_buffer)
+  let room_code = string_field(created, "room_id")
+  let host_token = string_field(created, "host_token")
+  let resume_token = string_field(created, "resume_token")
+
+  send_client_message(bob, join_message(room_code, "Bob"))
+  let #(joined, _bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.contains(joined, "\"type\":\"state\"")
+  assert string.contains(joined, "\"resume_token\"")
+  assert !string.contains(joined, "\"host_token\"")
+  assert !string.contains(joined, "\"room_id\"")
+  assert !string.contains(joined, host_token)
+  assert !string.contains(joined, resume_token)
+
+  let #(seen_by_alice, _alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(seen_by_alice, "\"type\":\"participant_joined\"")
+  assert !string.contains(seen_by_alice, "token")
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// 無いコードへの join は部屋を作らずに `room_not_found` を返し、同じ接続は
+/// 生きている。resume は `room_gone` になる。
+pub fn ws_unknown_room_code_is_not_created_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_client_message(socket, join_message("GONE23", "Alice"))
+  let #(not_found, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(not_found, "\"code\":\"room_not_found\"")
+  send_client_message(socket, resume_message("GONE23", "old", "token"))
+  let #(gone, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(gone, "\"code\":\"room_gone\"")
+  let assert Ok(registry.HealthSnapshot(rooms: 0, ..)) =
+    registry.health(registry_subject)
+
+  // 接続は維持されているので、そのまま部屋を作れる。
+  let #(_, _buffer) = create_and_drain(socket, buffer, "Alice")
+  tcp_close(socket)
+}
+
+/// 表示名が不正な create は部屋を作らない。
+pub fn ws_create_with_an_invalid_name_makes_no_room_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(socket, buffer) = handshake(port, 50)
+
+  send_client_message(socket, create_message("   "))
+  let #(reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"code\":\"invalid_display_name\"")
+  let assert Ok(registry.HealthSnapshot(rooms: 0, ..)) =
+    registry.health(registry_subject)
+  tcp_close(socket)
+}
+
+/// 参加済みの接続からの create は `already_joined` で拒否し、部屋を増やさない。
+pub fn ws_create_after_joining_is_rejected_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(socket, buffer) = handshake(port, 50)
+  let #(_, buffer) = create_and_drain(socket, buffer, "Alice")
+
+  send_client_message(socket, create_message("Alice"))
+  let #(reply, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"code\":\"already_joined\"")
+  let assert Ok(registry.HealthSnapshot(rooms: 1, ..)) =
+    registry.health(registry_subject)
+  tcp_close(socket)
 }

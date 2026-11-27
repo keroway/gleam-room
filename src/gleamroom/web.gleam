@@ -9,22 +9,46 @@ import gleamroom/client_js
 /// JS shared with the Planning Poker page is spliced in from `client_js`.
 pub fn index_html() -> String {
   "<!doctype html>
-<html lang=\"en\">
+<html lang=\"ja\">
 <head>
 <meta charset=\"utf-8\">
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
-<title>gleam-room buzzer</title>
+<title>gleam-room 早押し</title>
 <style>
   :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { margin: 0 auto; max-width: 40rem; padding: 1rem; }
-  fieldset { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+  /* display を指定した要素でも hidden 属性で確実に隠す。 */
+  [hidden] { display: none !important; }
+  body { margin: 0 auto; max-width: 40rem; padding: 1rem; line-height: 1.5; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.5rem; }
+  h2 { font-size: 1.1rem; margin: 1rem 0 0.5rem; }
+  form { margin: 0 0 1rem; }
+  fieldset { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: end; }
+  label { display: flex; flex-direction: column; flex: 1 1 12rem; min-width: 0; }
+  /* 16px 未満だと iOS Safari が入力時に画面を拡大する。 */
+  input, button { font-size: 1rem; }
+  input { padding: 0.5rem; min-width: 0; }
+  button { padding: 0.5rem 1rem; min-height: 2.75rem; }
+  #room-id { text-transform: uppercase; }
+  #status { min-height: 1.5em; font-weight: bold; }
+  #status[data-state=\"connected\"] { color: green; }
+  #status[data-state=\"disconnected\"],
+  #status[data-state=\"resume-failed\"],
+  #status[data-state=\"replaced\"],
+  #status[data-state=\"outdated\"] { color: crimson; }
+  #invite { border: 1px solid currentColor; border-radius: 0.5rem; padding: 0 1rem 1rem; }
+  #invite-code { font-size: 1.6rem; letter-spacing: 0.15em; font-family: ui-monospace, monospace; }
+  #invite-url { width: 100%; box-sizing: border-box; }
+  /* QR は暗いテーマでも白地に黒で描く（読み取り機が前提にする向き）。 */
+  #invite-qr svg { display: block; width: min(16rem, 100%); height: auto; margin-top: 0.5rem; }
   #buzz {
     display: block;
     width: 100%;
+    min-height: 7rem;
     margin: 1rem 0;
-    padding: 1.5rem;
-    font-size: 1.5rem;
+    font-size: 2rem;
     font-weight: bold;
+    /* 連打してもダブルタップ拡大にならないようにする。 */
+    touch-action: manipulation;
   }
   #buzz:disabled { opacity: 0.5; }
   #participants { padding-left: 1.2rem; }
@@ -36,45 +60,79 @@ pub fn index_html() -> String {
     font-family: ui-monospace, monospace;
     font-size: 0.85rem;
   }
-  #status[data-state=\"connected\"] { color: green; }
-  #status[data-state=\"disconnected\"],
-  #status[data-state=\"resume-failed\"],
-  #status[data-state=\"replaced\"] { color: crimson; }
 </style>
 </head>
 <body>
-<h1>gleam-room buzzer</h1>
+<h1>gleam-room 早押し</h1>
 <p><a href=\"/poker\">Planning Poker</a></p>
 
-<form id=\"join-form\">
+<div id=\"entry\">
+<form id=\"create-form\">
+  <h2>部屋を作る</h2>
+  <p>部屋を作ると、参加者に配る招待URLとQRコードが表示されます。</p>
   <fieldset>
-    <label>Room <input id=\"room-id\" required autocomplete=\"off\" placeholder=\"ABCD\" maxlength=\"64\"></label>
-    <label>Name <input id=\"display-name\" required autocomplete=\"off\" placeholder=\"Alice\" maxlength=\"64\"></label>
-    <button type=\"submit\" id=\"join\">Join</button>
-    <span id=\"status\" data-state=\"disconnected\">disconnected</span>
+    <label>あなたの名前 <input id=\"create-name\" required autocomplete=\"off\" placeholder=\"例: 司会\" maxlength=\"64\"></label>
+    <button type=\"submit\" id=\"create\">部屋を作る</button>
   </fieldset>
 </form>
 
-<button id=\"buzz\" disabled>BUZZ</button>
-<button id=\"reset\" disabled>Reset round</button>
-<button id=\"leave\" disabled>Leave</button>
+<form id=\"join-form\">
+  <h2 id=\"join-heading\">部屋コードで参加</h2>
+  <fieldset>
+    <label id=\"room-label\">部屋コード <input id=\"room-id\" required autocomplete=\"off\" autocapitalize=\"characters\" placeholder=\"例: K7M2QX\" maxlength=\"64\"></label>
+    <label>あなたの名前 <input id=\"display-name\" required autocomplete=\"off\" placeholder=\"例: さくら\" maxlength=\"64\"></label>
+    <button type=\"submit\" id=\"join\">参加する</button>
+  </fieldset>
+</form>
+</div>
 
-<h2>Participants</h2>
+<p id=\"status\" role=\"status\" aria-live=\"polite\" data-state=\"disconnected\">未接続</p>
+
+<button id=\"buzz\" disabled>BUZZ</button>
+<p>
+  <button id=\"reset\" disabled>次の問題へ（押した順をリセット）</button>
+  <button id=\"leave\" disabled>退出する</button>
+</p>
+
+<section id=\"invite\" hidden aria-labelledby=\"invite-heading\">
+  <h2 id=\"invite-heading\">参加者を招待する</h2>
+  <p>部屋コード <span id=\"invite-code\"></span></p>
+  <label>招待URL <input id=\"invite-url\" readonly></label>
+  <p><button type=\"button\" id=\"copy-invite\">招待URLをコピー</button> <span id=\"copy-result\" role=\"status\" aria-live=\"polite\"></span></p>
+  <div id=\"invite-qr\" role=\"img\" aria-label=\"招待URLのQRコード\"></div>
+  <p>スマホのカメラでQRコードを読み取るか、招待URLを送ってください。招待から入った人は名前を入れるだけで参加できます。</p>
+</section>
+
+<h2>参加者</h2>
 <ul id=\"participants\"></ul>
 
-<h2>Buzz order</h2>
+<h2>押した順</h2>
 <ol id=\"buzzes\"></ol>
 
-<h2>Log</h2>
-<div id=\"log\"></div>
+<details>
+  <summary>接続ログ（不具合の調査用）</summary>
+  <div id=\"log\"></div>
+</details>
 
 <script>
 (() => {
+  const entryEl = document.getElementById(\"entry\");
+  const createForm = document.getElementById(\"create-form\");
+  const createNameInput = document.getElementById(\"create-name\");
+  const createButton = document.getElementById(\"create\");
   const joinForm = document.getElementById(\"join-form\");
+  const joinHeading = document.getElementById(\"join-heading\");
+  const roomLabel = document.getElementById(\"room-label\");
   const roomInput = document.getElementById(\"room-id\");
   const nameInput = document.getElementById(\"display-name\");
   const joinButton = document.getElementById(\"join\");
   const statusEl = document.getElementById(\"status\");
+  const inviteEl = document.getElementById(\"invite\");
+  const inviteCodeEl = document.getElementById(\"invite-code\");
+  const inviteUrlInput = document.getElementById(\"invite-url\");
+  const copyButton = document.getElementById(\"copy-invite\");
+  const copyResultEl = document.getElementById(\"copy-result\");
+  const inviteQrEl = document.getElementById(\"invite-qr\");
   const buzzButton = document.getElementById(\"buzz\");
   const resetButton = document.getElementById(\"reset\");
   const leaveButton = document.getElementById(\"leave\");
@@ -105,6 +163,9 @@ pub fn index_html() -> String {
   // 切断で破棄し、上限を超えたら古いものから捨てる。
   const MAX_PENDING_REQUESTS = 16;
   let pending = new Map();
+  // 作成（create）を送って、部屋コード付きの state を待っている間だけ
+  // { displayName } を持つ（#767）。
+  let pendingCreate = null;
   let nextRequestId = 1;
 
   const PROTOCOL_VERSION = 2;
@@ -145,7 +206,12 @@ pub fn index_html() -> String {
 
   // 同じ部屋・同じ名前で参加した記録があれば、新規参加ではなく同じ参加者として
   // 戻る（#766）。表示名だけでは戻れない。token を持つこのタブだけが戻れる。
+  // 部屋の作成（#767）は roomId を null にして connect する。部屋コードは
+  // サーバが発行し、作った本人への state にだけ付く。
   function joinMessage(roomId, displayName) {
+    if (roomId === null) {
+      return { type: \"create\", v: PROTOCOL_VERSION, display_name: displayName };
+    }
     const saved = loadResume();
     if (saved && saved.room_id === roomId && saved.display_name === displayName) {
       return {
@@ -159,7 +225,7 @@ pub fn index_html() -> String {
     return { type: \"join\", v: PROTOCOL_VERSION, room_id: roomId, display_name: displayName };
   }
   const afterSend = () => {};
-" <> client_js.shared <> "
+" <> client_js.qr_code <> client_js.shared <> "
   function resetRoomView() {
     participants = new Map();
     buzzes = [];
@@ -171,6 +237,90 @@ pub fn index_html() -> String {
     pending = new Map();
     renderParticipants();
     renderBuzzes();
+    hideInvite();
+    // 作成の応答（部屋コード付きの state）を受け取る前に接続が終わった。
+    // 部屋が二重にできないよう、作成は自動で送り直さない（#767）。
+    if (pendingCreate !== null) {
+      pendingCreate = null;
+      createButton.disabled = false;
+      createNameInput.disabled = false;
+      showProblem(\"部屋を作れませんでした。もう一度「部屋を作る」を押してください\");
+    }
+  }
+
+  // 接続できなかった・参加できなかった理由を画面に出す（#767）。ログを
+  // 開かなくても分かるようにする。
+  function showProblem(text) {
+    statusEl.textContent = text;
+  }
+
+  // 招待 URL を参加者に見せる（#767）。載せるのは部屋コードだけで、
+  // resume token や司会 token は載せない。
+  function inviteUrl(roomId) {
+    return `${location.protocol}//${location.host}/r/${encodeURIComponent(roomId)}`;
+  }
+
+  function showInvite(roomId) {
+    const url = inviteUrl(roomId);
+    inviteCodeEl.textContent = roomId;
+    inviteUrlInput.value = url;
+    copyResultEl.textContent = \"\";
+    renderQr(url);
+    inviteEl.hidden = false;
+  }
+
+  function hideInvite() {
+    inviteEl.hidden = true;
+    copyResultEl.textContent = \"\";
+  }
+
+  const SVG_NS = \"http://www.w3.org/2000/svg\";
+  const QR_QUIET_ZONE = 4;
+
+  function renderQr(text) {
+    const matrix = qrMatrix(text);
+    if (matrix === null) {
+      inviteQrEl.replaceChildren();
+      return;
+    }
+    const size = matrix.length + QR_QUIET_ZONE * 2;
+    let d = \"\";
+    matrix.forEach((row, y) => {
+      row.forEach((dark, x) => {
+        if (dark) d += `M${x + QR_QUIET_ZONE} ${y + QR_QUIET_ZONE}h1v1h-1z`;
+      });
+    });
+    const svg = document.createElementNS(SVG_NS, \"svg\");
+    svg.setAttribute(\"viewBox\", `0 0 ${size} ${size}`);
+    svg.setAttribute(\"shape-rendering\", \"crispEdges\");
+    svg.setAttribute(\"aria-hidden\", \"true\");
+    const background = document.createElementNS(SVG_NS, \"rect\");
+    background.setAttribute(\"width\", String(size));
+    background.setAttribute(\"height\", String(size));
+    background.setAttribute(\"fill\", \"#fff\");
+    const modules = document.createElementNS(SVG_NS, \"path\");
+    modules.setAttribute(\"d\", d);
+    modules.setAttribute(\"fill\", \"#000\");
+    svg.append(background, modules);
+    inviteQrEl.replaceChildren(svg);
+  }
+
+  // 招待パスから入ったときは、部屋コードの入力と部屋の作成を出さない。
+  function enterInviteMode(roomId) {
+    roomInput.value = roomId;
+    roomLabel.hidden = true;
+    createForm.hidden = true;
+    joinHeading.textContent = `部屋 ${roomId} に参加`;
+  }
+
+  function invitedRoomFromPath() {
+    const match = /^[/]r[/]([^/]+)$/.exec(location.pathname ?? \"\");
+    if (!match) return null;
+    try {
+      return decodeURIComponent(match[1]).trim().toUpperCase() || null;
+    } catch (_) {
+      return null;
+    }
   }
 
   // 押下済みかどうかはサーバの buzz 一覧と、現ラウンドへの応答待ちの buzz
@@ -190,11 +340,15 @@ pub fn index_html() -> String {
   }
 
   function setConnected(connected) {
-    statusEl.textContent = connected ? \"connected\" : \"disconnected\";
+    statusEl.textContent = connected ? \"接続中\" : \"未接続\";
     statusEl.dataset.state = connected ? \"connected\" : \"disconnected\";
     joinButton.disabled = connected;
     roomInput.disabled = connected;
     nameInput.disabled = connected;
+    createButton.disabled = connected;
+    createNameInput.disabled = connected;
+    // 参加中は入力欄を畳み、狭い画面でも BUZZ を上の方に出す。
+    entryEl.hidden = connected;
     isConnected = connected;
     updateBuzzButton();
     resetButton.disabled = !connected;
@@ -324,21 +478,36 @@ pub fn index_html() -> String {
     clearSyncRetry();
     syncRetries = 0;
     selfId = message.self_id;
+    // 作った部屋のコードは作成の応答でだけ届く（#767）。以後の再接続はこの
+    // 部屋への resume/join になり、作成を繰り返さない。招待 URL にもしておき、
+    // 再読み込みしても同じ部屋に戻れるようにする。
+    if (pendingCreate !== null && typeof message.room_id === \"string\") {
+      lastJoin = { roomId: message.room_id, displayName: pendingCreate.displayName };
+      enterInviteMode(message.room_id);
+      try {
+        history.replaceState(null, \"\", `/r/${encodeURIComponent(message.room_id)}`);
+      } catch (_) {}
+    }
+    pendingCreate = null;
     // join の応答にだけ resume token が付く（#766）。resume の応答には付かず、
-    // 保存済みのものをそのまま使い続ける。
+    // 保存済みのものをそのまま使い続ける。司会 token（#767）は作成の応答に
+    // だけ付く。使うのは司会の役割が入る #768 から。
     if (typeof message.resume_token === \"string\" && lastJoin) {
-      saveResume({
+      const saved = {
         room_id: lastJoin.roomId,
         display_name: lastJoin.displayName,
         room_instance_id: message.room_instance_id,
         resume_token: message.resume_token,
-      });
+      };
+      if (typeof message.host_token === \"string\") saved.host_token = message.host_token;
+      saveResume(saved);
     }
     participants = new Map(message.participants.map((p) => [p.participant_id, p]));
     buzzes = message.buzzes;
     setConnected(true);
     renderParticipants();
     renderBuzzes();
+    if (lastJoin) showInvite(lastJoin.roomId);
     log(`state: ${message.participants.length} participant(s), round ${roundId}`);
   }
 
@@ -421,6 +590,14 @@ pub fn index_html() -> String {
     invalid_token: \"前回の参加情報が無効です\",
   };
 
+  // 参加できなかった理由（#767）。
+  const JOIN_PROBLEMS = {
+    room_full: \"この部屋は満員です（最大64人）\",
+    room_unavailable: \"サーバが混み合っているため部屋に入れません。少し待ってからもう一度お試しください\",
+    invalid_display_name: \"名前は1〜64文字で入力してください\",
+    invalid_room_id: \"部屋コードが正しくありません\",
+  };
+
   // この参加を終える。保存した token を消し、自動再接続もしない。
   function endParticipation(statusText, state) {
     clearResume();
@@ -440,7 +617,7 @@ pub fn index_html() -> String {
     log(`error [${message.code}]: ${message.message}`);
     if (Object.hasOwn(RESUME_FAILURES, message.code)) {
       endParticipation(
-        `${RESUME_FAILURES[message.code]}。Join で新しい参加者として参加できます`,
+        `${RESUME_FAILURES[message.code]}。「参加する」で新しい参加者として参加できます`,
         \"resume-failed\",
       );
       return;
@@ -454,9 +631,22 @@ pub fn index_html() -> String {
       );
       return;
     }
+    if (message.code === \"room_not_found\") {
+      // 部屋は終わっているか、コードが違う（#767）。無断で作り直さないので、
+      // 新しく作る導線を出す。
+      endParticipation(
+        \"この部屋は見つかりません。終了したか、URL・部屋コードが違います。新しく部屋を作ることもできます\",
+        \"disconnected\",
+      );
+      createForm.hidden = false;
+      return;
+    }
     // room_full/room_unavailable/room_busy/client_outdated 等の接続レベルの
-    // エラーは client_js.gleam の共有処理が扱う。
-    if (handleConnectionError(message.code)) return;
+    // エラーは client_js.gleam の共有処理が扱う。理由は画面にも出す（#767）。
+    if (handleConnectionError(message.code)) {
+      if (Object.hasOwn(JOIN_PROBLEMS, message.code)) showProblem(JOIN_PROBLEMS[message.code]);
+      return;
+    }
     // 押下済みだとサーバが言うのに手元の一覧に無いなら、どこかで通知を
     // 取りこぼしている。内容を推測せず state を取り直す（#765）。
     if (message.code === \"already_buzzed\") requestSync();
@@ -517,9 +707,55 @@ pub fn index_html() -> String {
     log(\"left the room\");
   });
 
-  // 再読み込み・タブの復元では、保存した参加に自動で戻る（#766）。
+  // 部屋を作る（#767）。作成が確定する（部屋コード付きの state が届く）
+  // までは自動再接続しない。送り直すと部屋が二重にできるため。
+  createForm.addEventListener(\"submit\", (event) => {
+    event.preventDefault();
+    if (socket) {
+      log(\"already connecting or connected\");
+      return;
+    }
+    const displayName = createNameInput.value.trim();
+    if (!displayName || byteLength(displayName) > 64) {
+      showProblem(\"名前は1〜64文字で入力してください（UTF-8で64バイト以内）\");
+      return;
+    }
+    cancelReconnect();
+    lastJoin = null;
+    pendingCreate = { displayName };
+    nameInput.value = displayName;
+    createButton.disabled = true;
+    createNameInput.disabled = true;
+    statusEl.textContent = \"部屋を作っています…\";
+    connect(null, displayName);
+  });
+
+  copyButton.addEventListener(\"click\", () => {
+    const fallback = () => {
+      inviteUrlInput.select?.();
+      copyResultEl.textContent = \"自動でコピーできませんでした。選択された招待URLをコピーしてください\";
+    };
+    const clipboard = globalThis.navigator?.clipboard;
+    if (!clipboard?.writeText) {
+      fallback();
+      return;
+    }
+    clipboard.writeText(inviteUrlInput.value).then(() => {
+      copyResultEl.textContent = \"招待URLをコピーしました\";
+    }, fallback);
+  });
+
+  // 招待 URL（/r/部屋コード）から開いたら、名前を入れるだけで参加できる（#767）。
+  const invitedRoom = invitedRoomFromPath();
+  if (invitedRoom !== null) enterInviteMode(invitedRoom);
+
+  // 再読み込み・タブの復元では、保存した参加に自動で戻る（#766）。別の部屋の
+  // 招待を開いたときは戻らない（名前を入れて参加すれば新しい参加になる）。
   const savedParticipation = loadResume();
-  if (savedParticipation) {
+  if (
+    savedParticipation &&
+    (invitedRoom === null || invitedRoom === savedParticipation.room_id)
+  ) {
     roomInput.value = savedParticipation.room_id;
     nameInput.value = savedParticipation.display_name;
     lastJoin = {

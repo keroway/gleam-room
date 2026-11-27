@@ -16,8 +16,10 @@ The MVP is successful when multiple independent browser clients can join the sam
 
 ## Primary user flow
 
-1. A user opens the web client.
-2. The user enters a room ID and display name.
+1. A user opens the web client. One person creates a room (#767) and shares
+   the invite URL or QR code; the others open it.
+2. The user enters a display name (the room comes from the invite URL, or is
+   typed as a room code).
 3. The browser establishes a WebSocket connection.
 4. The server joins the participant to the room.
 5. Multiple participants can be present concurrently.
@@ -31,8 +33,16 @@ The MVP is successful when multiple independent browser clients can join the sam
 
 ### Room join
 
-- A room is identified by a compact `RoomId` supplied by the client for the MVP.
-- Joining an unknown room may create it lazily.
+- A room is identified by a room code. Since #767 the server issues it when
+  someone creates a room (`create`): 6 characters from
+  `ABCDEFGHJKLMNPQRSTUVWXYZ23456789` (no `I`/`O`/`0`/`1`), drawn from a
+  cryptographic random source.
+- Joining or resuming an unknown code never creates a room (#767): `join`
+  answers `room_not_found`, `resume` answers `room_gone`. Before #767 a join
+  created the room lazily.
+- The invite URL is `/r/<room code>`. It serves the same page, which joins
+  that room after the user enters a name. It carries only the room code,
+  never a token.
 - A participant supplies a display name.
 - The server assigns or confirms a participant identifier suitable for the connection/session model.
 
@@ -98,18 +108,21 @@ longer changes who a person is. The full contract is in
   (`participant_left`); their recorded buzzes stay. The token then answers
   `resume_expired`. The room stops when its last participant's grace
   expires, or at once when no participant is left at all (ADR 0006 as
-  amended by ADR 0010).
+  amended by ADR 0010). A room nobody joined within 60 seconds of its
+  creation also stops (#767).
 - `{"type":"leave"}` (the page's **Leave** button) removes the participant
   at once, invalidates the token and closes the connection. Closing the tab
   is not a leave.
-- A `resume` that cannot be honored is answered with `room_gone` (different
-  room instance, e.g. after a server restart), `resume_expired` or
+- A `resume` that cannot be honored is answered with `room_gone` (no room
+  with that code, or a different room instance, e.g. after a server restart), `resume_expired` or
   `invalid_token`. The page discards the token, shows the reason and lets
   the user join as a new participant; it does not reconnect automatically.
 - A display name alone never restores a participant.
 - The browser client's reconnect strategy (see `client_js.gleam`) retries a
   fixed, small number of times after an unexpected close, sending `resume`
-  when it holds a token for that room and name, `join` otherwise.
+  when it holds a token for that room and name, `join` otherwise. A `create`
+  whose reply never arrived is not resent (it could create a second room);
+  the page asks the user to press "部屋を作る" again (#767).
 - A `room_busy` error (see the error code table below) also triggers this
   same reconnect path: the client closes the connection itself instead of
   waiting for the server to do so (#570).
@@ -151,6 +164,7 @@ Since #765 the buzzer speaks protocol version 2 (contract:
 Client messages:
 
 ```json
+{"type":"create","v":2,"display_name":"Alice"}
 {"type":"join","v":2,"room_id":"ABCD","display_name":"Alice"}
 {"type":"resume","v":2,"room_id":"ABCD","room_instance_id":"...","resume_token":"..."}
 {"type":"leave"}
@@ -160,6 +174,8 @@ Client messages:
 {"type":"ping"}
 ```
 
+- `create` (#767) makes a new room and joins it as its creator. The reply is
+  the usual `state` plus `room_id` (the issued code) and `host_token`.
 - `round_id` names the round the client saw; a command for any other round
   is rejected with `stale_round`, so two people pressing reset at once start
   exactly one new round.
@@ -170,7 +186,7 @@ Client messages:
 Server messages:
 
 ```json
-{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[{"participant_id":"...","display_name":"Alice","connected":true}],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}],"resume_token":"..."}
+{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[{"participant_id":"...","display_name":"Alice","connected":true}],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}],"resume_token":"...","room_id":"K7M2QX","host_token":"..."}
 {"type":"participant_joined","room_instance_id":"...","revision":4,"participant":{}}
 {"type":"participant_left","room_instance_id":"...","revision":5,"participant_id":"..."}
 {"type":"participant_disconnected","room_instance_id":"...","revision":6,"participant_id":"..."}
@@ -189,6 +205,10 @@ Server messages:
   `sync` once and wait for the new `state`.
 - The `state` sent on join is taken in the same room-actor message as the
   join itself, so every later broadcast on that connection is newer than it.
+- `resume_token` is present only in the reply to the participant's own
+  `join`/`create`; `room_id` and `host_token` only in the reply to `create`
+  (#767). The host token is kept by the creator's browser for the host role
+  (#768); no command checks it yet.
 - A buzz/reset with a `request_id` is answered with `reply`, wrapping either
   the accepted change or the `error`. Errors raised before decoding
   (`rate_limited`, `invalid_message`, …) are also wrapped when the frame
@@ -203,23 +223,24 @@ may vary for the same code.
 | `invalid_message` | The payload was JSON but did not match a supported client-message shape (e.g. an unknown `type`, or a `join` missing the `room_id`/`display_name` field entirely). |
 | `malformed_json` | The payload was not valid JSON. |
 | `invalid_room_id` | A `join` request's `room_id` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. Takes priority over `invalid_display_name` when both fields are invalid. |
-| `invalid_display_name` | A `join` request's `display_name` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. |
-| `already_joined` | This connection sent `join` after it had already joined a room (checked at the connection layer), or the room's domain layer rejected a `join` for a `ParticipantId` already present in its state (that domain-layer branch is a defensive one, unreachable from the current websocket layer because each connection gets a fresh `ParticipantId`). |
+| `invalid_display_name` | A `join` or `create` request's `display_name` was empty (or all whitespace) after trimming, or exceeded 64 characters/bytes. |
+| `already_joined` | This connection sent `join`, `create` or `resume` after it had already joined a room (checked at the connection layer), or the room's domain layer rejected a `join` for a `ParticipantId` already present in its state (that domain-layer branch is a defensive one, unreachable from the current websocket layer because each connection gets a fresh `ParticipantId`). |
+| `room_not_found` | A `join` named a room code that has no room (it ended, or the code is wrong). No room is created (#767). The connection stays open. |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `round_full` | The current round already holds the maximum number of accepted buzzes (128, counting buzzes by participants who have since left). Further `buzz` messages are rejected until the round is reset; existing positions are unchanged (#691). |
 | `buzzer_not_joined` | A `buzz` came from a connection that is not this participant's current connection (e.g. one already replaced by a `resume`), or for a participant no longer in the room (#766). |
-| `room_unavailable` | The room could not be started, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
+| `room_unavailable` | A `create` could not start a room, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
 | `not_joined` | This connection sent `buzz`, `reset`, `sync` or `leave` before joining a room. |
-| `room_gone` | A `resume` named a room instance that no longer exists (the room ended or the server restarted) (#766). Join as a new participant. |
+| `room_gone` | A `resume` named a room code with no room, or a room instance that no longer exists (the room ended or the server restarted) (#766, #767). Join as a new participant. |
 | `resume_expired` | A `resume` named a participant who left or whose grace period expired (#766). Join as a new participant. |
 | `invalid_token` | A `resume` carried a token this room never issued, or a malformed token/instance (#766). Join as a new participant. |
 | `session_replaced` | The same participant resumed on another connection; this one is closed (#766). The client must not reconnect automatically. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
 | `stale_round` | A `buzz` or `reset` named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
-| `client_outdated` | A `join` or `resume` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
+| `client_outdated` | A `join`, `create` or `resume` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.
@@ -245,7 +266,8 @@ README.md for the full response table.
 
 Using three browser tabs/windows:
 
-1. All three join room `ABCD` with different display names.
+1. One creates a room; the other two open its invite URL. All three use
+   different display names.
 2. All three see the other participants.
 3. Reset the round.
 4. Press buzz in the order B, A, C.

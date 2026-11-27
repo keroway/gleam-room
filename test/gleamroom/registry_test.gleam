@@ -2,6 +2,7 @@ import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/otp/actor
+import gleam/string
 import gleamroom/call
 import gleamroom/registry
 import gleamroom/room
@@ -678,4 +679,113 @@ pub fn parent_shutdown_stops_the_registry_promptly_test() {
   // タイムアウト（5秒）より短い。ここで死ねば「brutal kill を待たずに
   // 自ら終了した」ことの証拠になる。
   wait.until_dead(pid, "shutdown要求を受けたregistryが即座に終了する")
+}
+
+// --- #767: 部屋の明示的な作成 -------------------------------------------------
+
+pub fn generated_room_codes_use_six_unambiguous_characters_test() {
+  list.each(list.repeat(Nil, 200), fn(_) {
+    let code = registry.generate_room_code()
+    assert string.length(code) == 6
+    assert string.to_graphemes(code)
+      |> list.all(fn(char) {
+        string.contains("ABCDEFGHJKLMNPQRSTUVWXYZ23456789", char)
+      })
+  })
+}
+
+pub fn create_issues_a_new_code_for_each_room_test() {
+  let assert Ok(started) = registry.start()
+
+  let assert Ok(#(first_id, first)) = registry.create(started.data)
+  let assert Ok(#(second_id, second)) = registry.create(started.data)
+
+  assert first_id != second_id
+  assert first != second
+  assert registry.find(started.data, first_id) == Ok(first)
+  assert registry.find(started.data, second_id) == Ok(second)
+}
+
+/// 無いコードを引いても部屋は作られない（期限切れの招待・打ち間違い）。
+pub fn find_does_not_create_a_room_test() {
+  let assert Ok(started) = registry.start()
+
+  assert registry.find(started.data, registry.room_id("NOPE23"))
+    == Error(registry.RoomNotFound)
+  let assert Ok(registry.HealthSnapshot(rooms: 0, ..)) =
+    registry.health(started.data)
+}
+
+/// 使用中のコードを引いたら引き直し、既存の部屋を上書きしない。
+pub fn create_draws_again_when_the_code_is_taken_test() {
+  let codes = code_sequence(["AAAAAA", "AAAAAA", "BBBBBB"])
+  let assert Ok(started) =
+    registry.start_with_code_generator(fn() { next_code(codes) })
+
+  let assert Ok(#(first_id, first)) = registry.create(started.data)
+  let assert Ok(#(second_id, _)) = registry.create(started.data)
+
+  assert registry.room_id_to_string(first_id) == "AAAAAA"
+  assert registry.room_id_to_string(second_id) == "BBBBBB"
+  assert registry.find(started.data, first_id) == Ok(first)
+}
+
+/// 引き直しが尽きたら作成は失敗し、既存の部屋はそのまま残る。
+pub fn create_gives_up_when_no_free_code_is_found_test() {
+  let assert Ok(started) = registry.start_with_code_generator(fn() { "AAAAAA" })
+
+  let assert Ok(#(first_id, first)) = registry.create(started.data)
+  assert registry.create(started.data) == Error(room_registry.Unavailable)
+  assert registry.find(started.data, first_id) == Ok(first)
+}
+
+pub fn create_respects_the_room_limit_test() {
+  let assert Ok(started) = registry.start_with_max_rooms(1)
+
+  let assert Ok(_) = registry.create(started.data)
+  assert registry.create(started.data) == Error(room_registry.CapacityReached)
+}
+
+/// 作成後に最初の参加が届かなかった部屋は、空室の猶予で止まり登録から外れる。
+pub fn a_created_room_nobody_joins_is_reclaimed_test() {
+  let assert Ok(started) =
+    registry.start_with_room_starter(fn() {
+      room.start_with_timings(60_000, 30)
+    })
+
+  let assert Ok(#(id, _)) = registry.create(started.data)
+
+  wait.until(
+    fn() { registry.find(started.data, id) == Error(registry.RoomNotFound) },
+    "誰も参加しない部屋が登録から外れる",
+  )
+}
+
+/// 決まった順にコードを返す発行関数（衝突の再現用）。registry の中から
+/// 呼ばれるので、状態は別プロセスに持たせる。
+fn code_sequence(codes: List(String)) -> process.Subject(CodeRequest) {
+  let assert Ok(started) =
+    actor.new(codes)
+    |> actor.on_message(fn(remaining, request: CodeRequest) {
+      case remaining {
+        [code, ..rest] -> {
+          process.send(request.reply_to, code)
+          actor.continue(rest)
+        }
+        [] -> {
+          process.send(request.reply_to, "ZZZZZZ")
+          actor.continue([])
+        }
+      }
+    })
+    |> actor.start
+  started.data
+}
+
+type CodeRequest {
+  CodeRequest(reply_to: process.Subject(String))
+}
+
+fn next_code(codes: process.Subject(CodeRequest)) -> String {
+  process.call(codes, 1000, CodeRequest)
 }

@@ -1,5 +1,6 @@
 import gleam/dynamic/decode
 import gleam/json
+import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
@@ -37,6 +38,9 @@ pub const protocol_version = 2
 /// `revision` on server messages, never from `request_id` (#765).
 pub type ClientMessage {
   Join(room_id: RoomId, display_name: String)
+  /// 新しい部屋を作り、作った本人として参加する（#767）。部屋コードは
+  /// サーバが発行する。
+  Create(display_name: String)
   Buzz(round_id: Int, request_id: Option(String))
   Reset(round_id: Int, request_id: Option(String))
   /// Re-attaches to the participant identified by `resume_token`, issued
@@ -70,6 +74,10 @@ pub type ServerMessage {
     participants: List(Participant),
     buzzes: List(BuzzResult),
     resume_token: Option(String),
+    /// 部屋を作った本人への応答にだけ付く（#767）。発行された部屋コードと
+    /// 司会 token。token はこの応答以外に出さない。
+    created_room_id: Option(String),
+    host_token: Option(String),
   )
   ParticipantJoined(
     instance_id: String,
@@ -121,6 +129,10 @@ pub fn decode_client_message(
       wire.validate_join(room_id, display_name)
       |> result.map(fn(joined) { Join(joined.0, joined.1) })
     Ok(RawJoin(_, _, _)) -> Error(client_outdated_error)
+    Ok(RawCreate(Some(version), display_name)) if version == protocol_version ->
+      wire.validate_display_name(display_name)
+      |> result.map(Create)
+    Ok(RawCreate(_, _)) -> Error(client_outdated_error)
     Ok(RawResume(Some(version), room_id, instance_id, token))
       if version == protocol_version
     ->
@@ -157,6 +169,7 @@ pub const invalid_token_error =
 
 type RawClientMessage {
   RawJoin(version: Option(Int), room_id: String, display_name: String)
+  RawCreate(version: Option(Int), display_name: String)
   RawResume(
     version: Option(Int),
     room_id: String,
@@ -170,6 +183,7 @@ fn raw_client_message_decoder() -> decode.Decoder(RawClientMessage) {
   use message_type <- decode.field("type", decode.string)
   case message_type {
     "join" -> join_decoder()
+    "create" -> create_decoder()
     "resume" -> resume_decoder()
     "leave" -> decode.success(RawMessage(Leave))
     "buzz" -> round_command_decoder(Buzz)
@@ -187,6 +201,12 @@ fn join_decoder() -> decode.Decoder(RawClientMessage) {
   let room_id = string.trim(raw_room_id) |> string.uppercase
   let display_name = string.trim(raw_display_name)
   decode.success(RawJoin(version, room_id, display_name))
+}
+
+fn create_decoder() -> decode.Decoder(RawClientMessage) {
+  use version <- decode.optional_field("v", None, decode.map(decode.int, Some))
+  use raw_display_name <- decode.field("display_name", decode.string)
+  decode.success(RawCreate(version, string.trim(raw_display_name)))
 }
 
 fn resume_decoder() -> decode.Decoder(RawClientMessage) {
@@ -260,6 +280,8 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
       participants,
       buzzes,
       resume_token,
+      created_room_id,
+      host_token,
     ) ->
       json.object([
         #("type", json.string("state")),
@@ -270,10 +292,11 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("revision", json.int(revision)),
         #("participants", json.array(participants, participant_to_json)),
         #("buzzes", json.array(buzzes, buzz_result_to_json)),
-        ..case resume_token {
-          Some(token) -> [#("resume_token", json.string(token))]
-          None -> []
-        }
+        ..list.flatten([
+          optional_string_field("resume_token", resume_token),
+          optional_string_field("room_id", created_room_id),
+          optional_string_field("host_token", host_token),
+        ])
       ])
     ParticipantJoined(instance_id, revision, participant) ->
       json.object([
@@ -336,6 +359,16 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("code", json.string(code)),
         #("message", json.string(message)),
       ])
+  }
+}
+
+fn optional_string_field(
+  name: String,
+  value: Option(String),
+) -> List(#(String, json.Json)) {
+  case value {
+    Some(value) -> [#(name, json.string(value))]
+    None -> []
   }
 }
 

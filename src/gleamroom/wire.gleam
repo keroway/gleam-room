@@ -1,4 +1,5 @@
 import gleam/json
+import gleam/result
 import gleam/string
 
 /// Wire-boundary pieces shared by `protocol.gleam` (buzzer) and
@@ -66,10 +67,22 @@ pub fn validate_join(
   room_id: String,
   display_name: String,
 ) -> Result(#(RoomId, String), ProtocolError) {
-  case validate_room_id(room_id), is_valid_field(display_name) {
-    Ok(room_id), True -> Ok(#(room_id, display_name))
-    Error(error), _ -> Error(error)
-    Ok(_), False ->
+  case validate_room_id(room_id) {
+    Ok(room_id) ->
+      validate_display_name(display_name)
+      |> result.map(fn(display_name) { #(room_id, display_name) })
+    Error(error) -> Error(error)
+  }
+}
+
+/// Validates a trimmed display name on its own, for messages that do not
+/// name a room (the buzzer's `create`, #767).
+pub fn validate_display_name(
+  display_name: String,
+) -> Result(String, ProtocolError) {
+  case is_valid_field(display_name) {
+    True -> Ok(display_name)
+    False ->
       Error(ProtocolError(
         code: "invalid_display_name",
         message: "display_name must be 1-64 characters (max 64 UTF-8 bytes) after trimming whitespace.",
