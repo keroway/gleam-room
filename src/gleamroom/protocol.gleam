@@ -13,8 +13,10 @@ import gleamroom/wire.{
 /// does not know about room registries, actors, or game rules — see
 /// `docs/architecture.md` for the transport/domain boundary this module sits
 /// on. Identifier types and join validation live in `wire.gleam`.
+/// `connected` is false while the participant is within the resume grace
+/// period after losing their connection (#766).
 pub type Participant {
-  Participant(id: ParticipantId, display_name: String)
+  Participant(id: ParticipantId, display_name: String, connected: Bool)
 }
 
 pub type BuzzResult {
@@ -37,6 +39,12 @@ pub type ClientMessage {
   Join(room_id: RoomId, display_name: String)
   Buzz(round_id: Int, request_id: Option(String))
   Reset(round_id: Int, request_id: Option(String))
+  /// Re-attaches to the participant identified by `resume_token`, issued
+  /// when this client first joined room `room_instance_id` (#766).
+  Resume(room_id: RoomId, instance_id: String, resume_token: String)
+  /// Leaves the room for good: the participant is removed at once and the
+  /// resume token stops working (#766). Closing the socket is not a leave.
+  Leave
   /// Asks for a fresh `state` after the client detected a missing revision.
   Sync
   /// アプリレベルのkeepalive（#764）。ブラウザはWebSocketのping frameを送れず、
@@ -52,6 +60,8 @@ pub type ClientMessage {
 /// change exactly once and ignores notifications from an earlier room with
 /// the same code (#765).
 pub type ServerMessage {
+  /// `resume_token` is present only in the `state` answering a successful
+  /// `join`, and only to that client (#766). Every other `state` omits it.
   State(
     instance_id: String,
     self_id: ParticipantId,
@@ -59,6 +69,7 @@ pub type ServerMessage {
     revision: Int,
     participants: List(Participant),
     buzzes: List(BuzzResult),
+    resume_token: Option(String),
   )
   ParticipantJoined(
     instance_id: String,
@@ -80,6 +91,18 @@ pub type ServerMessage {
   )
   /// `round_id` is the round that starts with this reset.
   RoundReset(instance_id: String, revision: Int, round_id: Int)
+  /// The participant lost their connection and may still resume (#766).
+  ParticipantDisconnected(
+    instance_id: String,
+    revision: Int,
+    participant_id: ParticipantId,
+  )
+  /// The participant resumed within the grace period (#766).
+  ParticipantReconnected(
+    instance_id: String,
+    revision: Int,
+    participant_id: ParticipantId,
+  )
   /// The direct answer to a request that carried a `request_id`. The same
   /// change may also arrive as a broadcast; both carry the same revision.
   Reply(request_id: String, result: ServerMessage)
@@ -98,6 +121,18 @@ pub fn decode_client_message(
       wire.validate_join(room_id, display_name)
       |> result.map(fn(joined) { Join(joined.0, joined.1) })
     Ok(RawJoin(_, _, _)) -> Error(client_outdated_error)
+    Ok(RawResume(Some(version), room_id, instance_id, token))
+      if version == protocol_version
+    ->
+      case wire.validate_room_id(room_id) {
+        Error(error) -> Error(error)
+        Ok(room_id) ->
+          case wire.is_valid_field(instance_id) && wire.is_valid_field(token) {
+            True -> Ok(Resume(room_id, instance_id, token))
+            False -> Error(invalid_token_error)
+          }
+      }
+    Ok(RawResume(_, _, _, _)) -> Error(client_outdated_error)
     Ok(RawMessage(message)) -> Ok(message)
     Error(error) -> Error(wire.decode_error(error))
   }
@@ -112,8 +147,22 @@ pub const client_outdated_error =
     message: "This page is outdated. Reload the page to continue.",
   )
 
+/// A `resume` whose token or room instance is malformed. Answered the same
+/// way as a token the room does not know (#766).
+pub const invalid_token_error =
+  wire.ProtocolError(
+    code: "invalid_token",
+    message: "The saved session could not be resumed. Join as a new participant.",
+  )
+
 type RawClientMessage {
   RawJoin(version: Option(Int), room_id: String, display_name: String)
+  RawResume(
+    version: Option(Int),
+    room_id: String,
+    instance_id: String,
+    token: String,
+  )
   RawMessage(ClientMessage)
 }
 
@@ -121,6 +170,8 @@ fn raw_client_message_decoder() -> decode.Decoder(RawClientMessage) {
   use message_type <- decode.field("type", decode.string)
   case message_type {
     "join" -> join_decoder()
+    "resume" -> resume_decoder()
+    "leave" -> decode.success(RawMessage(Leave))
     "buzz" -> round_command_decoder(Buzz)
     "reset" -> round_command_decoder(Reset)
     "sync" -> decode.success(RawMessage(Sync))
@@ -136,6 +187,15 @@ fn join_decoder() -> decode.Decoder(RawClientMessage) {
   let room_id = string.trim(raw_room_id) |> string.uppercase
   let display_name = string.trim(raw_display_name)
   decode.success(RawJoin(version, room_id, display_name))
+}
+
+fn resume_decoder() -> decode.Decoder(RawClientMessage) {
+  use version <- decode.optional_field("v", None, decode.map(decode.int, Some))
+  use raw_room_id <- decode.field("room_id", decode.string)
+  use instance_id <- decode.field("room_instance_id", decode.string)
+  use token <- decode.field("resume_token", decode.string)
+  let room_id = string.trim(raw_room_id) |> string.uppercase
+  decode.success(RawResume(version, room_id, instance_id, token))
 }
 
 fn round_command_decoder(
@@ -192,7 +252,15 @@ pub fn encode_server_message(message: ServerMessage) -> String {
 
 fn server_message_to_json(message: ServerMessage) -> json.Json {
   case message {
-    State(instance_id, self_id, round_id, revision, participants, buzzes) ->
+    State(
+      instance_id,
+      self_id,
+      round_id,
+      revision,
+      participants,
+      buzzes,
+      resume_token,
+    ) ->
       json.object([
         #("type", json.string("state")),
         #("protocol_version", json.int(protocol_version)),
@@ -202,6 +270,10 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("revision", json.int(revision)),
         #("participants", json.array(participants, participant_to_json)),
         #("buzzes", json.array(buzzes, buzz_result_to_json)),
+        ..case resume_token {
+          Some(token) -> [#("resume_token", json.string(token))]
+          None -> []
+        }
       ])
     ParticipantJoined(instance_id, revision, participant) ->
       json.object([
@@ -247,6 +319,10 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
         #("revision", json.int(revision)),
         #("round_id", json.int(round_id)),
       ])
+    ParticipantDisconnected(instance_id, revision, id) ->
+      presence_to_json("participant_disconnected", instance_id, revision, id)
+    ParticipantReconnected(instance_id, revision, id) ->
+      presence_to_json("participant_reconnected", instance_id, revision, id)
     Reply(id, result) ->
       json.object([
         #("type", json.string("reply")),
@@ -263,10 +339,25 @@ fn server_message_to_json(message: ServerMessage) -> json.Json {
   }
 }
 
+fn presence_to_json(
+  message_type: String,
+  instance_id: String,
+  revision: Int,
+  id: ParticipantId,
+) -> json.Json {
+  json.object([
+    #("type", json.string(message_type)),
+    #("room_instance_id", json.string(instance_id)),
+    #("revision", json.int(revision)),
+    #("participant_id", json.string(participant_id_to_string(id))),
+  ])
+}
+
 fn participant_to_json(participant: Participant) -> json.Json {
   json.object([
     #("participant_id", json.string(participant_id_to_string(participant.id))),
     #("display_name", json.string(participant.display_name)),
+    #("connected", json.bool(participant.connected)),
   ])
 }
 

@@ -37,7 +37,9 @@ pub fn index_html() -> String {
     font-size: 0.85rem;
   }
   #status[data-state=\"connected\"] { color: green; }
-  #status[data-state=\"disconnected\"] { color: crimson; }
+  #status[data-state=\"disconnected\"],
+  #status[data-state=\"resume-failed\"],
+  #status[data-state=\"replaced\"] { color: crimson; }
 </style>
 </head>
 <body>
@@ -55,6 +57,7 @@ pub fn index_html() -> String {
 
 <button id=\"buzz\" disabled>BUZZ</button>
 <button id=\"reset\" disabled>Reset round</button>
+<button id=\"leave\" disabled>Leave</button>
 
 <h2>Participants</h2>
 <ul id=\"participants\"></ul>
@@ -74,6 +77,7 @@ pub fn index_html() -> String {
   const statusEl = document.getElementById(\"status\");
   const buzzButton = document.getElementById(\"buzz\");
   const resetButton = document.getElementById(\"reset\");
+  const leaveButton = document.getElementById(\"leave\");
   const participantsEl = document.getElementById(\"participants\");
   const buzzesEl = document.getElementById(\"buzzes\");
   const logEl = document.getElementById(\"log\");
@@ -105,7 +109,55 @@ pub fn index_html() -> String {
 
   const PROTOCOL_VERSION = 2;
   const WS_PATH = \"/ws\";
-  const JOIN_FIELDS = { v: PROTOCOL_VERSION };
+  // このタブで参加した部屋と resume token（#766）。タブ単位の sessionStorage に
+  // 置くので、再読み込みでは同じ参加者に戻り、新しいタブは別の人として参加する。
+  // 保存できない環境（プライベートモード等）では再読み込みで新規参加になる。
+  const RESUME_KEY = \"gleamroom.buzzer.resume\";
+
+  function loadResume() {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(RESUME_KEY) ?? \"null\");
+      if (
+        saved !== null &&
+        typeof saved === \"object\" &&
+        typeof saved.room_id === \"string\" &&
+        typeof saved.display_name === \"string\" &&
+        typeof saved.room_instance_id === \"string\" &&
+        typeof saved.resume_token === \"string\"
+      ) {
+        return saved;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  function saveResume(saved) {
+    try {
+      sessionStorage.setItem(RESUME_KEY, JSON.stringify(saved));
+    } catch (_) {}
+  }
+
+  function clearResume() {
+    try {
+      sessionStorage.removeItem(RESUME_KEY);
+    } catch (_) {}
+  }
+
+  // 同じ部屋・同じ名前で参加した記録があれば、新規参加ではなく同じ参加者として
+  // 戻る（#766）。表示名だけでは戻れない。token を持つこのタブだけが戻れる。
+  function joinMessage(roomId, displayName) {
+    const saved = loadResume();
+    if (saved && saved.room_id === roomId && saved.display_name === displayName) {
+      return {
+        type: \"resume\",
+        v: PROTOCOL_VERSION,
+        room_id: roomId,
+        room_instance_id: saved.room_instance_id,
+        resume_token: saved.resume_token,
+      };
+    }
+    return { type: \"join\", v: PROTOCOL_VERSION, room_id: roomId, display_name: displayName };
+  }
   const afterSend = () => {};
 " <> client_js.shared <> "
   function resetRoomView() {
@@ -146,13 +198,15 @@ pub fn index_html() -> String {
     isConnected = connected;
     updateBuzzButton();
     resetButton.disabled = !connected;
+    leaveButton.disabled = !connected;
   }
 
   function renderParticipants() {
     participantsEl.replaceChildren(
       ...[...participants.values()].map((p) => {
         const li = document.createElement(\"li\");
-        li.textContent = p.display_name;
+        // 切断中（猶予内）の参加者は、戻ってくるまで印を付けて残す（#766）。
+        li.textContent = p.connected === false ? `${p.display_name}（切断中）` : p.display_name;
         return li;
       }),
     );
@@ -175,7 +229,8 @@ pub fn index_html() -> String {
   const isParticipant = (p) =>
     isObject(p) &&
     typeof p.participant_id === \"string\" &&
-    typeof p.display_name === \"string\";
+    typeof p.display_name === \"string\" &&
+    (p.connected === undefined || typeof p.connected === \"boolean\");
   const isBuzz = (b) =>
     isObject(b) &&
     typeof b.participant_id === \"string\" &&
@@ -269,6 +324,16 @@ pub fn index_html() -> String {
     clearSyncRetry();
     syncRetries = 0;
     selfId = message.self_id;
+    // join の応答にだけ resume token が付く（#766）。resume の応答には付かず、
+    // 保存済みのものをそのまま使い続ける。
+    if (typeof message.resume_token === \"string\" && lastJoin) {
+      saveResume({
+        room_id: lastJoin.roomId,
+        display_name: lastJoin.displayName,
+        room_instance_id: message.room_instance_id,
+        resume_token: message.resume_token,
+      });
+    }
     participants = new Map(message.participants.map((p) => [p.participant_id, p]));
     buzzes = message.buzzes;
     setConnected(true);
@@ -300,6 +365,22 @@ pub fn index_html() -> String {
         renderParticipants();
         log(`left: ${message.participant_id}`);
         break;
+      case \"participant_disconnected\":
+      case \"participant_reconnected\": {
+        if (!hasPosition(message) || typeof message.participant_id !== \"string\") {
+          log(`${message.type} message missing expected fields: ${JSON.stringify(message)}`);
+          return false;
+        }
+        if (admit(message) !== \"apply\") return false;
+        const connected = message.type === \"participant_reconnected\";
+        const participant = participants.get(message.participant_id);
+        if (participant) {
+          participants.set(message.participant_id, { ...participant, connected });
+          renderParticipants();
+        }
+        log(`${connected ? \"reconnected\" : \"disconnected\"}: ${participant?.display_name ?? message.participant_id}`);
+        break;
+      }
       case \"buzz_accepted\":
         if (!hasPosition(message) || !isBuzz(message) || !Number.isInteger(message.round_id)) {
           log(`buzz_accepted message missing expected fields: ${JSON.stringify(message)}`);
@@ -333,8 +414,46 @@ pub fn index_html() -> String {
     return true;
   }
 
+  // 同じ参加者に戻れなかった理由（#766）。どれも新規参加し直せば続けられる。
+  const RESUME_FAILURES = {
+    room_gone: \"前回の部屋は終了しています\",
+    resume_expired: \"切断から時間が経ったため、前回の参加は終了しました\",
+    invalid_token: \"前回の参加情報が無効です\",
+  };
+
+  // この参加を終える。保存した token を消し、自動再接続もしない。
+  function endParticipation(statusText, state) {
+    clearResume();
+    clearJoinTimer();
+    stopPing();
+    cancelReconnect();
+    if (socket) socket.close();
+    socket = null;
+    lastJoin = null;
+    setConnected(false);
+    resetRoomView();
+    statusEl.textContent = statusText;
+    statusEl.dataset.state = state;
+  }
+
   function handleError(message) {
     log(`error [${message.code}]: ${message.message}`);
+    if (Object.hasOwn(RESUME_FAILURES, message.code)) {
+      endParticipation(
+        `${RESUME_FAILURES[message.code]}。Join で新しい参加者として参加できます`,
+        \"resume-failed\",
+      );
+      return;
+    }
+    if (message.code === \"session_replaced\") {
+      // 複製したタブなどが同じ参加者として接続し直した。こちらが再接続すると
+      // 取り合いになるので止める。
+      endParticipation(
+        \"別のタブや端末で同じ参加者として接続し直したため、この画面の接続を終了しました\",
+        \"replaced\",
+      );
+      return;
+    }
     // room_full/room_unavailable/room_busy/client_outdated 等の接続レベルの
     // エラーは client_js.gleam の共有処理が扱う。
     if (handleConnectionError(message.code)) return;
@@ -390,6 +509,25 @@ pub fn index_html() -> String {
 
   buzzButton.addEventListener(\"click\", () => sendRequest(\"buzz\"));
   resetButton.addEventListener(\"click\", () => sendRequest(\"reset\"));
+  // 明示的な退出（#766）。サーバはすぐに参加者を外し、token は使えなくなる。
+  // 接続を閉じるだけ（タブを閉じる・再読み込み）は退出ではない。
+  leaveButton.addEventListener(\"click\", () => {
+    sendIfOpen({ type: \"leave\" });
+    endParticipation(\"退出しました\", \"disconnected\");
+    log(\"left the room\");
+  });
+
+  // 再読み込み・タブの復元では、保存した参加に自動で戻る（#766）。
+  const savedParticipation = loadResume();
+  if (savedParticipation) {
+    roomInput.value = savedParticipation.room_id;
+    nameInput.value = savedParticipation.display_name;
+    lastJoin = {
+      roomId: savedParticipation.room_id,
+      displayName: savedParticipation.display_name,
+    };
+    connect(savedParticipation.room_id, savedParticipation.display_name);
+  }
 })();
 </script>
 </body>

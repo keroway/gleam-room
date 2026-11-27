@@ -74,32 +74,45 @@ the same bounded automatic reconnect as a close (#696).
 Per ADR 0003, active in-memory Room state is authoritative for the MVP:
 reconnect recovers a current snapshot, not a durable event history.
 
-**Participant identity on reconnect (transient, by design):**
+**Participant identity on reconnect (since #766):** a short disconnect no
+longer changes who a person is. The full contract is in
+[`docs/buzzer-session.md`](buzzer-session.md#connections-disconnect-and-resume-766).
 
-- A `ParticipantId` is a cryptographically random, opaque token generated
-  fresh for each connection (see `websocket.new_participant_id`), not from
-  any client-supplied or persisted token, and not derived from the
-  connection's BEAM process identity.
-- A dropped connection is therefore indistinguishable, on the server, from a
-  participant leaving: when the socket closes, the transport layer dispatches
-  `Leave` for that connection's `ParticipantId` and the Room actor removes it
-  from presence and from its subscriber set.
-- A reconnect is a brand new WebSocket connection sending a new `Join`. It is
-  assigned a new `ParticipantId` and appears to already-connected clients as
-  a new participant, even if the browser/display name is unchanged. There is
-  no server-side correlation between the old and new identity.
-- Because the old connection's `Leave` and the new connection's `Join` happen
-  on independent processes, their relative order is not guaranteed. Other
-  clients may briefly observe both the pre-reconnect and post-reconnect
-  identity, or a leave immediately followed by a join, depending on timing.
-- The browser client's minimal reconnect strategy (see `web.gleam`) retries
-  a fixed, small number of times after an unexpected close, reusing the last
-  entered room ID and display name; it does not attempt to preserve or
-  restore the previous `ParticipantId`.
+- The `state` that answers a successful `join` carries a `resume_token`
+  (128-bit random), sent only to that client. The browser keeps it, with the
+  room id, display name and `room_instance_id`, in `sessionStorage`: a reload
+  of the same tab resumes, a new tab joins as a new person.
+- When a socket closes (or the connection process dies, or the heartbeat
+  times out) the room marks the participant **disconnected** instead of
+  removing them, and others receive `participant_disconnected`. Their id,
+  buzzes and place in the list are kept for a 60-second grace period.
+- A reconnect sends `resume` with the token. Within the grace period the
+  participant gets back the same `ParticipantId` and a fresh `state`; others
+  receive `participant_reconnected` (no leave/join pair). If the participant
+  was already attached elsewhere (for example a duplicated tab), the newest
+  connection wins and the older one receives `session_replaced` and is
+  closed; that client stops reconnecting.
+- Commands, a late close and grace timers from a connection that is no
+  longer the participant's current one are ignored by the room.
+- When the grace period expires the participant is removed
+  (`participant_left`); their recorded buzzes stay. The token then answers
+  `resume_expired`. The room stops when its last participant's grace
+  expires, or at once when no participant is left at all (ADR 0006 as
+  amended by ADR 0010).
+- `{"type":"leave"}` (the page's **Leave** button) removes the participant
+  at once, invalidates the token and closes the connection. Closing the tab
+  is not a leave.
+- A `resume` that cannot be honored is answered with `room_gone` (different
+  room instance, e.g. after a server restart), `resume_expired` or
+  `invalid_token`. The page discards the token, shows the reason and lets
+  the user join as a new participant; it does not reconnect automatically.
+- A display name alone never restores a participant.
+- The browser client's reconnect strategy (see `client_js.gleam`) retries a
+  fixed, small number of times after an unexpected close, sending `resume`
+  when it holds a token for that room and name, `join` otherwise.
 - A `room_busy` error (see the error code table below) also triggers this
   same reconnect path: the client closes the connection itself instead of
-  waiting for the server to do so, but otherwise reuses the last entered
-  room ID/display name exactly like an unexpected close (#570).
+  waiting for the server to do so (#570).
 
 ### Idle heartbeat timeout
 
@@ -123,8 +136,8 @@ hence the JSON message. A `ping` never reaches the room actor.
 - The client's ping timer is stopped on close, join timeout and permanent
   rejection, and an older socket's timer never sends on the current socket.
 - If the browser throttles timers (for example a background tab) and the
-  server closes the connection, the reconnect strategy above rejoins
-  automatically as a new participant.
+  server closes the connection, the reconnect strategy above resumes the
+  same participant automatically (#766).
 
 ## Suggested wire protocol
 
@@ -139,6 +152,8 @@ Client messages:
 
 ```json
 {"type":"join","v":2,"room_id":"ABCD","display_name":"Alice"}
+{"type":"resume","v":2,"room_id":"ABCD","room_instance_id":"...","resume_token":"..."}
+{"type":"leave"}
 {"type":"buzz","round_id":1,"request_id":"7"}
 {"type":"reset","round_id":1,"request_id":"8"}
 {"type":"sync"}
@@ -155,9 +170,11 @@ Client messages:
 Server messages:
 
 ```json
-{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}]}
+{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[{"participant_id":"...","display_name":"Alice","connected":true}],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}],"resume_token":"..."}
 {"type":"participant_joined","room_instance_id":"...","revision":4,"participant":{}}
 {"type":"participant_left","room_instance_id":"...","revision":5,"participant_id":"..."}
+{"type":"participant_disconnected","room_instance_id":"...","revision":6,"participant_id":"..."}
+{"type":"participant_reconnected","room_instance_id":"...","revision":7,"participant_id":"..."}
 {"type":"buzz_accepted","room_instance_id":"...","revision":6,"round_id":1,"participant_id":"...","display_name":"Alice","position":1}
 {"type":"round_reset","room_instance_id":"...","revision":7,"round_id":2}
 {"type":"reply","request_id":"7","result":{"type":"buzz_accepted","...":"..."}}
@@ -191,14 +208,18 @@ may vary for the same code.
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
 | `round_full` | The current round already holds the maximum number of accepted buzzes (128, counting buzzes by participants who have since left). Further `buzz` messages are rejected until the round is reset; existing positions are unchanged (#691). |
-| `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |
+| `buzzer_not_joined` | A `buzz` came from a connection that is not this participant's current connection (e.g. one already replaced by a `resume`), or for a participant no longer in the room (#766). |
 | `room_unavailable` | The room could not be started, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
-| `not_joined` | This connection sent `buzz`, `reset` or `sync` before joining a room. |
+| `not_joined` | This connection sent `buzz`, `reset`, `sync` or `leave` before joining a room. |
+| `room_gone` | A `resume` named a room instance that no longer exists (the room ended or the server restarted) (#766). Join as a new participant. |
+| `resume_expired` | A `resume` named a participant who left or whose grace period expired (#766). Join as a new participant. |
+| `invalid_token` | A `resume` carried a token this room never issued, or a malformed token/instance (#766). Join as a new participant. |
+| `session_replaced` | The same participant resumed on another connection; this one is closed (#766). The client must not reconnect automatically. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
 | `stale_round` | A `buzz` or `reset` named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
-| `client_outdated` | A `join` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
+| `client_outdated` | A `join` or `resume` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.

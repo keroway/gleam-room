@@ -10,8 +10,9 @@
 ///   `joinButton`
 /// - `let socket = null`
 /// - `const WS_PATH` (e.g. `"/ws"`)
-/// - `const JOIN_FIELDS` (extra fields for the `join` message, e.g. the
-///   buzzer's protocol version `{ v: 2 }`; `{}` when none)
+/// - `function joinMessage(roomId, displayName)` returning the first message
+///   sent on each connection (the buzzer adds its protocol version and sends
+///   `resume` instead of `join` when it holds a resume token, #766)
 /// - `const afterSend = (message) => {...}` (called after a successful send)
 /// - functions `setConnected(connected)`, `resetRoomView()` (clear the
 ///   page's room state and re-render) and `handleServerMessage(message)`
@@ -21,9 +22,9 @@
 /// concatenation, so the client JS tests exercise the spliced result.
 pub const shared =
   "
-  // A reconnect always re-joins as a brand new, server-assigned participant
-  // identity (see docs/mvp.md, \"Reconnect\"); this client does not attempt
-  // to preserve the previous one. A fixed, small retry count keeps this
+  // What a reconnect sends is up to the page (`joinMessage`): Planning Poker
+  // re-joins as a new participant, the buzzer resumes the same participant
+  // with its resume token (#766). A fixed, small retry count keeps this
   // \"simple\" rather than a full exponential-backoff strategy.
   const RECONNECT_DELAY_MS = 1500;
   const MAX_RECONNECT_ATTEMPTS = 5;
@@ -203,13 +204,9 @@ pub const shared =
       // 繰り返され、open ごとに試行回数を 0 に戻すと上限に永久に到達せず、
       // 「5 回で諦める」という約束が効かなくなる。
       startPing(ws, isCurrent);
-      log(`connected, joining room ${roomId} as ${displayName}`);
-      ws.send(JSON.stringify({
-        type: \"join\",
-        ...JOIN_FIELDS,
-        room_id: roomId,
-        display_name: displayName,
-      }));
+      const first = joinMessage(roomId, displayName);
+      log(`connected, ${first.type === \"resume\" ? \"resuming\" : \"joining\"} room ${roomId} as ${displayName}`);
+      ws.send(JSON.stringify(first));
     });
 
     ws.addEventListener(\"message\", (event) => {

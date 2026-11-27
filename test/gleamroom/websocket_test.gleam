@@ -7,7 +7,7 @@ import gleamroom/websocket
 import gleamroom/wire
 
 pub fn room_event_to_server_message_participant_joined_test() {
-  let participant = room.Participant(room.participant_id("p1"), "Alice")
+  let participant = room.Participant(room.participant_id("p1"), "Alice", True)
 
   assert websocket.room_event_to_server_message(
       room.ParticipantJoined(participant, 3),
@@ -16,7 +16,7 @@ pub fn room_event_to_server_message_participant_joined_test() {
     == Some(protocol.ParticipantJoined(
       "i1",
       3,
-      protocol.Participant(wire.participant_id("p1"), "Alice"),
+      protocol.Participant(wire.participant_id("p1"), "Alice", True),
     ))
 }
 
@@ -161,10 +161,10 @@ pub fn not_joined_message_test() {
 }
 
 pub fn to_wire_participant_test() {
-  let participant = room.Participant(room.participant_id("p1"), "Alice")
+  let participant = room.Participant(room.participant_id("p1"), "Alice", True)
 
   assert websocket.to_wire_participant(participant)
-    == protocol.Participant(wire.participant_id("p1"), "Alice")
+    == protocol.Participant(wire.participant_id("p1"), "Alice", True)
 }
 
 pub fn to_wire_participant_id_test() {

@@ -2,9 +2,11 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/list
 import gleam/option
 import gleam/otp/actor
+import gleam/result
 import gleam/string
 import gleamroom/call
 import logging
@@ -24,8 +26,11 @@ pub fn participant_id_to_string(id: ParticipantId) -> String {
   value
 }
 
+/// `connected` is False while the participant's connection is gone but the
+/// participant is still within the resume grace period (#766). They keep
+/// their id, buzzes and place in the list until the grace expires.
 pub type Participant {
-  Participant(id: ParticipantId, display_name: String)
+  Participant(id: ParticipantId, display_name: String, connected: Bool)
 }
 
 /// One accepted buzz, in the order the Room actor's mailbox processed it.
@@ -64,6 +69,13 @@ pub type RoomCommand {
   Leave(id: ParticipantId)
   Buzz(id: ParticipantId, round_id: Int)
   ResetRound(round_id: Int)
+  /// The participant's connection went away. They stay in the room, marked
+  /// disconnected, until they resume or the grace period expires (#766).
+  /// Issued only by the actor itself, never accepted through `dispatch`.
+  Disconnect(id: ParticipantId)
+  /// A disconnected participant attached a new connection (#766). Issued
+  /// only by the actor itself.
+  Reconnect(id: ParticipantId)
 }
 
 pub type JoinRejectReason {
@@ -88,6 +100,9 @@ pub type ResetRejectReason {
   /// The reset named a round that is not the current one, e.g. another
   /// participant already reset it (#765).
   ResetStaleRound
+  /// The reset came from a connection that is not any participant's current
+  /// connection, e.g. one replaced by a resume (#766).
+  ResetNotJoined
 }
 
 /// Accepted events carry the `revision` they produced (#765); rejections
@@ -108,6 +123,15 @@ pub type RoomEvent {
   /// `round_id` is the new round that starts with this reset.
   RoundReset(round_id: Int, revision: Int)
   ResetRejected(reason: ResetRejectReason)
+  ParticipantDisconnected(id: ParticipantId, revision: Int)
+  ParticipantReconnected(id: ParticipantId, revision: Int)
+  /// `Disconnect`/`Reconnect` did not apply (unknown participant, or already
+  /// in that state). Never broadcast.
+  PresenceRejected(id: ParticipantId)
+  /// Sent only to a connection whose participant was resumed by a newer
+  /// connection (#766). The receiver must stop using the room. Never
+  /// broadcast, and carries no state change.
+  SessionReplaced
 }
 
 /// A consistent view of the room at one revision: what a joining or
@@ -136,6 +160,8 @@ pub fn apply_command(
     Leave(id) -> apply_leave(state, id)
     Buzz(id, round_id) -> apply_buzz(state, id, round_id)
     ResetRound(round_id) -> apply_reset_round(state, round_id)
+    Disconnect(id) -> apply_presence(state, id, False)
+    Reconnect(id) -> apply_presence(state, id, True)
   }
 }
 
@@ -183,7 +209,7 @@ fn apply_join(
     Ok(_), True, _ -> #(state, JoinRejected(id, AlreadyJoined))
     Error(Nil), True, True -> #(state, JoinRejected(id, RoomFull))
     Error(Nil), True, False -> {
-      let participant = Participant(id, display_name)
+      let participant = Participant(id, display_name, connected: True)
       let revision = next_revision(state)
       let next =
         RoomState(
@@ -295,6 +321,33 @@ fn apply_reset_round(
   }
 }
 
+/// Marks a participant connected or disconnected (#766). Only a real change
+/// consumes a revision; anything else is `PresenceRejected`.
+fn apply_presence(
+  state: RoomState,
+  id: ParticipantId,
+  connected: Bool,
+) -> #(RoomState, RoomEvent) {
+  case find_participant(state, id) {
+    Ok(participant) if participant.connected != connected -> {
+      let revision = next_revision(state)
+      let participants =
+        list.map(state.participants, fn(p) {
+          case p.id == id {
+            True -> Participant(..p, connected:)
+            False -> p
+          }
+        })
+      let event = case connected {
+        True -> ParticipantReconnected(id, revision)
+        False -> ParticipantDisconnected(id, revision)
+      }
+      #(RoomState(..state, participants:, revision:), event)
+    }
+    _ -> #(state, PresenceRejected(id))
+  }
+}
+
 fn has_buzzed(state: RoomState, id: ParticipantId) -> Bool {
   list.any(state.buzzes, fn(result) { result.participant_id == id })
 }
@@ -329,6 +382,44 @@ pub fn full_snapshot(state: RoomState, instance_id: String) -> Snapshot {
   )
 }
 
+/// How long a disconnected participant can resume before they are removed
+/// (#766, ADR 0010). Counted from when the room learns of the disconnect.
+pub const default_participant_grace_ms = 60_000
+
+/// Ceiling on participants a room keeps track of, including those who already
+/// left (their token then answers `ResumeExpired`). Departed entries beyond it
+/// are dropped oldest first, so churn cannot grow the room without bound
+/// (#766, docs/buzzer-session.md "Limits").
+const max_tracked_participants = 128
+
+/// The answer to `join`: the event, a snapshot taken in the same mailbox
+/// message (#765), and the resume token issued to the joiner (#766). The
+/// token is `None` when the join was rejected. It must reach only the joining
+/// client: it is never broadcast or logged.
+pub type JoinReply {
+  JoinReply(
+    event: RoomEvent,
+    snapshot: Snapshot,
+    resume_token: option.Option(String),
+  )
+}
+
+pub type ResumeRejectReason {
+  /// The token names a different room instance, e.g. the room was recreated
+  /// or the server restarted.
+  RoomGone
+  /// The participant left or their grace period expired.
+  ResumeExpired
+  /// The token was never issued by this room instance (or was dropped by
+  /// `max_tracked_participants`).
+  InvalidToken
+}
+
+pub type ResumeReply {
+  Resumed(participant_id: ParticipantId, snapshot: Snapshot)
+  ResumeRejected(reason: ResumeRejectReason)
+}
+
 pub type Message {
   Dispatch(
     command: RoomCommand,
@@ -355,8 +446,23 @@ pub type Message {
     id: ParticipantId,
     display_name: String,
     session: Subject(RoomEvent),
-    reply_to: Subject(#(RoomEvent, Snapshot)),
+    reply_to: Subject(JoinReply),
   )
+  /// 既存の参加者として新しい接続を付け直す（#766）。`instance_id` は
+  /// クライアントが前回受け取った room の世代で、違えば `RoomGone`。
+  /// 同じ参加者に別の接続が付いていれば、それを `SessionReplaced` で外す。
+  Resume(
+    token: String,
+    instance_id: String,
+    session: Subject(RoomEvent),
+    reply_to: Subject(ResumeReply),
+  )
+  /// 接続が閉じた（#766）。`session` がその参加者の現在の接続のときだけ
+  /// 切断中にして猶予タイマーを始める。古い接続からの遅れた通知は無視する。
+  Detach(id: ParticipantId, session: Subject(RoomEvent))
+  /// 猶予タイマーの満了（#766）。`generation` が現在の接続世代と一致し、
+  /// まだ切断中のときだけ参加者を外す。復帰後に届いた古いタイマーは無視する。
+  GraceExpired(participant_key: String, generation: Int)
   /// 自分が無人なら終了する（#26 / #36）。
   ///
   /// **判定と停止を 1 メッセージに閉じてある。** 呼び出し側が
@@ -364,48 +470,68 @@ pub type Message {
   /// 停止させてしまう（#36）。room actor のメールボックスは直列に処理されるため、
   /// 自分で見て自分で止めれば隙間が生まれない。
   ///
-  /// 空でなければ何もせず動き続け、`reply_to` に `False` を返す。
+  /// 切断中（猶予内）の参加者も「居る」に数える（#766）。空でなければ何も
+  /// せず動き続け、`reply_to` に `False` を返す。
   /// registry はこの結果を見て Dict から外すかを決める。
   ShutdownIfEmpty(reply_to: Subject(Bool))
   /// 参加者の接続プロセスが死んだときに届く（#56 / #35）。
   ///
-  /// 参加者は WebSocket の接続プロセスと 1 対 1 で対応する。接続が死んだのに
-  /// Leave が届かない経路が複数ある:
+  /// 接続が死んだのに `Detach` が届かない経路が複数ある:
   ///
   ///   - `Join` がタイムアウトし、**遅れて成立した**（接続側は自分が参加者だと
-  ///     知らないので Leave を送れない、#33）
+  ///     知らないので Detach を送れない、#33）
   ///   - 接続プロセスがクラッシュした
   ///   - 突然の切断で `on_close` が走らなかった（#35）
   ///
-  /// 原因ごとに塞ぐより「**接続が死んだら参加者も消える**」という不変条件を
-  /// 1 つ置くほうが確実。監視は join を受けた時点で張る。
+  /// どの経路でも `Detach` と同じく切断中にして猶予を始める（#766）。
+  /// 以前はここで即座に退出させていた。
   SessionDown(pid: process.Pid)
 }
 
-/// The actor's own state: the domain `RoomState` plus the set of connected
-/// sessions to notify when membership changes. Kept separate from
-/// `RoomState` so the pure state transitions stay testable without a
-/// process or a notion of "subscriber".
+/// The connection currently attached to a participant. `monitor` is `None`
+/// only if the session's owner could not be resolved (then a crash of that
+/// connection is noticed only through `Detach`).
+type Attachment {
+  Attachment(
+    session: Subject(RoomEvent),
+    monitor: option.Option(#(process.Pid, process.Monitor)),
+  )
+}
+
+/// Per-participant bookkeeping the pure `RoomState` does not need (#766).
+type Member {
+  Member(
+    id: ParticipantId,
+    /// Proves "I am this participant" on resume. Never broadcast or logged.
+    token: String,
+    /// Bumped on every attach. A grace timer only acts on its own generation.
+    generation: Int,
+    attachment: option.Option(Attachment),
+    /// Left explicitly or grace expired: the token answers `ResumeExpired`.
+    departed: Bool,
+    /// Issue order, so the oldest departed entries are dropped first.
+    issued: Int,
+  )
+}
+
+/// The actor's own state: the domain `RoomState` plus the connections and
+/// tokens behind each participant. Kept separate from `RoomState` so the pure
+/// state transitions stay testable without a process.
 type ActorState {
   ActorState(
+    /// 猶予タイマーを自分宛てに送るための subject（#766）。
+    self: Subject(Message),
     /// この actor の生存期間を表す乱数（#765）。同じ部屋コードで作り直された
     /// room の配信を、クライアントが前の room のものと取り違えないようにする。
     instance_id: String,
     room: RoomState,
-    subscribers: Dict(String, Subject(RoomEvent)),
-    /// 監視中の接続プロセス pid → [(ParticipantId の文字列表現, Monitor)]（#56 / #69）。
-    ///
-    /// Down メッセージは pid しか運ばないため逆引きが要る。Monitor を併せて
-    /// 持つのは、離脱時に `demonitor_process` で解除するため。解除しないと
-    /// Leave 後も監視が残り、その接続プロセスが後から終了したときに
-    /// 無関係な Down 通知が届く。
-    ///
-    /// **値は単一エントリではなくリスト**（#459）。同一物理接続（＝同一 pid）が
-    /// タイムアウト後の再joinで新しい `ParticipantId` を得ることがあり
-    /// （`with_room_reply` が `ConnectionState.room` を `None` に戻す経路）、
-    /// 単一エントリだと2回目のjoinが1回目の監視エントリを上書きして
-    /// 1回目の参加者が `SessionDown` で回収されない「幽霊参加者」になる。
-    sessions: Dict(process.Pid, List(#(String, process.Monitor))),
+    participant_grace_ms: Int,
+    /// ParticipantId の文字列表現 → Member。退出済みも
+    /// `max_tracked_participants` まで残す。
+    members: Dict(String, Member),
+    /// resume token → ParticipantId の文字列表現。
+    tokens: Dict(String, String),
+    next_issue: Int,
   )
 }
 
@@ -413,9 +539,16 @@ type ActorState {
 /// independent process with its own mailbox, so multiple rooms never share
 /// participant state (ADR 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
+  start_with_grace(default_participant_grace_ms)
+}
+
+/// `start` with a different resume grace period. Production always uses
+/// `start`; tests use this to observe grace expiry without waiting a minute.
+pub fn start_with_grace(
+  participant_grace_ms: Int,
+) -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     // 接続プロセスの死を signal ではなくメッセージとして受ける（#56）。
-    // trap しないと、監視対象の異常終了が room を道連れにする。
     // **monitor を使う。link ではない**（#69）。
     // link は双方向で、「クラッシュしたプロセスにリンクされたプロセスも
     // クラッシュする」。接続プロセスが 1 つ落ちただけで room actor ごと死に、
@@ -427,17 +560,19 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
       |> process.select_monitors(fn(down) {
         case down {
           process.ProcessDown(pid:, ..) -> SessionDown(pid)
-          // Port は監視していない。自分の pid を返せば sessions に一致する
-          // エントリが無いので実質 no-op になる。
+          // Port は監視していない。自分の pid を返せば一致する接続が
+          // 無いので実質 no-op になる。
           process.PortDown(..) -> SessionDown(process.self())
         }
       })
     actor.initialised(ActorState(
-      instance_id: crypto.strong_random_bytes(16)
-        |> bit_array.base64_url_encode(False),
+      self: subject,
+      instance_id: random_string(),
       room: new_state(),
-      subscribers: dict.new(),
-      sessions: dict.new(),
+      participant_grace_ms:,
+      members: dict.new(),
+      tokens: dict.new(),
+      next_issue: 0,
     ))
     |> actor.selecting(selector)
     |> actor.returning(subject)
@@ -447,25 +582,77 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
   |> actor.start
 }
 
+/// 128-bit random, URL-safe. Used for the room instance id and resume tokens.
+fn random_string() -> String {
+  crypto.strong_random_bytes(16)
+  |> bit_array.base64_url_encode(False)
+}
+
 fn handle_message(
   state: ActorState,
   message: Message,
 ) -> actor.Next(ActorState, Message) {
   case message {
     Dispatch(command, session, reply_to) -> {
-      let #(next_state, event) = run_command(state, command, session)
+      let #(next_state, event) = case authorize(state, command, session) {
+        Ok(Nil) -> run_command(state, command, session)
+        Error(rejection) -> #(state, rejection)
+      }
       process.send(reply_to, event)
       actor.continue(next_state)
     }
     JoinWithSnapshot(id, display_name, session, reply_to) -> {
       let #(next_state, event) =
         run_command(state, Join(id, display_name), session)
-      process.send(reply_to, #(
-        event,
-        full_snapshot(next_state.room, next_state.instance_id),
-      ))
+      let resume_token = case event {
+        ParticipantJoined(participant, _) ->
+          dict.get(next_state.members, participant_id_to_string(participant.id))
+          |> option.from_result
+          |> option.map(fn(member) { member.token })
+        _ -> option.None
+      }
+      process.send(
+        reply_to,
+        JoinReply(
+          event,
+          full_snapshot(next_state.room, next_state.instance_id),
+          resume_token,
+        ),
+      )
       actor.continue(next_state)
     }
+    Resume(token, instance_id, session, reply_to) -> {
+      let #(next_state, reply) = resume(state, token, instance_id, session)
+      process.send(reply_to, reply)
+      actor.continue(next_state)
+    }
+    Detach(id, session) -> {
+      let key = participant_id_to_string(id)
+      case dict.get(state.members, key) {
+        Ok(Member(attachment: option.Some(attachment), ..))
+          if attachment.session == session
+        -> actor.continue(disconnect(state, key))
+        // 既に別の接続へ付け替わったか、退出済み。古い接続の遅れた通知。
+        _ -> actor.continue(state)
+      }
+    }
+    GraceExpired(key, generation) ->
+      case dict.get(state.members, key) {
+        Ok(Member(departed: False, attachment: option.None, ..) as member)
+          if member.generation == generation
+        -> {
+          let next_state = depart(state, member)
+          case next_state.room.participants {
+            // 最後の参加者の猶予が切れた。誰も戻れないので自分で止まる
+            // （#91 / #766）。registry は `RoomDown` で登録を外す。判定と
+            // 停止が 1 メッセージに閉じているので join と競合しない。
+            [] -> actor.stop()
+            _ -> actor.continue(next_state)
+          }
+        }
+        // 復帰済み・退出済み・別世代のタイマー。
+        _ -> actor.continue(state)
+      }
     GetSnapshot(reply_to) -> {
       process.send(reply_to, snapshot(state.room))
       actor.continue(state)
@@ -474,13 +661,21 @@ fn handle_message(
       process.send(reply_to, full_snapshot(state.room, state.instance_id))
       actor.continue(state)
     }
-    SessionDown(pid) ->
-      case dict.get(state.sessions, pid) {
-        // sessions に無い pid の SessionDown は、demonitor 済みの参加者に対して
-        // 遅延して届いた ProcessDown を無視するだけの想定内のレース。ただし
-        // sessions の更新経路にバグが混入して本来追跡すべき pid を見失った
-        // 場合にも気づけるよう、Debug ログだけは残す。
-        Error(Nil) -> {
+    SessionDown(pid) -> {
+      let keys =
+        state.members
+        |> dict.values
+        |> list.filter_map(fn(member) {
+          case member.attachment {
+            option.Some(Attachment(monitor: option.Some(#(owner, _)), ..))
+              if owner == pid
+            -> Ok(participant_id_to_string(member.id))
+            _ -> Error(Nil)
+          }
+        })
+      case keys {
+        // 既に付け替え・退出で監視を外した接続の Down が遅れて届いただけ。
+        [] -> {
           logging.log(
             logging.Debug,
             "SessionDown for untracked pid, ignoring: pid="
@@ -488,57 +683,10 @@ fn handle_message(
           )
           actor.continue(state)
         }
-        Ok(entries) -> {
-          // 接続が死んだ参加者を Leave 相当で片付ける（#56）。
-          // 通常の Leave と同じ経路を通すので、他の参加者にも
-          // ParticipantLeft が配信される。
-          //
-          // **1つの pid に複数エントリがありうる**（#459）。同一物理接続が
-          // タイムアウト後の再joinで複数の ParticipantId を持つに至った場合、
-          // その全員をここで片付けないと再joinの度に増えた分だけ「幽霊参加者」
-          // が残り続ける。
-          let #(next_room, next_subscribers) =
-            list.fold(entries, #(state.room, state.subscribers), fn(acc, entry) {
-              let #(room, subscribers) = acc
-              let #(participant_key, monitor) = entry
-              process.demonitor_process(monitor)
-              let id = ParticipantId(participant_key)
-              let #(next_room, event) = apply_command(room, Leave(id))
-              let next_subscribers = dict.delete(subscribers, participant_key)
-              broadcast_all(next_subscribers, event)
-              #(next_room, next_subscribers)
-            })
-          case next_room.participants {
-            // **無人になったら自分で止まる（#91）。**
-            //
-            // 参加者が抜ける経路は 2 つある。通常の切断は websocket の
-            // `on_close` が `registry.Release` を送って掃除するが、
-            // **突然の切断で `on_close` が走らなかった場合はここしか通らない**
-            // （#35 がこの経路を導入した理由そのもの）。room actor は自分を
-            // 登録している registry を知らないので Release は送れず、
-            // 放置すると空の room actor と registry の Dict エントリが
-            // 再起動まで残る。
-            //
-            // 止まれば registry の `RoomDown`（#39 の trap_exits 経路）が
-            // 拾って登録を外す。**正常停止でも RoomDown が発火することは
-            // 実際に確かめた**（クラッシュ時だけの経路ではない）。
-            //
-            // 判定と停止を **1 メッセージに閉じている**ので、`ShutdownIfEmpty`
-            // （#36）と同じ理由でレースが無い。room のメールボックスは直列なので、
-            // 空だと判定した瞬間に join が割り込むことはない。
-            [] -> actor.stop()
-            _ ->
-              actor.continue(
-                ActorState(
-                  ..state,
-                  room: next_room,
-                  subscribers: next_subscribers,
-                  sessions: dict.delete(state.sessions, pid),
-                ),
-              )
-          }
-        }
+        // 同じ接続プロセスが複数の参加者を持ちうる（#459）。全員を切断中にする。
+        _ -> actor.continue(list.fold(keys, state, disconnect))
       }
+    }
     ShutdownIfEmpty(reply_to) ->
       case state.room.participants {
         [] -> {
@@ -554,8 +702,60 @@ fn handle_message(
   }
 }
 
-/// Applies a command, then updates subscribers, monitors and broadcasts, all
-/// while handling one mailbox message. The caller sends the reply.
+/// A command is accepted only from the participant's current connection
+/// (#766). A connection replaced by a resume, or one whose participant has
+/// left, cannot buzz, reset or leave on the participant's behalf.
+/// `Disconnect`/`Reconnect` are the actor's own transitions and are never
+/// accepted from outside.
+fn authorize(
+  state: ActorState,
+  command: RoomCommand,
+  session: Subject(RoomEvent),
+) -> Result(Nil, RoomEvent) {
+  case command {
+    Join(..) -> Ok(Nil)
+    Leave(id) ->
+      case is_current_session(state, id, session) {
+        True -> Ok(Nil)
+        False -> Error(LeaveRejected(id, NotJoined))
+      }
+    Buzz(id, _) ->
+      case is_current_session(state, id, session) {
+        True -> Ok(Nil)
+        False -> Error(BuzzRejected(id, BuzzerNotJoined))
+      }
+    ResetRound(_) ->
+      case
+        dict.values(state.members)
+        |> list.any(fn(member) { has_session(member, session) })
+      {
+        True -> Ok(Nil)
+        False -> Error(ResetRejected(ResetNotJoined))
+      }
+    Disconnect(id) | Reconnect(id) -> Error(PresenceRejected(id))
+  }
+}
+
+fn is_current_session(
+  state: ActorState,
+  id: ParticipantId,
+  session: Subject(RoomEvent),
+) -> Bool {
+  case dict.get(state.members, participant_id_to_string(id)) {
+    Ok(member) -> has_session(member, session)
+    Error(Nil) -> False
+  }
+}
+
+fn has_session(member: Member, session: Subject(RoomEvent)) -> Bool {
+  case member.attachment {
+    option.Some(attachment) -> attachment.session == session
+    option.None -> False
+  }
+}
+
+/// Applies a command, then updates members and broadcasts, all while handling
+/// one mailbox message. The caller sends the reply.
 ///
 /// The caller normally gets the event synchronously through `reply_to`, but
 /// `reply_to` is a throwaway subject created per call (`dispatch`'s
@@ -572,159 +772,258 @@ fn run_command(
   session: Subject(RoomEvent),
 ) -> #(ActorState, RoomEvent) {
   let #(next_room, event) = apply_command(state.room, command)
-  let next_subscribers = update_subscribers(state.subscribers, event, session)
-  let next_sessions = update_sessions(state.sessions, event, session)
-  broadcast(next_subscribers, except: session, event: event)
-  #(
-    ActorState(
-      ..state,
-      room: next_room,
-      subscribers: next_subscribers,
-      sessions: next_sessions,
-    ),
-    event,
-  )
+  let state = ActorState(..state, room: next_room)
+  let state = case event {
+    ParticipantJoined(participant, _) ->
+      issue_member(state, participant, session)
+    ParticipantLeft(id, _) ->
+      case dict.get(state.members, participant_id_to_string(id)) {
+        Ok(member) -> mark_departed(state, member)
+        Error(Nil) -> state
+      }
+    _ -> state
+  }
+  broadcast(state, except: session, event: event)
+  #(state, event)
 }
 
-/// 参加時に接続プロセスを監視対象へ入れ、離脱時に外す（#56）。
-///
-/// 監視するのは room 側だけ。接続プロセスは room の生死を気にしないが、
-/// room は接続の生死を知る必要がある（片方向の関心）。
+/// Registers a newly joined participant: a fresh token, generation 1, and a
+/// monitor on the joining connection (#56 / #766).
+fn issue_member(
+  state: ActorState,
+  participant: Participant,
+  session: Subject(RoomEvent),
+) -> ActorState {
+  let key = participant_id_to_string(participant.id)
+  let token = random_string()
+  let member =
+    Member(
+      id: participant.id,
+      token:,
+      generation: 1,
+      attachment: option.Some(attach(session, key)),
+      departed: False,
+      issued: state.next_issue,
+    )
+  ActorState(
+    ..state,
+    members: dict.insert(state.members, key, member),
+    tokens: dict.insert(state.tokens, token, key),
+    next_issue: state.next_issue + 1,
+  )
+  |> drop_oldest_departed
+}
+
+/// Keeps at most `max_tracked_participants` entries by dropping the oldest
+/// departed ones. Active participants are capped lower (`max_participants`),
+/// so there is always a departed entry to drop.
+fn drop_oldest_departed(state: ActorState) -> ActorState {
+  case dict.size(state.members) > max_tracked_participants {
+    False -> state
+    True -> {
+      let oldest =
+        state.members
+        |> dict.values
+        |> list.filter(fn(member) { member.departed })
+        |> list.sort(fn(a, b) { int.compare(a.issued, b.issued) })
+        |> list.first
+      case oldest {
+        Ok(member) ->
+          ActorState(
+            ..state,
+            members: dict.delete(
+              state.members,
+              participant_id_to_string(member.id),
+            ),
+            tokens: dict.delete(state.tokens, member.token),
+          )
+          |> drop_oldest_departed
+        Error(Nil) -> state
+      }
+    }
+  }
+}
+
+/// 接続を監視して付ける（#56 / #69）。
 ///
 /// **`process.monitor` を使う。`process.link` ではない**（#69）。link は双方向で、
 /// 接続プロセスが 1 つクラッシュすると room actor ごと道連れになり、同室の
 /// 全参加者が落ちる。monitor は対象の終了をメッセージで受け取るだけで、
 /// 監視元は影響を受けない。
-fn update_sessions(
-  sessions: Dict(process.Pid, List(#(String, process.Monitor))),
-  event: RoomEvent,
-  session: Subject(RoomEvent),
-) -> Dict(process.Pid, List(#(String, process.Monitor))) {
-  case event {
-    ParticipantJoined(participant, _) ->
-      case process.subject_owner(session) {
-        Ok(pid) -> {
-          let monitor = process.monitor(pid)
-          let entry = #(participant_id_to_string(participant.id), monitor)
-          // **既存エントリに追加する。上書きしない**（#459）。同一 pid から
-          // 二度目の Join が来るのは、タイムアウト後の再joinで新しい
-          // ParticipantId が発行されたケース（#100）。上書きすると1回目の
-          // 参加者の監視エントリが失われ、SessionDown で回収されない
-          // 「幽霊参加者」になる。
-          dict.upsert(sessions, pid, fn(existing) {
-            case existing {
-              option.Some(entries) -> [entry, ..entries]
-              option.None -> [entry]
-            }
-          })
-        }
-        // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
-        // 未登録のため #56 の切断検知が効かない参加者になるので、後から
-        // 追えるようにログだけは残す。
-        Error(Nil) -> {
-          logging.log(
-            logging.Warning,
-            "subject_owner failed for joining participant, session not monitored: participant_id="
-              <> participant_id_to_string(participant.id),
-          )
-          sessions
-        }
-      }
-    ParticipantLeft(id, _) -> {
-      let key = participant_id_to_string(id)
-      // 値（ParticipantId）で引いて外す。pid は Down 側でしか分からない。
-      // **監視も解除する**（#69）。残すと、Leave 後も生きている接続プロセスが
-      // 後から終了したときに無関係な Down 通知が届く。
-      dict.each(sessions, fn(_pid, entries) {
-        list.each(entries, fn(entry) {
-          case entry {
-            #(participant_key, monitor) if participant_key == key ->
-              process.demonitor_process(monitor)
-            _ -> Nil
-          }
-        })
-      })
-      sessions
-      |> dict.map_values(fn(_pid, entries) {
-        list.filter(entries, fn(entry) { entry.0 != key })
-      })
-      |> dict.filter(fn(_pid, entries) { entries != [] })
-    }
-    JoinRejected(_, _)
-    | LeaveRejected(_, _)
-    | BuzzAccepted(..)
-    | BuzzRejected(_, _)
-    | RoundReset(..)
-    | ResetRejected(_) -> sessions
-  }
-}
-
-/// 全購読者へ配信する（除外なし）。接続が死んだ参加者の離脱を知らせるのに使う。
-fn broadcast_all(
-  subscribers: Dict(String, Subject(RoomEvent)),
-  event: RoomEvent,
-) -> Nil {
-  dict.each(subscribers, fn(_key, subscriber) {
-    process.send(subscriber, event)
-  })
-}
-
-fn update_subscribers(
-  subscribers: Dict(String, Subject(RoomEvent)),
-  event: RoomEvent,
-  session: Subject(RoomEvent),
-) -> Dict(String, Subject(RoomEvent)) {
-  case event {
-    ParticipantJoined(participant, _) ->
-      dict.insert(
-        subscribers,
-        participant_id_to_string(participant.id),
-        session,
+fn attach(session: Subject(RoomEvent), key: String) -> Attachment {
+  case process.subject_owner(session) {
+    Ok(pid) ->
+      Attachment(session:, monitor: option.Some(#(pid, process.monitor(pid))))
+    // 所有者が引けないのは想定外だが、監視できないだけで参加は成立する。
+    // 切断は Detach でしか分からない参加者になるので、ログだけは残す。
+    Error(Nil) -> {
+      logging.log(
+        logging.Warning,
+        "subject_owner failed for attaching participant, session not monitored: participant_id="
+          <> key,
       )
-    ParticipantLeft(id, _) ->
-      dict.delete(subscribers, participant_id_to_string(id))
-    JoinRejected(_, _)
-    | LeaveRejected(_, _)
-    | BuzzAccepted(..)
-    | BuzzRejected(_, _)
-    | RoundReset(..)
-    | ResetRejected(_) -> subscribers
+      Attachment(session:, monitor: option.None)
+    }
   }
 }
 
-/// Notifies subscribers about a state change. `BuzzAccepted`/`RoundReset`
-/// reach every subscriber, *including* the session that issued the command
-/// (#143: the issuing session's synchronous `reply_to` can be lost on a
-/// `dispatch` timeout, so it must also be reachable asynchronously).
-/// `ParticipantJoined`/`ParticipantLeft` still exclude/omit the issuer (see
-/// the call site in `handle_message` for why `Join` is not extended the
-/// same way; `Leave` never reaches its own issuer either, because
-/// `update_subscribers` already dropped their subject from `subscribers`
-/// before this runs). Rejections are not broadcast: they carry no state
-/// change and are only meaningful to the issuing session, which always
-/// gets them synchronously through `reply_to`.
+/// 監視を解除する（#69）。残すと、付け替え・退出の後に古い接続プロセスが
+/// 終了したとき、無関係な Down 通知が届く。
+fn release_attachment(attachment: option.Option(Attachment)) -> Nil {
+  case attachment {
+    option.Some(Attachment(monitor: option.Some(#(_, monitor)), ..)) ->
+      process.demonitor_process(monitor)
+    _ -> Nil
+  }
+}
+
+fn mark_departed(state: ActorState, member: Member) -> ActorState {
+  release_attachment(member.attachment)
+  let member = Member(..member, attachment: option.None, departed: True)
+  ActorState(
+    ..state,
+    members: dict.insert(
+      state.members,
+      participant_id_to_string(member.id),
+      member,
+    ),
+  )
+}
+
+/// The participant's current connection went away: keep them, marked
+/// disconnected, and start a grace timer for this generation (#766).
+fn disconnect(state: ActorState, key: String) -> ActorState {
+  case dict.get(state.members, key) {
+    Ok(member) -> {
+      release_attachment(member.attachment)
+      let member = Member(..member, attachment: option.None)
+      let #(next_room, event) = apply_command(state.room, Disconnect(member.id))
+      let state =
+        ActorState(
+          ..state,
+          room: next_room,
+          members: dict.insert(state.members, key, member),
+        )
+      broadcast_to_attached(state, option.None, event)
+      process.send_after(
+        state.self,
+        state.participant_grace_ms,
+        GraceExpired(key, member.generation),
+      )
+      state
+    }
+    Error(Nil) -> state
+  }
+}
+
+/// The grace period ran out: remove the participant from presence. Their
+/// buzzes stay (ADR 0003, #30) and their token now answers `ResumeExpired`.
+fn depart(state: ActorState, member: Member) -> ActorState {
+  let #(next_room, event) = apply_command(state.room, Leave(member.id))
+  let state = mark_departed(ActorState(..state, room: next_room), member)
+  broadcast_to_attached(state, option.None, event)
+  state
+}
+
+fn resume(
+  state: ActorState,
+  token: String,
+  instance_id: String,
+  session: Subject(RoomEvent),
+) -> #(ActorState, ResumeReply) {
+  let member = case instance_id == state.instance_id {
+    False -> Error(RoomGone)
+    True ->
+      case
+        dict.get(state.tokens, token)
+        |> result.try(dict.get(state.members, _))
+      {
+        Error(Nil) -> Error(InvalidToken)
+        Ok(Member(departed: True, ..)) -> Error(ResumeExpired)
+        Ok(member) -> Ok(member)
+      }
+  }
+  case member {
+    Error(reason) -> #(state, ResumeRejected(reason))
+    Ok(member) -> {
+      let key = participant_id_to_string(member.id)
+      // 同じ参加者に付いている接続（複製したタブなど）は外す。新しい方が勝つ。
+      case member.attachment {
+        option.Some(old) if old.session != session -> {
+          release_attachment(member.attachment)
+          process.send(old.session, SessionReplaced)
+        }
+        option.Some(_) -> release_attachment(member.attachment)
+        option.None -> Nil
+      }
+      let member =
+        Member(
+          ..member,
+          generation: member.generation + 1,
+          attachment: option.Some(attach(session, key)),
+        )
+      let state =
+        ActorState(..state, members: dict.insert(state.members, key, member))
+      // 切断中だった場合だけ状態が変わる。接続中のまま付け替えた場合は
+      // 他の参加者から見て何も変わっていない。
+      let state = case apply_command(state.room, Reconnect(member.id)) {
+        #(next_room, ParticipantReconnected(..) as event) -> {
+          let state = ActorState(..state, room: next_room)
+          broadcast_to_attached(state, option.Some(session), event)
+          state
+        }
+        _ -> state
+      }
+      #(state, Resumed(member.id, full_snapshot(state.room, state.instance_id)))
+    }
+  }
+}
+
+/// Notifies attached connections about a state change. `BuzzAccepted`/
+/// `RoundReset` reach every connection, *including* the one that issued the
+/// command (#143: the issuing session's synchronous `reply_to` can be lost on
+/// a `dispatch` timeout, so it must also be reachable asynchronously).
+/// `ParticipantJoined`/`ParticipantLeft` exclude the issuer (the joiner gets a
+/// snapshot; a leaver is no longer attached). Rejections are not broadcast:
+/// they carry no state change and are only meaningful to the issuing
+/// session, which always gets them synchronously through `reply_to`.
 fn broadcast(
-  subscribers: Dict(String, Subject(RoomEvent)),
+  state: ActorState,
   except except_session: Subject(RoomEvent),
   event event: RoomEvent,
 ) -> Nil {
   case event {
-    BuzzAccepted(..) | RoundReset(..) -> broadcast_all(subscribers, event)
-    ParticipantJoined(..) | ParticipantLeft(..) ->
-      subscribers
-      |> dict.to_list
-      |> list.each(fn(entry) {
-        let #(_, subject) = entry
-        case subject == except_session {
-          True -> Nil
-          False -> process.send(subject, event)
-        }
-      })
+    BuzzAccepted(..) | RoundReset(..) ->
+      broadcast_to_attached(state, option.None, event)
+    ParticipantJoined(..)
+    | ParticipantLeft(..)
+    | ParticipantDisconnected(..)
+    | ParticipantReconnected(..) ->
+      broadcast_to_attached(state, option.Some(except_session), event)
     JoinRejected(_, _)
     | LeaveRejected(_, _)
     | BuzzRejected(_, _)
-    | ResetRejected(_) -> Nil
+    | ResetRejected(_)
+    | PresenceRejected(_)
+    | SessionReplaced -> Nil
   }
+}
+
+fn broadcast_to_attached(
+  state: ActorState,
+  except: option.Option(Subject(RoomEvent)),
+  event: RoomEvent,
+) -> Nil {
+  dict.each(state.members, fn(_key, member) {
+    case member.attachment {
+      option.Some(Attachment(session:, ..)) ->
+        case except == option.Some(session) {
+          True -> Nil
+          False -> process.send(session, event)
+        }
+      option.None -> Nil
+    }
+  })
 }
 
 /// Sends a command to a running room actor and waits for the resulting
@@ -762,19 +1061,47 @@ pub fn get_state(subject: Subject(Message)) -> Result(Snapshot, Nil) {
 }
 
 /// Joins and returns the resulting event together with a snapshot taken in
-/// the same mailbox message (#765). See `JoinWithSnapshot`.
+/// the same mailbox message (#765) and the joiner's resume token (#766).
+/// See `JoinWithSnapshot`.
 pub fn join(
   subject: Subject(Message),
   id: ParticipantId,
   display_name: String,
   session: Subject(RoomEvent),
-) -> Result(#(RoomEvent, Snapshot), Nil) {
+) -> Result(JoinReply, Nil) {
   call.try_call(
     subject,
     call.default_timeout,
     JoinWithSnapshot(id, display_name, session, _),
     "room.join",
   )
+}
+
+/// Re-attaches an existing participant to the connection owning `session`
+/// (#766). See `Resume`.
+pub fn resume_session(
+  subject: Subject(Message),
+  token: String,
+  instance_id: String,
+  session: Subject(RoomEvent),
+) -> Result(ResumeReply, Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    Resume(token, instance_id, session, _),
+    "room.resume",
+  )
+}
+
+/// Tells the room that the connection owning `session` closed (#766).
+/// Asynchronous: a closing connection has nothing to wait for, and a stale
+/// `Detach` is ignored by the room.
+pub fn detach(
+  subject: Subject(Message),
+  id: ParticipantId,
+  session: Subject(RoomEvent),
+) -> Nil {
+  process.send(subject, Detach(id, session))
 }
 
 /// 無人なら room を停止させ、停止したかどうかを返す（#36）。
