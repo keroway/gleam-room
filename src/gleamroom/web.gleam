@@ -90,9 +90,10 @@ pub fn index_html() -> String {
   let roundId = null;
   let syncRequested = false;
   // 送った sync の request_id。拒否（rate_limited など）の応答を見分け、
-  // 間隔を空けて上限回数まで取り直す。state を受け取れば回数を戻す。
-  const SYNC_RETRY_MS = 1000;
-  const MAX_SYNC_RETRIES = 3;
+  // 間隔を広げながら上限回数まで取り直す。state を受け取れば回数を戻す。
+  // レート制限の窓は30秒（ws_guard の heartbeat 窓）なので、最後の再試行は
+  // 最初の拒否から30秒以上後になるようにし、窓の回復後に必ず1回は試す。
+  const SYNC_RETRY_DELAYS_MS = [2000, 8000, 32000];
   let syncRequestId = null;
   let syncRetries = 0;
   let syncRetryTimer = null;
@@ -200,7 +201,9 @@ pub fn index_html() -> String {
   }
 
   function requestSync() {
-    if (syncRequested) return;
+    // 再試行の予約中も待機中として扱う。新しい sync を重ねるとタイマーが
+    // 上書きされ、state 受信後も取り消せない再同期が残る。
+    if (syncRequested || syncRetryTimer !== null) return;
     syncRequested = true;
     syncRequestId = String(nextRequestId++);
     log(\"missing update detected, requesting the current state\");
@@ -212,16 +215,17 @@ pub fn index_html() -> String {
   function handleSyncRejected() {
     syncRequested = false;
     syncRequestId = null;
-    if (syncRetries >= MAX_SYNC_RETRIES) {
+    if (syncRetries >= SYNC_RETRY_DELAYS_MS.length) {
       log(\"sync rejected repeatedly, waiting for the next missing update\");
       syncRetries = 0;
       return;
     }
+    const delay = SYNC_RETRY_DELAYS_MS[syncRetries];
     syncRetries += 1;
     syncRetryTimer = setTimeout(() => {
       syncRetryTimer = null;
       requestSync();
-    }, SYNC_RETRY_MS);
+    }, delay);
   }
 
   // 通知を適用してよいかを revision で判定する（#765）。
