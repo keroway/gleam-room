@@ -3,6 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
+import { buzzerState } from "./buzzer-wire.mjs";
 
 test("OPEN な接続では buzz/reset クリックがそのまま送信される", () => {
   const client = startClient();
@@ -11,7 +12,7 @@ test("OPEN な接続では buzz/reset クリックがそのまま送信される
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     socket.sent = [];
 
@@ -35,7 +36,7 @@ for (const state of ["CLOSING", "CLOSED"]) {
       const socket = client.latestSocket();
       socket.handlers.open?.();
       socket.handlers.message?.({
-        data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+        data: JSON.stringify(buzzerState()),
       });
 
       // close イベントがまだ発火していない間に readyState だけが進む

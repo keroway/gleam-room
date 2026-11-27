@@ -117,6 +117,12 @@ Rules:
 
 ## Revision and stale notifications (#765)
 
+**Implemented** (#765). Wire details are in
+[`docs/mvp.md`](mvp.md#suggested-wire-protocol). Until #768 adds roles, the
+MVP `reset` stays available to every participant; it now names the round
+(`round_id`) and starts the next one, so it already behaves like the later
+host-only `NextQuestion` with respect to `RoundId`.
+
 - Every *accepted* state change increments `Revision` by 1. The direct reply
   to the sender and the broadcast to everyone carry the same
   `(room_instance_id, revision)`. A rejected command carries no revision.
@@ -206,9 +212,8 @@ Values may be tuned in the implementing PR; the PR must update this table.
 
 - v2 messages carry `"v": 2` in `create`/`join`/`resume`, and every
   snapshot carries `server_version`.
-- Until #765 merges, the server keeps the MVP protocol (v1) unchanged.
-- From the PR that merges #765: a join without `"v": 2` is rejected with
-  `client_outdated` and closed. A v2 client whose embedded version differs
+- Since #765: a join without `"v": 2` is rejected with `client_outdated`
+  and closed. The v1 protocol is no longer accepted. A v2 client whose embedded version differs
   from `server_version` shows "ページを再読み込みしてください" and stops
   reconnecting. Because the HTML is served by the same server, a reload is
   always enough.
@@ -228,7 +233,7 @@ generic session/permission framework.
 |---|---|---|
 | exact wire field names, error code strings | shape and codes above | #765 (sync), #766 (resume), #768 (roles) |
 | keepalive interval / timeout | — (done) | #764 (merged, PR #772) |
-| `sync` request rate limit | must exist | #765 |
+| `sync` request rate limit | must exist | done in #765: counts toward the normal 30-per-window limit; the client sends at most one until the next `state` |
 | QR generation library | local only, no external service | #767 |
 | host / player / display screen layout | roles and permissions | #768 |
 | CSV columns and formula-injection escaping | client-side export only | #769 |

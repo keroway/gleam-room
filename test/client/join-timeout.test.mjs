@@ -2,11 +2,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
+import { buzzerState } from "./buzzer-wire.mjs";
 
 const JOIN_TIMEOUT_MS = 10000;
 const PAGES = [
   ["buzzer", { modulePath: "src/gleamroom/web.gleam", functionName: "index_html" },
-    { type: "state", participants: [], buzzes: [] }],
+    buzzerState()],
   ["poker", { modulePath: "src/gleamroom/web_poker.gleam", functionName: "poker_html" },
     { type: "state", phase: "voting", participants: [], votes: [] }],
 ];

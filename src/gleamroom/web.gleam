@@ -81,31 +81,51 @@ pub fn index_html() -> String {
   let socket = null;
   let participants = new Map();
   let buzzes = [];
-  // 自分が buzz 済みかどうか。サーバーは buzz_accepted を全員に配るだけで
-  // 自分の参加者IDも渡さないため、クリック時に楽観的に立て、already_buzzed で
-  // 確定させる。round_reset・state・切断で戻す（#576）。
-  let hasBuzzed = false;
-  // 送信済みで未応答（buzz_accepted / already_buzzed / state / round_reset の
-  // いずれも未受信）の buzz があるか。応答に相関 ID が無いため error の対象推定に使う。
-  // 応答は送信順に届くので、未応答 buzz がある間の最初の error は buzz への拒否。
-  // 後続の reset 送信で上書きしない（#708）。受理済み buzz 後の reset 拒否で
-  // 押下済み状態を解除しない（#690）。
-  let buzzUnacked = false;
   let selfId = null;
   let isConnected = false;
+  // サーバ権威の状態の位置（#765）。通知は room_instance_id が一致し、
+  // revision がちょうど次のものだけを適用する。内容を比べて新旧を推測しない。
+  let instanceId = null;
+  let revision = 0;
+  let roundId = null;
+  let syncRequested = false;
+  // 応答待ちの buzz/reset（request_id → 内容）。直接応答（reply）で解決する。
+  // 切断で破棄し、上限を超えたら古いものから捨てる。
+  const MAX_PENDING_REQUESTS = 16;
+  let pending = new Map();
+  let nextRequestId = 1;
 
+  const PROTOCOL_VERSION = 2;
   const WS_PATH = \"/ws\";
+  const JOIN_FIELDS = { v: PROTOCOL_VERSION };
   const afterSend = () => {};
 " <> client_js.shared <> "
   function resetRoomView() {
     participants = new Map();
     buzzes = [];
+    instanceId = null;
+    revision = 0;
+    roundId = null;
+    syncRequested = false;
+    pending = new Map();
     renderParticipants();
     renderBuzzes();
   }
 
+  // 押下済みかどうかはサーバの buzz 一覧と、現ラウンドへの応答待ちの buzz
+  // だけから決める（#765）。拒否・受理の応答で pending が消えれば自動的に戻る。
+  function hasBuzzed() {
+    if (selfId !== null && buzzes.some((b) => b.participant_id === selfId)) {
+      return true;
+    }
+    for (const request of pending.values()) {
+      if (request.type === \"buzz\" && request.roundId === roundId) return true;
+    }
+    return false;
+  }
+
   function updateBuzzButton() {
-    buzzButton.disabled = !isConnected || hasBuzzed;
+    buzzButton.disabled = !isConnected || hasBuzzed();
   }
 
   function setConnected(connected) {
@@ -115,7 +135,6 @@ pub fn index_html() -> String {
     roomInput.disabled = connected;
     nameInput.disabled = connected;
     isConnected = connected;
-    if (!connected) hasBuzzed = false;
     updateBuzzButton();
     resetButton.disabled = !connected;
   }
@@ -143,162 +162,191 @@ pub fn index_html() -> String {
     );
   }
 
-  function handleServerMessage(message) {
+  const isObject = (value) => typeof value === \"object\" && value !== null;
+  const isParticipant = (p) =>
+    isObject(p) &&
+    typeof p.participant_id === \"string\" &&
+    typeof p.display_name === \"string\";
+  const isBuzz = (b) =>
+    isObject(b) &&
+    typeof b.participant_id === \"string\" &&
+    typeof b.display_name === \"string\" &&
+    Number.isInteger(b.position);
+
+  // 状態を変える通知の共通の検証（#765）。部屋の世代と revision が無いものは
+  // 適用順を決められないので受理しない。
+  function hasPosition(message) {
+    return (
+      typeof message.room_instance_id === \"string\" &&
+      Number.isInteger(message.revision)
+    );
+  }
+
+  function requestSync() {
+    if (syncRequested) return;
+    syncRequested = true;
+    log(\"missing update detected, requesting the current state\");
+    sendIfOpen({ type: \"sync\" });
+  }
+
+  // 通知を適用してよいかを revision で判定する（#765）。
+  // \"apply\": ちょうど次。\"skip\": 既に適用済み・前の部屋・未参加。
+  // 欠番があれば sync を要求して \"skip\" を返す（届いた state で追いつく）。
+  function admit(message) {
+    if (instanceId === null || message.room_instance_id !== instanceId) {
+      return \"skip\";
+    }
+    if (message.revision <= revision) return \"skip\";
+    if (message.revision > revision + 1) {
+      requestSync();
+      return \"skip\";
+    }
+    return \"apply\";
+  }
+
+  function applyState(message) {
+    if (
+      !Array.isArray(message.participants) ||
+      !Array.isArray(message.buzzes) ||
+      !message.participants.every(isParticipant) ||
+      !message.buzzes.every(isBuzz) ||
+      !hasPosition(message) ||
+      !Number.isInteger(message.round_id) ||
+      typeof message.self_id !== \"string\"
+    ) {
+      log(`state message missing expected fields: ${JSON.stringify(message)}`);
+      return;
+    }
+    if (message.protocol_version !== PROTOCOL_VERSION) {
+      markOutdated();
+      return;
+    }
+    // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
+    clearJoinTimer();
+    reconnectAttempts = 0;
+    instanceId = message.room_instance_id;
+    revision = message.revision;
+    roundId = message.round_id;
+    syncRequested = false;
+    selfId = message.self_id;
+    participants = new Map(message.participants.map((p) => [p.participant_id, p]));
+    buzzes = message.buzzes;
+    setConnected(true);
+    renderParticipants();
+    renderBuzzes();
+    log(`state: ${message.participants.length} participant(s), round ${roundId}`);
+  }
+
+  // 状態変更の通知（直接応答の中身を含む）を適用する。適用したら true。
+  function applyChange(message) {
     switch (message.type) {
-      case \"state\":
-        // 妥当な JSON でも participants/buzzes フィールドが欠落・型不一致の
-        // ことがある（サーバ側プロトコル変更等）。副作用を始める前に検証し、
-        // setConnected(true) 実行済みのまま参加者/buzz が更新されない
-        // 部分適用状態を避ける（#478）。
-        // 配列要素も同様に検証する。null 要素などで setConnected(true) の後に
-        // 例外終了すると接続成立表示だけが残る（#647）。
-        if (
-          !Array.isArray(message.participants) ||
-          !Array.isArray(message.buzzes) ||
-          !message.participants.every(
-            (p) =>
-              typeof p === \"object\" &&
-              p !== null &&
-              typeof p.participant_id === \"string\" &&
-              typeof p.display_name === \"string\",
-          ) ||
-          !message.buzzes.every(
-            (b) =>
-              typeof b === \"object\" &&
-              b !== null &&
-              typeof b.position === \"number\" &&
-              typeof b.display_name === \"string\",
-          )
-        ) {
-          log(`state message missing expected fields: ${JSON.stringify(message)}`);
-          break;
-        }
-        // join が成立した証拠。ここで初めて試行回数を戻す（#87）。
-        clearJoinTimer();
-        reconnectAttempts = 0;
-        buzzUnacked = false;
-        hasBuzzed = false;
-        selfId = typeof message.self_id === \"string\" ? message.self_id : null;
-        setConnected(true);
-        participants = new Map(message.participants.map((p) => [p.participant_id, p]));
-        buzzes = message.buzzes;
-        renderParticipants();
-        renderBuzzes();
-        log(`state: ${message.participants.length} participant(s)`);
-        break;
       case \"participant_joined\":
-        // state ケース（#478）と同じ理由。participant がオブジェクトでない/
-        // participant_id が文字列でないと、以降の描画・ログが部分適用状態で
-        // 固まるか例外を投げる（#527）。
-        if (
-          typeof message.participant !== \"object\" ||
-          message.participant === null ||
-          typeof message.participant.participant_id !== \"string\" ||
-          typeof message.participant.display_name !== \"string\"
-        ) {
+        if (!hasPosition(message) || !isParticipant(message.participant)) {
           log(`participant_joined message missing expected fields: ${JSON.stringify(message)}`);
-          break;
+          return false;
         }
+        if (admit(message) !== \"apply\") return false;
         participants.set(message.participant.participant_id, message.participant);
         renderParticipants();
         log(`joined: ${message.participant.display_name}`);
         break;
       case \"participant_left\":
-        if (typeof message.participant_id !== \"string\") {
+        if (!hasPosition(message) || typeof message.participant_id !== \"string\") {
           log(`participant_left message missing expected fields: ${JSON.stringify(message)}`);
-          break;
+          return false;
         }
+        if (admit(message) !== \"apply\") return false;
         participants.delete(message.participant_id);
         renderParticipants();
         log(`left: ${message.participant_id}`);
         break;
       case \"buzz_accepted\":
-        if (
-          typeof message.participant_id !== \"string\" ||
-          typeof message.position !== \"number\" ||
-          typeof message.display_name !== \"string\"
-        ) {
+        if (!hasPosition(message) || !isBuzz(message) || !Number.isInteger(message.round_id)) {
           log(`buzz_accepted message missing expected fields: ${JSON.stringify(message)}`);
-          break;
+          return false;
         }
-        // join直後の狭い時間窓で、room 側の subscribers 登録と selector 設定の
-        // 間にメールボックスへ滞留したイベントが、state 受信後に再配送され
-        // 重複表示されうる（#43）。position は round 内で一意なので、
-        // それをキーに冪等化する。
-        // 他参加者の成功通知は自分の BUZZ への応答ではないので、未応答の
-        // 追跡を解除しない。解除すると、その後の rate_limited 拒否で
-        // 押下済み表示を戻せずボタンが無効のまま残る（#710）。
-        // self_id が不明なときだけ従来どおり区別せず解除する。
-        if (selfId === null || message.participant_id === selfId) {
-          buzzUnacked = false;
-        }
-        if (!buzzes.some((b) => b.position === message.position)) {
-          buzzes.push(message);
-          renderBuzzes();
-          // reset の直接応答より先に送った BUZZ が成功すると、後着の round_reset が
-          // 楽観的な押下済みを解除済みのまま自分の成功通知だけが届く（#724）。
-          // 自己IDの新規成功通知は、現ラウンドで押下済みの確定証拠として戻す。
-          if (selfId !== null && message.participant_id === selfId && !hasBuzzed) {
-            hasBuzzed = true;
-            updateBuzzButton();
-          }
-          log(`buzz accepted: ${message.participant_id} (#${message.position})`);
-        }
+        if (admit(message) !== \"apply\") return false;
+        buzzes.push({
+          participant_id: message.participant_id,
+          display_name: message.display_name,
+          position: message.position,
+        });
+        renderBuzzes();
+        log(`buzz accepted: ${message.participant_id} (#${message.position})`);
         break;
       case \"round_reset\":
-        // broadcast_all は発行者本人にも配信するため、同じ round_reset が
-        // reply 経由と broadcast 経由の2回届く（#526）。round には position
-        // のような一意キーが無いため、リセット後の状態（buzzes が空）と
-        // 現在の状態が既に一致しているかどうかを冪等化キーとして使う。
-        // 押下済み表示の解除もこの判定の後に行う: 空のときに解除すると、
-        // reset 応答後に送った BUZZ が自己エコーで再び押下可能に戻る（#689）。
-        // 配送は順序保証なので、空の間に届く reset は適用済みの重複であり、
-        // 未応答 BUZZ より前の本物の reset なら先に buzz_accepted が届く。
-        if (buzzes.length === 0) {
-          break;
+        if (!hasPosition(message) || !Number.isInteger(message.round_id)) {
+          log(`round_reset message missing expected fields: ${JSON.stringify(message)}`);
+          return false;
         }
-        hasBuzzed = false;
-        updateBuzzButton();
+        if (admit(message) !== \"apply\") return false;
+        roundId = message.round_id;
         buzzes = [];
         renderBuzzes();
-        log(\"round reset\");
-        break;
-      case \"error\":
-        log(`error [${message.code}]: ${message.message}`);
-        // room_full/invalid_room_id/invalid_display_name/room_unavailable は
-        // room_full/room_unavailable/room_busy 等の接続レベルのエラーは
-        // client_js.gleam の共有処理が扱う。
-        if (handleConnectionError(message.code)) {
-          break;
-        }
-        if (message.code === \"already_buzzed\") {
-          // 楽観的に立てた hasBuzzed をサーバーの判定で確定させる（#576）。
-          buzzUnacked = false;
-          hasBuzzed = true;
-          updateBuzzButton();
-        } else if (hasBuzzed && buzzUnacked) {
-          // buzz が rate_limited 等で拒否された場合に備えて楽観状態を戻す。
-          // 取り違えても、次のクリックで already_buzzed が返って再び確定する。
-          buzzUnacked = false;
-          hasBuzzed = false;
-          updateBuzzButton();
-        }
+        log(`round reset (round ${roundId})`);
         break;
       default:
         log(`unrecognized message: ${JSON.stringify(message)}`);
+        return false;
     }
+    revision = message.revision;
+    return true;
   }
 
-  buzzButton.addEventListener(\"click\", () => {
-    if (!sendIfOpen({ type: \"buzz\" })) return;
-    buzzUnacked = true;
-    hasBuzzed = true;
-    updateBuzzButton();
-  });
+  function handleError(message) {
+    log(`error [${message.code}]: ${message.message}`);
+    // room_full/room_unavailable/room_busy/client_outdated 等の接続レベルの
+    // エラーは client_js.gleam の共有処理が扱う。
+    if (handleConnectionError(message.code)) return;
+    // 押下済みだとサーバが言うのに手元の一覧に無いなら、どこかで通知を
+    // 取りこぼしている。内容を推測せず state を取り直す（#765）。
+    if (message.code === \"already_buzzed\") requestSync();
+  }
 
-  resetButton.addEventListener(\"click\", () => {
-    sendIfOpen({ type: \"reset\" });
-  });
+  function handleServerMessage(message) {
+    switch (message.type) {
+      case \"state\":
+        applyState(message);
+        break;
+      case \"reply\":
+        // 直接応答。同じ変更が配信でも届くが revision で一度だけ適用される。
+        // 適用済みでも pending の解決は落とさない（#765）。
+        if (typeof message.request_id !== \"string\" || !isObject(message.result)) {
+          log(`reply message missing expected fields: ${JSON.stringify(message)}`);
+          break;
+        }
+        pending.delete(message.request_id);
+        if (message.result.type === \"error\") {
+          handleError(message.result);
+        } else {
+          applyChange(message.result);
+        }
+        break;
+      case \"error\":
+        handleError(message);
+        break;
+      default:
+        applyChange(message);
+    }
+    updateBuzzButton();
+  }
+
+  function sendRequest(type) {
+    if (roundId === null) {
+      log(\"not joined, ignoring \" + type);
+      return;
+    }
+    const requestId = String(nextRequestId++);
+    if (!sendIfOpen({ type, round_id: roundId, request_id: requestId })) return;
+    pending.set(requestId, { type, roundId });
+    while (pending.size > MAX_PENDING_REQUESTS) {
+      pending.delete(pending.keys().next().value);
+    }
+    updateBuzzButton();
+  }
+
+  buzzButton.addEventListener(\"click\", () => sendRequest(\"buzz\"));
+  resetButton.addEventListener(\"click\", () => sendRequest(\"reset\"));
 })();
 </script>
 </body>

@@ -133,24 +133,49 @@ The exact JSON shape can evolve during implementation. The important requirement
 `room_id` is trimmed and uppercased server-side before use as the room
 identifier, so `"abcd"`, `"ABCD"`, and `"AbCd"` all resolve to the same room.
 
-Illustrative client messages:
+Since #765 the buzzer speaks protocol version 2 (contract:
+[`docs/buzzer-session.md`](buzzer-session.md#revision-and-stale-notifications-765)).
+Client messages:
 
 ```json
-{"type":"join","room_id":"ABCD","display_name":"Alice"}
-{"type":"buzz"}
-{"type":"reset"}
+{"type":"join","v":2,"room_id":"ABCD","display_name":"Alice"}
+{"type":"buzz","round_id":1,"request_id":"7"}
+{"type":"reset","round_id":1,"request_id":"8"}
+{"type":"sync"}
+{"type":"ping"}
 ```
 
-Illustrative server messages:
+- `round_id` names the round the client saw; a command for any other round
+  is rejected with `stale_round`, so two people pressing reset at once start
+  exactly one new round.
+- `request_id` (optional, 1–64 characters) only correlates the direct reply.
+- `sync` asks for a fresh `state` after the client detected a missing
+  revision. It counts toward the normal rate limit.
+
+Server messages:
 
 ```json
-{"type":"state","participants":[],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}]}
-{"type":"participant_joined","participant":{}}
-{"type":"participant_left","participant_id":"..."}
-{"type":"buzz_accepted","participant_id":"...","display_name":"Alice","position":1}
-{"type":"round_reset"}
+{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}]}
+{"type":"participant_joined","room_instance_id":"...","revision":4,"participant":{}}
+{"type":"participant_left","room_instance_id":"...","revision":5,"participant_id":"..."}
+{"type":"buzz_accepted","room_instance_id":"...","revision":6,"round_id":1,"participant_id":"...","display_name":"Alice","position":1}
+{"type":"round_reset","room_instance_id":"...","revision":7,"round_id":2}
+{"type":"reply","request_id":"7","result":{"type":"buzz_accepted","...":"..."}}
 {"type":"error","code":"...","message":"..."}
 ```
+
+- Every state change carries the room's `room_instance_id` and the
+  `revision` it produced. The client applies a change only when the instance
+  matches its last `state` and the revision is exactly the next one; an
+  older or equal revision is a duplicate (for example the direct reply and
+  the broadcast of the same buzz) and is ignored; a gap makes the client send
+  `sync` once and wait for the new `state`.
+- The `state` sent on join is taken in the same room-actor message as the
+  join itself, so every later broadcast on that connection is newer than it.
+- A buzz/reset with a `request_id` is answered with `reply`, wrapping either
+  the accepted change or the `error`. Errors raised before decoding
+  (`rate_limited`, `invalid_message`, …) are also wrapped when the frame
+  carried a readable `request_id`.
 
 Error messages use the following `code` values. Clients should branch on `code`
 when they need programmatic handling; `message` is human-readable detail and
@@ -169,9 +194,11 @@ may vary for the same code.
 | `buzzer_not_joined` | A `buzz` was rejected because the domain layer could not find this connection's `ParticipantId` in the room (a defensive branch unreachable from the current websocket layer, e.g. a buzz arriving just after this session left). |
 | `room_unavailable` | The room could not be started, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
 | `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
-| `not_joined` | This connection sent `buzz` or `reset` before joining a room. |
+| `not_joined` | This connection sent `buzz`, `reset` or `sync` before joining a room. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
+| `stale_round` | A `buzz` or `reset` named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
+| `client_outdated` | A `join` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.

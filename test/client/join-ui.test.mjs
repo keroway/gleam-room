@@ -9,6 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
+import { buzzerState } from "./buzzer-wire.mjs";
 
 test("open だけでは connected にならない", () => {
   const client = startClient();
@@ -40,7 +41,7 @@ test("join成立（state受信）で初めて connected になる", () => {
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
 
     assert.equal(client.connectionState(), "connected");
@@ -65,7 +66,7 @@ test("join成立後にソケットが切断されると再度 join できる状�
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     socket.handlers.close?.();
 
@@ -130,7 +131,7 @@ test("拒否→再join成立後に旧ソケットのcloseが遅延発火して�
     const newSocket = client.latestSocket();
     newSocket.handlers.open?.();
     newSocket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     assert.equal(client.connectionState(), "connected");
     const before = client.sockets.length;
@@ -230,7 +231,7 @@ test("not_joined のような join 以外のエラーは接続状態を変えな
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     socket.handlers.message?.({
       data: JSON.stringify({ type: "error", code: "not_joined", message: "nope" }),
@@ -242,23 +243,25 @@ test("not_joined のような join 以外のエラーは接続状態を変えな
   }
 });
 
-// join直後の狭い時間窓で room 側の broadcast がメールボックスに滞留し、
-// selector 設定後に再配送されると同じ buzz_accepted が二重に届きうる（#43）。
-// 表示側で position をキーに冪等化して重複表示を防ぐ回帰テスト。
-test("同じ position の buzz_accepted が重複配信されても buzz order には1回しか積まれない", () => {
+// 同じ変更が直接応答と配信の両方で届いても（#43, #143）、revision で一度だけ
+// 適用する（#765）。
+test("同じ revision の buzz_accepted が重複配信されても buzz order には1回しか積まれない", () => {
   const client = startClient();
   try {
     client.submitJoin();
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     const buzzAcceptedData = JSON.stringify({
       type: "buzz_accepted",
+      room_instance_id: "inst-1",
+      revision: 2,
+      round_id: 1,
       participant_id: "p1",
       display_name: "Alice",
-      position: 0,
+      position: 1,
     });
     socket.handlers.message?.({ data: buzzAcceptedData });
     socket.handlers.message?.({ data: buzzAcceptedData });

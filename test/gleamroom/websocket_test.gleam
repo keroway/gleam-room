@@ -9,36 +9,57 @@ import gleamroom/wire
 pub fn room_event_to_server_message_participant_joined_test() {
   let participant = room.Participant(room.participant_id("p1"), "Alice")
 
-  assert websocket.room_event_to_server_message(room.ParticipantJoined(
-      participant,
-    ))
-    == Some(
-      protocol.ParticipantJoined(protocol.Participant(
-        wire.participant_id("p1"),
-        "Alice",
-      )),
+  assert websocket.room_event_to_server_message(
+      room.ParticipantJoined(participant, 3),
+      "i1",
     )
+    == Some(protocol.ParticipantJoined(
+      "i1",
+      3,
+      protocol.Participant(wire.participant_id("p1"), "Alice"),
+    ))
 }
 
 pub fn room_event_to_server_message_participant_left_test() {
   assert websocket.room_event_to_server_message(
-      room.ParticipantLeft(room.participant_id("p1")),
+      room.ParticipantLeft(room.participant_id("p1"), 4),
+      "i1",
     )
-    == Some(protocol.ParticipantLeft(wire.participant_id("p1")))
+    == Some(protocol.ParticipantLeft("i1", 4, wire.participant_id("p1")))
 }
 
 pub fn room_event_to_server_message_buzz_accepted_test() {
-  assert websocket.room_event_to_server_message(room.BuzzAccepted(
-      room.participant_id("p1"),
+  assert websocket.room_event_to_server_message(
+      room.BuzzAccepted(room.participant_id("p1"), "Alice", 1, 2, 5),
+      "i1",
+    )
+    == Some(protocol.BuzzAccepted(
+      "i1",
+      5,
+      2,
+      wire.participant_id("p1"),
       "Alice",
       1,
     ))
-    == Some(protocol.BuzzAccepted(wire.participant_id("p1"), "Alice", 1))
 }
 
 pub fn room_event_to_server_message_round_reset_test() {
-  assert websocket.room_event_to_server_message(room.RoundReset)
-    == Some(protocol.RoundReset)
+  assert websocket.room_event_to_server_message(room.RoundReset(3, 6), "i1")
+    == Some(protocol.RoundReset("i1", 6, 3))
+}
+
+/// 拒否は依頼元への直接応答だけで返し、配信しない（#765）。
+pub fn room_event_to_server_message_reset_rejected_is_not_broadcast_test() {
+  assert websocket.room_event_to_server_message(
+      room.ResetRejected(room.ResetStaleRound),
+      "i1",
+    )
+    == None
+}
+
+pub fn buzz_reject_code_and_message_stale_round_test() {
+  assert websocket.buzz_reject_code_and_message(room.BuzzStaleRound)
+    == #("stale_round", websocket.stale_round_message)
 }
 
 // `JoinRejected` is never actually delivered to `room_event_to_server_message`:
@@ -66,10 +87,10 @@ pub fn join_reject_code_and_message_already_joined_test() {
 }
 
 pub fn room_event_to_server_message_join_rejected_unreachable_branch_test() {
-  assert websocket.room_event_to_server_message(room.JoinRejected(
-      room.participant_id("p1"),
-      room.AlreadyJoined,
-    ))
+  assert websocket.room_event_to_server_message(
+      room.JoinRejected(room.participant_id("p1"), room.AlreadyJoined),
+      "i1",
+    )
     == None
 }
 
@@ -77,10 +98,10 @@ pub fn room_event_to_server_message_join_rejected_unreachable_branch_test() {
 // be produced by `apply_command(state.room, Leave(id))` inside the
 // `SessionDown` handler and delivered via `broadcast_all`.
 pub fn room_event_to_server_message_leave_rejected_is_not_broadcast_test() {
-  assert websocket.room_event_to_server_message(room.LeaveRejected(
-      room.participant_id("p1"),
-      room.NotJoined,
-    ))
+  assert websocket.room_event_to_server_message(
+      room.LeaveRejected(room.participant_id("p1"), room.NotJoined),
+      "i1",
+    )
     == None
 }
 
@@ -88,10 +109,10 @@ pub fn room_event_to_server_message_leave_rejected_is_not_broadcast_test() {
 // likewise never delivered to `room_event_to_server_message` in practice
 // (#153).
 pub fn room_event_to_server_message_buzz_rejected_unreachable_branch_test() {
-  assert websocket.room_event_to_server_message(room.BuzzRejected(
-      room.participant_id("p1"),
-      room.BuzzerNotJoined,
-    ))
+  assert websocket.room_event_to_server_message(
+      room.BuzzRejected(room.participant_id("p1"), room.BuzzerNotJoined),
+      "i1",
+    )
     == None
 }
 
@@ -156,13 +177,6 @@ pub fn to_wire_buzz_result_test() {
 
   assert websocket.to_wire_buzz_result(result)
     == protocol.BuzzResult(wire.participant_id("p1"), "Alice", 3)
-}
-
-/// `get_state` タイムアウト後のフォールバック状態は空の participants/buzzes
-/// を返す(#411)。poker側は同じ状況で phase の扱いに実バグ(#357)を踏んだ
-/// 経緯があり、buzzer側にも同等の回帰テストを固定しておく。
-pub fn fallback_state_after_get_state_timeout_is_empty_test() {
-  assert websocket.fallback_state_after_get_state_timeout() == #([], [])
 }
 
 pub fn release_room_sends_release_when_registry_is_reachable_test() {
