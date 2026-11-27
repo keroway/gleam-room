@@ -1,5 +1,13 @@
 # Multiplayer Buzzer MVP
 
+> **Scope note (2026-11, #763).** This document describes the MVP as built
+> and still running. Its non-goals (no authorization, connection-scoped
+> participants, anyone may reset) are the MVP's scope, not a permanent
+> decision for the buzzer. The real-use buzzer contract that replaces parts
+> of it is [ADR 0010](adr/0010-buzzer-session-model.md) /
+> [`docs/buzzer-session.md`](buzzer-session.md); each part takes effect only
+> when its implementing issue (#765〜#769) lands.
+
 ## Objective
 
 Validate the end-to-end architecture for a real-time multi-user room on Gleam/BEAM.

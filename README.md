@@ -235,9 +235,22 @@ sockets); run it with `gleam test`.
    [ADR 0009](docs/adr/0009-duplicate-before-extracting.md) for why it
    duplicates rather than shares the buzzer's domain code; see the CLAUDE.md
    Generalization rule below before starting step 4.
-4. Extract reusable room/presence/lifecycle primitives.
+4. Extract reusable room/presence/lifecycle primitives. 🟡 Partially done —
+   the transport-level pieces both apps share were extracted (#586〜#589:
+   `room_registry`, `wire`, `ws_guard`, `client_js`; see ADR 0009's
+   Updates). Domain modules, phase machines and identity stay app-specific,
+   and no general room framework has been extracted.
 5. Build a high-frequency crowd-controlled game.
 6. Re-evaluate whether the extracted primitives deserve a standalone library/API.
+
+**Current milestone — real-use buzzer (#762).** Before steps 5–6, the buzzer
+is being grown into a tool a 5–10 person meeting can run for 20 minutes
+without developer help: stable participants across short disconnects, a
+host/player/display split, judging and scores, invites by URL/QR, and two or
+three real sessions to evaluate it. The contract is
+[ADR 0010](docs/adr/0010-buzzer-session-model.md) and
+[`docs/buzzer-session.md`](docs/buzzer-session.md); the result of the real
+sessions decides what comes next (#771), including when steps 5–6 happen.
 
 Per CLAUDE.md's Generalization rule, do not begin step 4 from the buzzer
 application alone — reusable abstractions are extracted only after step 3
