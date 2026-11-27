@@ -10,7 +10,7 @@
 %% (it stays alive and keeps its mailbox) until `erlang:resume_process/1` is
 %% called; messages sent to it in the meantime are queued, not lost.
 -module(gleamroom_room_test_ffi).
--export([suspend/1, resume/1]).
+-export([suspend/1, resume/1, message_queue_len/1, monitored_pids/1]).
 
 suspend(Pid) ->
     true = erlang:suspend_process(Pid),
@@ -19,3 +19,15 @@ suspend(Pid) ->
 resume(Pid) ->
     true = erlang:resume_process(Pid),
     nil.
+
+%% #765: lets tests wait until a request has actually reached a suspended
+%% process instead of sleeping a fixed time, and find the connection process
+%% a room monitors (each joined session).
+
+message_queue_len(Pid) ->
+    {message_queue_len, Len} = erlang:process_info(Pid, message_queue_len),
+    Len.
+
+monitored_pids(Pid) ->
+    {monitors, Monitors} = erlang:process_info(Pid, monitors),
+    [P || {process, P} <- Monitors, is_pid(P)].

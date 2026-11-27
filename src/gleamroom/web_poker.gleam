@@ -163,6 +163,7 @@ pub fn poker_html() -> String {
   const evictedResets = new Map();
 
   const WS_PATH = \"/poker/ws\";
+  const JOIN_FIELDS = {};
   const afterSend = (message) => {
     lastSentType = message.type;
   };

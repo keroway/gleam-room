@@ -1,21 +1,75 @@
+import gleam/option.{None, Some}
 import gleam/string
 import gleamroom/protocol.{
   BuzzAccepted, BuzzResult, Participant, ParticipantJoined, ParticipantLeft,
-  ProtocolErrorMessage, RoundReset, State,
+  ProtocolErrorMessage, Reply, RoundReset, State,
 }
 import gleamroom/wire.{ParticipantId, ProtocolError, RoomId}
 
 pub fn decode_join_test() {
   let json =
-    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"
 
   assert protocol.decode_client_message(json)
     == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
 }
 
+pub fn decode_join_without_version_is_client_outdated_test() {
+  let json =
+    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(protocol.client_outdated_error)
+}
+
+pub fn decode_join_with_other_version_is_client_outdated_test() {
+  let json =
+    "{\"type\":\"join\",\"v\":1,\"room_id\":\"ABCD\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(protocol.client_outdated_error)
+}
+
 pub fn decode_buzz_test() {
-  assert protocol.decode_client_message("{\"type\":\"buzz\"}")
-    == Ok(protocol.Buzz)
+  assert protocol.decode_client_message("{\"type\":\"buzz\",\"round_id\":3}")
+    == Ok(protocol.Buzz(3, None))
+}
+
+pub fn decode_buzz_with_request_id_test() {
+  assert protocol.decode_client_message(
+      "{\"type\":\"buzz\",\"round_id\":3,\"request_id\":\"r1\"}",
+    )
+    == Ok(protocol.Buzz(3, Some("r1")))
+}
+
+pub fn decode_buzz_without_round_id_is_invalid_test() {
+  let assert Error(ProtocolError(code: "invalid_message", ..)) =
+    protocol.decode_client_message("{\"type\":\"buzz\"}")
+}
+
+pub fn decode_buzz_with_empty_request_id_is_invalid_test() {
+  let assert Error(ProtocolError(code: "invalid_message", ..)) =
+    protocol.decode_client_message(
+      "{\"type\":\"buzz\",\"round_id\":1,\"request_id\":\"\"}",
+    )
+}
+
+pub fn decode_sync_test() {
+  assert protocol.decode_client_message("{\"type\":\"sync\"}")
+    == Ok(protocol.Sync)
+}
+
+pub fn request_id_is_read_from_an_otherwise_invalid_frame_test() {
+  assert protocol.request_id("{\"type\":\"buzz\",\"request_id\":\"r9\"}")
+    == Some("r9")
+  assert protocol.request_id("{\"type\":\"buzz\"}") == None
+  assert protocol.request_id("{not json") == None
+}
+
+pub fn correlate_wraps_only_when_a_request_id_exists_test() {
+  let message = ProtocolErrorMessage("stale_round", "old")
+  assert protocol.correlate(message, None) == message
+  assert protocol.correlate(message, Some("r1")) == Reply("r1", message)
 }
 
 pub fn decode_ping_test() {
@@ -28,12 +82,12 @@ pub fn encode_pong_test() {
 }
 
 pub fn decode_reset_test() {
-  assert protocol.decode_client_message("{\"type\":\"reset\"}")
-    == Ok(protocol.Reset)
+  assert protocol.decode_client_message("{\"type\":\"reset\",\"round_id\":1}")
+    == Ok(protocol.Reset(1, None))
 }
 
 pub fn decode_join_missing_display_name_test() {
-  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\"}"
+  let json = "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -43,7 +97,8 @@ pub fn decode_join_missing_display_name_test() {
 }
 
 pub fn decode_join_empty_display_name_test() {
-  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"\"}"
+  let json =
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\"\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -53,7 +108,7 @@ pub fn decode_join_empty_display_name_test() {
 }
 
 pub fn decode_join_missing_room_id_test() {
-  let json = "{\"type\":\"join\",\"display_name\":\"Alice\"}"
+  let json = "{\"type\":\"join\",\"v\":2,\"display_name\":\"Alice\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -63,7 +118,8 @@ pub fn decode_join_missing_room_id_test() {
 }
 
 pub fn decode_join_empty_room_id_test() {
-  let json = "{\"type\":\"join\",\"room_id\":\"\",\"display_name\":\"Alice\"}"
+  let json =
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"\",\"display_name\":\"Alice\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -73,7 +129,8 @@ pub fn decode_join_empty_room_id_test() {
 }
 
 pub fn decode_join_whitespace_only_display_name_test() {
-  let json = "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\"   \"}"
+  let json =
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\"   \"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -84,7 +141,7 @@ pub fn decode_join_whitespace_only_display_name_test() {
 
 pub fn decode_join_whitespace_only_room_id_test() {
   let json =
-    "{\"type\":\"join\",\"room_id\":\"   \",\"display_name\":\"Alice\"}"
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"   \",\"display_name\":\"Alice\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -94,7 +151,8 @@ pub fn decode_join_whitespace_only_room_id_test() {
 }
 
 pub fn decode_join_both_fields_empty_test() {
-  let json = "{\"type\":\"join\",\"room_id\":\"\",\"display_name\":\"\"}"
+  let json =
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"\",\"display_name\":\"\"}"
 
   assert protocol.decode_client_message(json)
     == Error(ProtocolError(
@@ -105,7 +163,7 @@ pub fn decode_join_both_fields_empty_test() {
 
 pub fn decode_join_trims_surrounding_whitespace_test() {
   let json =
-    "{\"type\":\"join\",\"room_id\":\" ABCD \",\"display_name\":\" Alice \"}"
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\" ABCD \",\"display_name\":\" Alice \"}"
 
   assert protocol.decode_client_message(json)
     == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
@@ -113,7 +171,7 @@ pub fn decode_join_trims_surrounding_whitespace_test() {
 
 pub fn decode_join_normalizes_room_id_case_test() {
   let json =
-    "{\"type\":\"join\",\"room_id\":\"abCD\",\"display_name\":\"Alice\"}"
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"abCD\",\"display_name\":\"Alice\"}"
 
   assert protocol.decode_client_message(json)
     == Ok(protocol.Join(RoomId("ABCD"), "Alice"))
@@ -122,7 +180,7 @@ pub fn decode_join_normalizes_room_id_case_test() {
 pub fn decode_join_display_name_over_max_length_test() {
   let too_long = string.repeat("a", 65)
   let json =
-    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\""
     <> too_long
     <> "\"}"
 
@@ -136,7 +194,7 @@ pub fn decode_join_display_name_over_max_length_test() {
 pub fn decode_join_room_id_over_max_length_test() {
   let too_long = string.repeat("a", 65)
   let json =
-    "{\"type\":\"join\",\"room_id\":\""
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\""
     <> too_long
     <> "\",\"display_name\":\"Alice\"}"
 
@@ -150,7 +208,7 @@ pub fn decode_join_room_id_over_max_length_test() {
 pub fn decode_join_display_name_at_max_length_test() {
   let exactly_max = string.repeat("a", 64)
   let json =
-    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\""
     <> exactly_max
     <> "\"}"
 
@@ -163,7 +221,7 @@ pub fn decode_join_display_name_multibyte_within_grapheme_limit_but_over_byte_li
   // grapheme-length limit while exceeding the byte-size limit.
   let too_long_in_bytes = string.repeat("あ", 64)
   let json =
-    "{\"type\":\"join\",\"room_id\":\"ABCD\",\"display_name\":\""
+    "{\"type\":\"join\",\"v\":2,\"room_id\":\"ABCD\",\"display_name\":\""
     <> too_long_in_bytes
     <> "\"}"
 
@@ -195,39 +253,50 @@ pub fn decode_malformed_json_test() {
 pub fn encode_state_test() {
   let message =
     State(
+      instance_id: "i1",
       self_id: ParticipantId("p1"),
+      round_id: 2,
+      revision: 7,
       participants: [Participant(ParticipantId("p1"), "Alice")],
       buzzes: [BuzzResult(ParticipantId("p1"), "Alice", 1)],
     )
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"self_id\":\"p1\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"protocol_version\":2,\"room_instance_id\":\"i1\",\"self_id\":\"p1\",\"round_id\":2,\"revision\":7,\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
 }
 
 pub fn encode_participant_joined_test() {
-  let message = ParticipantJoined(Participant(ParticipantId("p1"), "Alice"))
+  let message =
+    ParticipantJoined("i1", 3, Participant(ParticipantId("p1"), "Alice"))
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"participant_joined\",\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}}"
+    == "{\"type\":\"participant_joined\",\"room_instance_id\":\"i1\",\"revision\":3,\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\"}}"
 }
 
 pub fn encode_participant_left_test() {
-  let message = ParticipantLeft(ParticipantId("p1"))
+  let message = ParticipantLeft("i1", 4, ParticipantId("p1"))
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"participant_left\",\"participant_id\":\"p1\"}"
+    == "{\"type\":\"participant_left\",\"room_instance_id\":\"i1\",\"revision\":4,\"participant_id\":\"p1\"}"
 }
 
 pub fn encode_buzz_accepted_test() {
-  let message = BuzzAccepted(ParticipantId("p1"), "Alice", 1)
+  let message = BuzzAccepted("i1", 5, 2, ParticipantId("p1"), "Alice", 1)
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"buzz_accepted\",\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}"
+    == "{\"type\":\"buzz_accepted\",\"room_instance_id\":\"i1\",\"revision\":5,\"round_id\":2,\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}"
 }
 
 pub fn encode_round_reset_test() {
-  assert protocol.encode_server_message(RoundReset)
-    == "{\"type\":\"round_reset\"}"
+  assert protocol.encode_server_message(RoundReset("i1", 6, 3))
+    == "{\"type\":\"round_reset\",\"room_instance_id\":\"i1\",\"revision\":6,\"round_id\":3}"
+}
+
+pub fn encode_reply_test() {
+  let message = Reply("r1", ProtocolErrorMessage("stale_round", "old"))
+
+  assert protocol.encode_server_message(message)
+    == "{\"type\":\"reply\",\"request_id\":\"r1\",\"result\":{\"type\":\"error\",\"code\":\"stale_round\",\"message\":\"old\"}}"
 }
 
 pub fn encode_error_test() {

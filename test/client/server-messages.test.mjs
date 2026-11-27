@@ -9,21 +9,25 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
+import { buzzerState, INSTANCE } from "./buzzer-wire.mjs";
+
+// 状態を変える通知の位置（#765）。join 時の state は revision 1。
+const at = (revision) => ({ room_instance_id: INSTANCE, revision });
 
 function joinAndConnect(client, participants = []) {
   client.submitJoin();
   const socket = client.latestSocket();
   socket.handlers.open?.();
   socket.handlers.message?.({
-    data: JSON.stringify({ type: "state", participants, buzzes: [] }),
+    data: JSON.stringify(buzzerState({ participants })),
   });
   return socket;
 }
 
 test("state の participants/buzzes に不正な要素があると、connected にならず部分適用しない（#647）", () => {
   for (const body of [
-    { type: "state", participants: [null], buzzes: [] },
-    { type: "state", participants: [], buzzes: [{ position: "1", display_name: "A" }] },
+    buzzerState({ participants: [null] }),
+    buzzerState({ buzzes: [{ position: "1", display_name: "A" }] }),
   ]) {
     const client = startClient();
     try {
@@ -49,6 +53,7 @@ test("participant_joined は participants に追加されログに残る", () =>
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "participant_joined",
+        ...at(2),
         participant: { participant_id: "p1", display_name: "Alice" },
       }),
     });
@@ -97,6 +102,7 @@ test("participant_joined の display_name が欠落・null・数値だと、part
       socket.handlers.message?.({
         data: JSON.stringify({
           type: "participant_joined",
+          ...at(2),
           participant: { participant_id: "p2", display_name: displayName },
         }),
       });
@@ -117,7 +123,7 @@ test("participant_left メッセージが妥当なJSONだが participant_id フ�
   try {
     const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "participant_left" }),
+      data: JSON.stringify({ type: "participant_left", ...at(2) }),
     });
 
     assert.ok(
@@ -139,7 +145,7 @@ test("participant_left はログに残る", () => {
   try {
     const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "participant_left", participant_id: "p1" }),
+      data: JSON.stringify({ type: "participant_left", ...at(2), participant_id: "p1" }),
     });
 
     assert.ok(
@@ -156,12 +162,14 @@ test("participant_left はログに残る", () => {
   }
 });
 
-test("buzz_accepted はログに残り、同じ position の再配信は無視される（#43 の冪等化）", () => {
+test("buzz_accepted はログに残り、同じ revision の再配信は無視される（#43, #765）", () => {
   const client = startClient();
   try {
     const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     const buzz = {
       type: "buzz_accepted",
+      ...at(2),
+      round_id: 1,
       participant_id: "p1",
       display_name: "Alice",
       position: 1,
@@ -190,6 +198,8 @@ test("buzz_accepted メッセージが妥当なJSONだが position/participant_i
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "buzz_accepted",
+        ...at(2),
+        round_id: 1,
         participant_id: "p1",
         display_name: "Alice",
         // position 欠落
@@ -217,12 +227,14 @@ test("round_reset はログに残る", () => {
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "buzz_accepted",
+        ...at(2),
+        round_id: 1,
         participant_id: "p1",
         display_name: "Alice",
         position: 1,
       }),
     });
-    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset", ...at(3), round_id: 2 }) });
 
     assert.ok(
       client.logs.some((line) => line.includes("round reset")),
@@ -238,20 +250,22 @@ test("round_reset はログに残る", () => {
   }
 });
 
-test("同じ round_reset が連続配信されても2回目はログに積まれない（自己エコー対策 #526）", () => {
+test("同じ revision の round_reset が直接応答と配信で2回届いても1回だけ適用する（#526, #765）", () => {
   const client = startClient();
   try {
     const socket = joinAndConnect(client, [{ participant_id: "p1", display_name: "Alice" }]);
     socket.handlers.message?.({
       data: JSON.stringify({
         type: "buzz_accepted",
+        ...at(2),
+        round_id: 1,
         participant_id: "p1",
         display_name: "Alice",
         position: 1,
       }),
     });
-    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
-    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset" }) });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset", ...at(3), round_id: 2 }) });
+    socket.handlers.message?.({ data: JSON.stringify({ type: "round_reset", ...at(3), round_id: 2 }) });
 
     const resetLogs = client.logs.filter((line) => line.includes("round reset"));
     assert.equal(resetLogs.length, 1, "自己エコーによる round_reset が二重にログされている");
@@ -299,7 +313,7 @@ test("壊れた JSON の message イベントは例外を漏らさずログに�
     // 直前の participants 状態が壊れていなければ、既存参加者の退出は
     // 通常どおり処理されるはず。
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "participant_left", participant_id: "p1" }),
+      data: JSON.stringify({ type: "participant_left", ...at(2), participant_id: "p1" }),
     });
     assert.ok(
       client.logs.some((line) => line.includes("left: p1")),
@@ -343,7 +357,7 @@ test("state メッセージが妥当なJSONだが participants フィールド�
     socket.handlers.open?.();
 
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", buzzes: [] }),
+      data: JSON.stringify({ ...buzzerState(), participants: undefined }),
     });
 
     assert.notEqual(
@@ -456,6 +470,182 @@ test("already_joined エラーはログに残るが接続状態・participants�
       ["Alice"],
       "already_joined で既存の participants 描画が壊れている",
     );
+  } finally {
+    client.dispose();
+  }
+});
+
+test("revision に欠番があれば適用せず sync を1回だけ要求し、届いた state で追いつく（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    const joined = (revision, id) => ({
+      data: JSON.stringify({
+        type: "participant_joined",
+        ...at(revision),
+        participant: { participant_id: id, display_name: id },
+      }),
+    });
+    socket.handlers.message?.(joined(3, "late"));
+    socket.handlers.message?.(joined(4, "later"));
+    assert.deepEqual(client.childTextContents("participants"), []);
+    const syncs = socket.sent.map((d) => JSON.parse(d)).filter((m) => m.type === "sync");
+    assert.equal(syncs.length, 1, "欠番ごとに sync を重ねて要求している");
+
+    socket.handlers.message?.({
+      data: JSON.stringify(buzzerState({
+        revision: 4,
+        participants: [
+          { participant_id: "x", display_name: "x" },
+          { participant_id: "late", display_name: "late" },
+          { participant_id: "later", display_name: "later" },
+        ],
+      })),
+    });
+    socket.handlers.message?.(joined(4, "later"));
+    assert.deepEqual(client.childTextContents("participants"), ["x", "late", "later"]);
+    socket.handlers.message?.(joined(5, "next"));
+    assert.deepEqual(client.childTextContents("participants"), ["x", "late", "later", "next"]);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("別の部屋世代（同じ部屋コードの作り直し前）の通知は適用しない（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "participant_joined",
+        room_instance_id: "older-room",
+        revision: 2,
+        participant: { participant_id: "ghost", display_name: "Ghost" },
+      }),
+    });
+    assert.deepEqual(client.childTextContents("participants"), []);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("revision の無い旧形式の通知は適用せず警告を残す（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "participant_joined",
+        participant: { participant_id: "p2", display_name: "Bob" },
+      }),
+    });
+    assert.deepEqual(client.childTextContents("participants"), []);
+    assert.ok(client.logs.some((line) => line.includes("participant_joined message missing expected fields")));
+  } finally {
+    client.dispose();
+  }
+});
+
+for (const [name, deliver] of [
+  ["state の protocol_version が違う", (socket) =>
+    socket.handlers.message?.({ data: JSON.stringify(buzzerState({ protocolVersion: 3 })) })],
+  ["client_outdated エラー", (socket) =>
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "error", code: "client_outdated", message: "reload" }),
+    })],
+]) {
+  test(`${name}ときは再読み込みを促し、自動再接続しない（#765）`, () => {
+    const client = startClient();
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      deliver(socket);
+      socket.handlers.close?.();
+
+      assert.equal(client.connectionState(), "outdated");
+      assert.ok(client.isDisabled("join"));
+      assert.ok(client.logs.some((line) => line.includes("ページを再読み込みしてください")));
+      assert.equal(client.runTimers(), 0, "再接続を予約している");
+    } finally {
+      client.dispose();
+    }
+  });
+}
+
+// sync 自体がレート制限で拒否されても取り直せる（#765 レビュー指摘）。
+// 拒否のまま待機し続けると、以後の欠番でも sync を送れず古い表示が残る。
+test("sync が rate_limited で拒否されたら間隔を広げて取り直し、上限で止める（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    const syncs = () => socket.sent.map((d) => JSON.parse(d)).filter((m) => m.type === "sync");
+    const reject = (requestId) =>
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "reply",
+          request_id: requestId,
+          result: { type: "error", code: "rate_limited", message: "slow down" },
+        }),
+      });
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "participant_left",
+        ...at(3),
+        participant_id: "gone",
+      }),
+    });
+    assert.equal(syncs().length, 1);
+    assert.equal(typeof syncs()[0].request_id, "string", "sync に request_id が無い");
+
+    // 拒否ごとに1回だけ遅延再送し、上限（3回）を超えたら止める。最後の
+    // 再試行はレート制限の窓（30秒）が回復した後になる。
+    const delays = [2000, 8000, 32000];
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      reject(syncs().at(-1).request_id);
+      assert.deepEqual(client.timerDelays(), [delays[attempt - 1]],
+        `${attempt}回目の拒否で再試行を予約していない`);
+      if (attempt === 1) {
+        // 予約中の欠番では sync を重ねない（タイマーが上書きされて取り消せなくなる）。
+        socket.handlers.message?.({
+          data: JSON.stringify({ type: "participant_left", ...at(4), participant_id: "gone" }),
+        });
+        assert.equal(syncs().length, 1, "再試行の予約中に sync を重ねて送った");
+      }
+      client.runTimers();
+      assert.equal(syncs().length, attempt + 1);
+    }
+    reject(syncs().at(-1).request_id);
+    assert.equal(client.pendingTimers(), 0, "上限を超えても再試行を続けている");
+
+    // 待機は解けているので、次の欠番では再び sync を送れる。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", ...at(6), participant_id: "gone" }),
+    });
+    assert.equal(syncs().length, 5, "拒否後の欠番で sync を送れない");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("sync の再試行待ちは切断で取り消す（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", ...at(3), participant_id: "gone" }),
+    });
+    const sync = socket.sent.map((d) => JSON.parse(d)).find((m) => m.type === "sync");
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "reply",
+        request_id: sync.request_id,
+        result: { type: "error", code: "rate_limited", message: "slow down" },
+      }),
+    });
+    assert.deepEqual(client.timerDelays(), [2000]);
+    socket.handlers.close?.();
+    assert.ok(!client.timerDelays().includes(2000), "切断後も sync の再試行が残っている");
   } finally {
     client.dispose();
   }

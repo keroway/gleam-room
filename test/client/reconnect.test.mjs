@@ -6,6 +6,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient, flapWithoutJoining } from "./harness.mjs";
+import { buzzerState } from "./buzzer-wire.mjs";
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_DELAY_MS = 1500;
@@ -44,7 +45,7 @@ test("試行回数は open ではなく join 成立（state 受信）で戻る",
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     socket.handlers.close?.();
     client.runTimers();
@@ -100,7 +101,7 @@ test("room_busy エラーはソケットを閉じるが lastJoin を保持し、
     const socket = client.latestSocket();
     socket.handlers.open?.();
     socket.handlers.message?.({
-      data: JSON.stringify({ type: "state", participants: [], buzzes: [] }),
+      data: JSON.stringify(buzzerState()),
     });
     socket.handlers.message?.({
       data: JSON.stringify({

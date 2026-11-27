@@ -82,7 +82,7 @@ already prevents.
 
 **対象外（既に共有済み）.** `call.try_call`, `call.try_call_classified`,
 `classify`, and `Failure` live in one module and are imported by both sides
-(`registry.gleam:7`, `poker_registry.gleam:7`, `room.gleam:7`,
+(`registry.gleam:7`, `poker_registry.gleam:7`, `room.gleam:9`,
 `poker.gleam:7`). This is the existing precedent for how a shared boundary
 in this codebase looks; use it as the template when extracting the registry
 layer in 1.1.
@@ -95,14 +95,14 @@ Duplicated infrastructure (not domain state machine):
 
 - `sessions: Dict(process.Pid, List(#(String, process.Monitor)))` and the
   `select_monitors`-based `SessionDown` wiring in `start`
-  (`room.gleam:289-320`, `poker.gleam:312-337`).
+  (`room.gleam:397-440`, `poker.gleam:312-337`).
 - `update_sessions` (register monitor on `ParticipantJoined`, demonitor +
   remove on `ParticipantLeft`) (`room.gleam:449-510`, `poker.gleam:428-481`).
-- `broadcast_all` (`room.gleam:513-520`, `poker.gleam:484-491`).
+- `broadcast_all` (`room.gleam:663-670`, `poker.gleam:484-491`).
 - `SessionDown` handler (`room.gleam:363-424`, `poker.gleam:365-411`) and
   `ShutdownIfEmpty` handler (`room.gleam:425-436`, `poker.gleam:412-422`).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
-  `call.try_call` (`room.gleam:584-631`, `poker.gleam:551-598`).
+  `call.try_call` (`room.gleam:738-798`, `poker.gleam:551-598`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
   (`room.gleam:117-148`, `poker.gleam:144-174`); `is_valid_display_name` is
@@ -200,9 +200,9 @@ Still duplicated because they read or update `ConnectionState` (whose
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:686-719`,
+- `release_room` (`websocket.gleam:774-797`,
   `poker_websocket.gleam:758-776`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:733-858`,
+  `with_room_reply` family (`websocket.gleam:796-941`,
   `poker_websocket.gleam:799-889`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.

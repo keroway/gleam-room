@@ -12,7 +12,7 @@ pub fn join_adds_participant_and_emits_joined_test() {
   let #(next, event) = room.apply_command(state, room.Join(id, "Alice"))
 
   assert room.snapshot(next) == [room.Participant(id, "Alice")]
-  assert event == room.ParticipantJoined(room.Participant(id, "Alice"))
+  assert event == room.ParticipantJoined(room.Participant(id, "Alice"), 1)
 }
 
 pub fn duplicate_join_is_rejected_and_state_is_unchanged_test() {
@@ -54,7 +54,7 @@ pub fn join_with_display_name_at_the_length_limit_is_accepted_test() {
   let #(next, event) = room.apply_command(state, room.Join(id, at_limit))
 
   assert room.snapshot(next) == [room.Participant(id, at_limit)]
-  assert event == room.ParticipantJoined(room.Participant(id, at_limit))
+  assert event == room.ParticipantJoined(room.Participant(id, at_limit), 1)
 }
 
 pub fn join_beyond_the_participant_limit_is_rejected_and_state_is_unchanged_test() {
@@ -86,7 +86,7 @@ pub fn join_at_the_participant_limit_is_accepted_test() {
     room.apply_command(almost_full_state, room.Join(last_id, "Last"))
 
   assert list.length(room.snapshot(next)) == 64
-  assert event == room.ParticipantJoined(room.Participant(last_id, "Last"))
+  assert event == room.ParticipantJoined(room.Participant(last_id, "Last"), 64)
 }
 
 pub fn leave_removes_participant_and_emits_left_test() {
@@ -96,7 +96,7 @@ pub fn leave_removes_participant_and_emits_left_test() {
   let #(next, event) = room.apply_command(state, room.Leave(id))
 
   assert room.snapshot(next) == []
-  assert event == room.ParticipantLeft(id)
+  assert event == room.ParticipantLeft(id, 2)
 }
 
 pub fn leave_of_unknown_participant_is_rejected_and_state_is_unchanged_test() {
@@ -128,7 +128,7 @@ pub fn actor_join_and_snapshot_round_trip_test() {
 
   let assert Ok(event) = room.dispatch(subject, room.Join(id, "Alice"), session)
 
-  assert event == room.ParticipantJoined(room.Participant(id, "Alice"))
+  assert event == room.ParticipantJoined(room.Participant(id, "Alice"), 1)
   assert room.get_snapshot(subject) == Ok([room.Participant(id, "Alice")])
 }
 
@@ -160,7 +160,7 @@ pub fn join_broadcasts_to_other_subscribers_but_not_the_joiner_test() {
   // value, not re-broadcast to himself asynchronously.
   assert process.receive(bob_session, 100) == Error(Nil)
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(bob, "Bob")))
+    == Ok(room.ParticipantJoined(room.Participant(bob, "Bob"), 2))
 }
 
 pub fn leave_broadcasts_to_remaining_subscribers_test() {
@@ -177,7 +177,7 @@ pub fn leave_broadcasts_to_remaining_subscribers_test() {
 
   let assert Ok(_) = room.dispatch(subject, room.Leave(bob), bob_session)
 
-  assert process.receive(alice_session, 100) == Ok(room.ParticipantLeft(bob))
+  assert process.receive(alice_session, 100) == Ok(room.ParticipantLeft(bob, 3))
   assert process.receive(bob_session, 100) == Error(Nil)
 }
 
@@ -190,13 +190,13 @@ pub fn buzz_order_matches_acceptance_order_test() {
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
   let #(state, _) = room.apply_command(state, room.Join(carol, "Carol"))
 
-  let #(state, bob_event) = room.apply_command(state, room.Buzz(bob))
-  let #(state, alice_event) = room.apply_command(state, room.Buzz(alice))
-  let #(state, carol_event) = room.apply_command(state, room.Buzz(carol))
+  let #(state, bob_event) = room.apply_command(state, room.Buzz(bob, 1))
+  let #(state, alice_event) = room.apply_command(state, room.Buzz(alice, 1))
+  let #(state, carol_event) = room.apply_command(state, room.Buzz(carol, 1))
 
-  assert bob_event == room.BuzzAccepted(bob, "Bob", 1)
-  assert alice_event == room.BuzzAccepted(alice, "Alice", 2)
-  assert carol_event == room.BuzzAccepted(carol, "Carol", 3)
+  assert bob_event == room.BuzzAccepted(bob, "Bob", 1, 1, 4)
+  assert alice_event == room.BuzzAccepted(alice, "Alice", 2, 1, 5)
+  assert carol_event == room.BuzzAccepted(carol, "Carol", 3, 1, 6)
   assert room.buzz_snapshot(state)
     == [
       room.BuzzResult(bob, "Bob", 1),
@@ -208,9 +208,9 @@ pub fn buzz_order_matches_acceptance_order_test() {
 pub fn duplicate_buzz_is_rejected_and_state_unchanged_test() {
   let id = room.participant_id("p1")
   let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
-  let #(state, _) = room.apply_command(state, room.Buzz(id))
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
 
-  let #(next, event) = room.apply_command(state, room.Buzz(id))
+  let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
 
   assert next == state
   assert event == room.BuzzRejected(id, room.AlreadyBuzzed)
@@ -220,7 +220,7 @@ pub fn buzz_from_unjoined_participant_is_rejected_test() {
   let id = room.participant_id("p1")
   let state = room.new_state()
 
-  let #(next, event) = room.apply_command(state, room.Buzz(id))
+  let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
 
   assert next == state
   assert event == room.BuzzRejected(id, room.BuzzerNotJoined)
@@ -229,15 +229,17 @@ pub fn buzz_from_unjoined_participant_is_rejected_test() {
 pub fn reset_round_clears_buzzes_and_permits_rebuzz_test() {
   let id = room.participant_id("p1")
   let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
-  let #(state, _) = room.apply_command(state, room.Buzz(id))
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
 
-  let #(reset_state, reset_event) = room.apply_command(state, room.ResetRound)
+  let #(reset_state, reset_event) =
+    room.apply_command(state, room.ResetRound(1))
 
-  assert reset_event == room.RoundReset
+  assert reset_event == room.RoundReset(2, 3)
   assert room.buzz_snapshot(reset_state) == []
+  assert reset_state.round_id == 2
 
-  let #(_, rebuzz_event) = room.apply_command(reset_state, room.Buzz(id))
-  assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1)
+  let #(_, rebuzz_event) = room.apply_command(reset_state, room.Buzz(id, 2))
+  assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1, 2, 4)
 }
 
 pub fn buzz_history_survives_the_buzzer_leaving_test() {
@@ -249,11 +251,11 @@ pub fn buzz_history_survives_the_buzzer_leaving_test() {
   let #(state, _) =
     room.apply_command(room.new_state(), room.Join(alice, "Alice"))
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
-  let #(state, _) = room.apply_command(state, room.Buzz(bob))
+  let #(state, _) = room.apply_command(state, room.Buzz(bob, 1))
 
   let #(next, event) = room.apply_command(state, room.Leave(bob))
 
-  assert event == room.ParticipantLeft(bob)
+  assert event == room.ParticipantLeft(bob, 4)
   assert room.buzz_snapshot(next) == [room.BuzzResult(bob, "Bob", 1)]
 }
 
@@ -269,15 +271,15 @@ pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
   let assert Ok(_) = room.dispatch(subject, room.Join(bob, "Bob"), bob_session)
   let _ = process.receive(alice_session, 100)
 
-  let assert Ok(event) = room.dispatch(subject, room.Buzz(bob), bob_session)
+  let assert Ok(event) = room.dispatch(subject, room.Buzz(bob, 1), bob_session)
 
-  assert event == room.BuzzAccepted(bob, "Bob", 1)
+  assert event == room.BuzzAccepted(bob, "Bob", 1, 1, 3)
   assert process.receive(alice_session, 100)
-    == Ok(room.BuzzAccepted(bob, "Bob", 1))
+    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, 3))
   // Bob also receives his own accepted buzz asynchronously (#143), on top
   // of the synchronous `dispatch` return value already asserted above.
   assert process.receive(bob_session, 100)
-    == Ok(room.BuzzAccepted(bob, "Bob", 1))
+    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, 3))
 }
 
 pub fn actor_reset_round_clears_buzz_snapshot_test() {
@@ -287,21 +289,22 @@ pub fn actor_reset_round_clears_buzz_snapshot_test() {
   let alice_session = process.new_subject()
   let assert Ok(_) =
     room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
-  let assert Ok(_) = room.dispatch(subject, room.Buzz(alice), alice_session)
+  let assert Ok(_) = room.dispatch(subject, room.Buzz(alice, 1), alice_session)
   // Buzz also broadcasts an async echo back to the issuer (#143); drain it
   // before asserting on RoundReset's own async echo below.
-  let assert Ok(room.BuzzAccepted(_, "Alice", 1)) =
+  let assert Ok(room.BuzzAccepted(display_name: "Alice", position: 1, ..)) =
     process.receive(alice_session, 100)
 
-  let assert Ok(event) = room.dispatch(subject, room.ResetRound, alice_session)
+  let assert Ok(event) =
+    room.dispatch(subject, room.ResetRound(1), alice_session)
 
-  assert event == room.RoundReset
-  let assert Ok(#(_, buzzes)) = room.get_state(subject)
+  assert event == room.RoundReset(2, 3)
+  let assert Ok(room.Snapshot(buzzes:, ..)) = room.get_state(subject)
   assert buzzes == []
   // RoundReset is on the same issuer-inclusive `broadcast_all` branch as
   // Buzz (#465), so the issuer also receives an async second copy on top
   // of the synchronous `dispatch` return value already asserted above.
-  assert process.receive(alice_session, 100) == Ok(room.RoundReset)
+  assert process.receive(alice_session, 100) == Ok(room.RoundReset(2, 3))
 }
 
 pub fn departed_subscriber_receives_no_further_broadcasts_test() {
@@ -329,7 +332,7 @@ pub fn departed_subscriber_receives_no_further_broadcasts_test() {
 
   assert process.receive(bob_session, 100) == Error(Nil)
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol")))
+    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol"), 4))
 }
 
 pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test() {
@@ -340,7 +343,7 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   let _ =
     room.dispatch(subject, room.Join(alice_old, "Alice"), alice_old_session)
   let assert Ok(_) =
-    room.dispatch(subject, room.Buzz(alice_old), alice_old_session)
+    room.dispatch(subject, room.Buzz(alice_old, 1), alice_old_session)
 
   // The dropped connection's `Leave` and the new connection's `Join` are
   // dispatched independently, as `on_close`/`handle_join` would from two
@@ -355,7 +358,7 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // Reconnect gets a distinct `ParticipantId`; the server does not correlate
   // it with the connection that dropped.
   assert event
-    == Ok(room.ParticipantJoined(room.Participant(alice_new, "Alice")))
+    == Ok(room.ParticipantJoined(room.Participant(alice_new, "Alice"), 4))
   assert alice_new != alice_old
 
   // The snapshot delivered on rejoin reflects current room state: the old
@@ -364,7 +367,7 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // reflects only the reconnected participant.
   assert room.get_snapshot(subject)
     == Ok([room.Participant(alice_new, "Alice")])
-  let assert Ok(#(_, buzzes)) = room.get_state(subject)
+  let assert Ok(room.Snapshot(buzzes:, ..)) = room.get_state(subject)
   assert buzzes == [room.BuzzResult(alice_old, "Alice", 1)]
 }
 
@@ -407,12 +410,17 @@ pub fn independent_room_actors_do_not_share_buzz_state_test() {
   let assert Ok(_) = room.dispatch(room_a.data, room.Join(id, "Alice"), session)
   let assert Ok(_) = room.dispatch(room_b.data, room.Join(id, "Alice"), session)
 
-  let assert Ok(_) = room.dispatch(room_a.data, room.Buzz(id), session)
+  let assert Ok(_) = room.dispatch(room_a.data, room.Buzz(id, 1), session)
 
-  let assert Ok(#(_, buzzes_a)) = room.get_state(room_a.data)
+  let assert Ok(room.Snapshot(instance_id: instance_a, buzzes: buzzes_a, ..)) =
+    room.get_state(room_a.data)
   assert buzzes_a == [room.BuzzResult(id, "Alice", 1)]
-  let assert Ok(#(_, buzzes_b)) = room.get_state(room_b.data)
+  let assert Ok(room.Snapshot(instance_id: instance_b, buzzes: buzzes_b, ..)) =
+    room.get_state(room_b.data)
   assert buzzes_b == []
+  // 同じ部屋コードで作り直された room と取り違えないよう、actor ごとに
+  // 異なる世代を持つ（#765）。
+  assert instance_a != instance_b
 }
 
 /// 接続プロセスが死んだ参加者が room から自動で消えること（#56 / #35）。
@@ -663,7 +671,7 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
       let display_name = "P" <> int.to_string(n)
       let assert Ok(_) =
         room.dispatch(subject, room.Join(id, display_name), session)
-      let assert Ok(event) = room.dispatch(subject, room.Buzz(id), session)
+      let assert Ok(event) = room.dispatch(subject, room.Buzz(id, 1), session)
       process.send(results, #(event, display_name))
       process.sleep(3000)
     })
@@ -673,7 +681,7 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   let positions =
     accepted
     |> list.map(fn(reported) {
-      let assert room.BuzzAccepted(_, _, position) = reported.0
+      let assert room.BuzzAccepted(position:, ..) = reported.0
       position
     })
     |> list.sort(int.compare)
@@ -682,14 +690,14 @@ pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
   assert positions == one_to(count)
 
   // room 側の記録と、各参加者が受け取った通知が食い違わない。
-  let assert Ok(#(_, snapshot)) = room.get_state(subject)
+  let assert Ok(room.Snapshot(buzzes: snapshot, ..)) = room.get_state(subject)
   assert list.length(snapshot) == count
   assert list.map(snapshot, fn(result) { result.position }) == one_to(count)
 
   let reported =
     accepted
     |> list.map(fn(reported) {
-      let assert room.BuzzAccepted(id, _, position) = reported.0
+      let assert room.BuzzAccepted(id:, position:, ..) = reported.0
       room.BuzzResult(id, reported.1, position)
     })
     |> list.sort(fn(a, b) { int.compare(a.position, b.position) })
@@ -725,7 +733,7 @@ fn fill_round_with_churn(state: room.RoomState, count: Int) -> room.RoomState {
   int.range(from: 1, to: count + 1, with: state, run: fn(state, i) {
     let id = room.participant_id("churn" <> int.to_string(i))
     let #(state, _) = room.apply_command(state, room.Join(id, "Guest"))
-    let #(state, _) = room.apply_command(state, room.Buzz(id))
+    let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
     let #(state, _) = room.apply_command(state, room.Leave(id))
     state
   })
@@ -738,7 +746,7 @@ pub fn buzz_beyond_round_limit_is_rejected_and_order_kept_test() {
   let state = fill_round_with_churn(state, 128)
   assert list.length(room.buzz_snapshot(state)) == 128
 
-  let #(next, event) = room.apply_command(state, room.Buzz(anchor))
+  let #(next, event) = room.apply_command(state, room.Buzz(anchor, 1))
 
   assert next == state
   assert event == room.BuzzRejected(anchor, room.RoundFull)
@@ -750,9 +758,10 @@ pub fn buzz_at_round_limit_minus_one_is_still_accepted_test() {
     room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
   let state = fill_round_with_churn(state, 127)
 
-  let #(next, event) = room.apply_command(state, room.Buzz(anchor))
+  let #(next, event) = room.apply_command(state, room.Buzz(anchor, 1))
 
-  assert event == room.BuzzAccepted(anchor, "Anchor", 128)
+  // 1 join + 127 x (join, buzz, leave) = revision 382 before this buzz.
+  assert event == room.BuzzAccepted(anchor, "Anchor", 128, 1, 383)
   assert list.length(room.buzz_snapshot(next)) == 128
 }
 
@@ -761,9 +770,91 @@ pub fn reset_round_lifts_round_limit_test() {
   let #(state, _) =
     room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
   let state = fill_round_with_churn(state, 128)
-  let #(state, _) = room.apply_command(state, room.ResetRound)
+  let #(state, _) = room.apply_command(state, room.ResetRound(1))
 
-  let #(_, event) = room.apply_command(state, room.Buzz(anchor))
+  let #(_, event) = room.apply_command(state, room.Buzz(anchor, 2))
 
-  assert event == room.BuzzAccepted(anchor, "Anchor", 1)
+  // 1 join + 128 x 3 = 385, the reset is 386.
+  assert event == room.BuzzAccepted(anchor, "Anchor", 1, 2, 387)
+}
+
+/// 前の round を名指しした buzz は拒否され、状態も revision も変わらない（#765）。
+pub fn buzz_for_a_stale_round_is_rejected_and_state_unchanged_test() {
+  let id = room.participant_id("p1")
+  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+
+  let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
+
+  assert next == state
+  assert event == room.BuzzRejected(id, room.BuzzStaleRound)
+}
+
+/// 同じ round への2回目の reset は新しい round を始めない（#765）。2人が同時に
+/// reset を押しても、始まったばかりの round の buzz を消さない。
+pub fn second_reset_of_the_same_round_is_rejected_test() {
+  let alice = room.participant_id("a")
+  let bob = room.participant_id("b")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
+  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(state, room.Buzz(alice, 2))
+
+  let #(next, event) = room.apply_command(state, room.ResetRound(1))
+
+  assert next == state
+  assert event == room.ResetRejected(room.ResetStaleRound)
+  assert room.buzz_snapshot(next) == [room.BuzzResult(alice, "Alice", 1)]
+}
+
+/// 受理された変更だけが revision を1ずつ進める（#765）。
+pub fn only_accepted_changes_advance_the_revision_test() {
+  let id = room.participant_id("p1")
+  let state = room.new_state()
+  assert state.revision == 0
+  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
+  assert state.revision == 1
+  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
+  assert state.revision == 1
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
+  assert state.revision == 2
+  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  assert state.revision == 3
+  assert state.round_id == 2
+}
+
+/// `room.join` のスナップショットは自分の join を含み、以後に購読経由で
+/// 届く配信は必ずその revision の次から始まる（#765, #43）。
+pub fn join_snapshot_is_taken_with_the_join_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+  let alice = room.participant_id("p1")
+  let alice_session = process.new_subject()
+  let bob = room.participant_id("p2")
+  let bob_session = process.new_subject()
+  let assert Ok(_) =
+    room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
+  let assert Ok(_) = room.dispatch(subject, room.Buzz(alice, 1), alice_session)
+
+  let assert Ok(#(event, snapshot)) =
+    room.join(subject, bob, "Bob", bob_session)
+
+  assert event == room.ParticipantJoined(room.Participant(bob, "Bob"), 3)
+  assert snapshot.revision == 3
+  assert snapshot.round_id == 1
+  assert snapshot.participants
+    == [room.Participant(alice, "Alice"), room.Participant(bob, "Bob")]
+  assert snapshot.buzzes == [room.BuzzResult(alice, "Alice", 1)]
+  // 参加より前の変更は bob の購読には届かない。
+  assert process.receive(bob_session, 50) == Error(Nil)
+
+  let assert Ok(_) = room.dispatch(subject, room.ResetRound(1), alice_session)
+  assert process.receive(bob_session, 100) == Ok(room.RoundReset(2, 4))
+
+  let assert Ok(again) = room.get_state(subject)
+  assert again.instance_id == snapshot.instance_id
+  assert again.revision == 4
 }

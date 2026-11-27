@@ -73,6 +73,9 @@ type RoomHandle {
     // 切断時に registry へ Release を送るために保持する（#26）。
     // room_id が無いと「どの room を外すか」を registry へ伝えられない。
     room_id: registry.RoomId,
+    // join 時のスナップショットにあった room の世代（#765）。この接続へ送る
+    // 全ての状態通知に付け、クライアントが前の room の通知と区別できるようにする。
+    instance_id: String,
   )
 }
 
@@ -208,8 +211,14 @@ fn handle_message(
     // entirely (#500).
     mist.Binary(data) -> handle_binary(mark_active(state), data, connection)
     mist.Custom(RoomBroadcast(event)) -> {
-      case room_event_to_server_message(event) {
-        Some(server_message) -> send_server_message(connection, server_message)
+      // 配信は join 成立後にしか届かないので handle は必ずある。
+      case state.room {
+        Some(handle) ->
+          case room_event_to_server_message(event, handle.instance_id) {
+            Some(server_message) ->
+              send_server_message(connection, server_message)
+            None -> Nil
+          }
         None -> Nil
       }
       // room配信は「生きている」印にしない（#764）。#581 では他参加者の活動で
@@ -297,9 +306,14 @@ fn handle_text(
             "protocol message rejected: code=rate_limited",
           )
           let #(code, message) = rate_limited_code_and_message
+          // 拒否でも request_id を返し、クライアントが保留中の要求を
+          // 解決できるようにする（#765）。
           send_server_message(
             connection,
-            protocol.ProtocolErrorMessage(code, message),
+            protocol.correlate(
+              protocol.ProtocolErrorMessage(code, message),
+              protocol.request_id(text),
+            ),
           )
           mist.continue(state)
         }
@@ -312,14 +326,25 @@ fn handle_text(
               )
               send_server_message(
                 connection,
-                protocol.ProtocolErrorMessage(error.code, error.message),
+                protocol.correlate(
+                  protocol.ProtocolErrorMessage(error.code, error.message),
+                  protocol.request_id(text),
+                ),
               )
-              mist.continue(state)
+              // 旧版のクライアントは以後の通知を正しく扱えないので、接続を
+              // 残さずに閉じる（#765, ADR 0010）。
+              case error == protocol.client_outdated_error {
+                True -> mist.stop()
+                False -> mist.continue(state)
+              }
             }
             Ok(protocol.Join(wire_room_id, display_name)) ->
               handle_join(state, connection, wire_room_id, display_name)
-            Ok(protocol.Buzz) -> handle_buzz(state, connection)
-            Ok(protocol.Reset) -> handle_reset(state, connection)
+            Ok(protocol.Buzz(round_id, request_id)) ->
+              handle_buzz(state, connection, round_id, request_id)
+            Ok(protocol.Reset(round_id, request_id)) ->
+              handle_reset(state, connection, round_id, request_id)
+            Ok(protocol.Sync) -> handle_sync(state, connection)
             Ok(protocol.Ping) -> handle_ping(state, connection)
           }
       }
@@ -459,19 +484,15 @@ fn handle_join(
       // room が応答しなければ join を諦め、理由をクライアントへ返す（#33）。
       // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
       // クライアントには何も届かなかった。
-      use event <- with_join_reply(
+      use reply <- with_join_reply(
         state.registry,
         room_id,
         room_subject,
         connection,
-        room.dispatch(
-          room_subject,
-          room.Join(participant_id, display_name),
-          session,
-        ),
+        room.join(room_subject, participant_id, display_name, session),
       )
-      case event {
-        room.ParticipantJoined(participant) -> {
+      case reply {
+        #(room.ParticipantJoined(participant, _), snapshot) -> {
           logging.log(
             logging.Info,
             "join accepted: room="
@@ -479,34 +500,12 @@ fn handle_join(
               <> ", participant="
               <> room.participant_id_to_string(participant.id),
           )
-          // snapshot が取れないときは空として扱う。join 自体は成立して
-          // いるので、接続を落とすより「まだ誰も見えない」状態で続けるほうがよい。
-          // ただし無警告だと「本当に room が空」なのか「取得だけタイムアウトした」
-          // のか区別できなくなるため、フォールバック時は必ず warning を残す（#65）。
-          // participants と buzzes は 1 回の `get_state` で取得する。2 回の
-          // 独立した call だと、その間に他接続の Join/Leave/Buzz/Reset が
-          // 割り込み、取得時点がずれたスナップショットの組み合わせになりうる
-          // （#121）。
-          let #(snapshot, buzz_snapshot) = case room.get_state(room_subject) {
-            Ok(state) -> state
-            Error(Nil) -> {
-              logging.log(
-                logging.Warning,
-                "get_state timed out after join, returning empty participants/buzzes: room="
-                  <> registry.room_id_to_string(room_id)
-                  <> ", participant="
-                  <> room.participant_id_to_string(participant.id),
-              )
-              fallback_state_after_get_state_timeout()
-            }
-          }
+          // スナップショットは join と同じ room メッセージの中で取られている
+          // （`room.join`、#765）。以後この接続に届く配信は必ずこの revision
+          // より新しく、取得時点のずれ（#121）や二重適用（#43）は起きない。
           send_server_message(
             connection,
-            protocol.State(
-              self_id: to_wire_participant_id(participant.id),
-              participants: list.map(snapshot, to_wire_participant),
-              buzzes: list.map(buzz_snapshot, to_wire_buzz_result),
-            ),
+            snapshot_message(snapshot, participant.id),
           )
           let next_state =
             ConnectionState(
@@ -516,6 +515,7 @@ fn handle_join(
                 participant_id,
                 session,
                 room_id,
+                snapshot.instance_id,
               )),
             )
           let selector =
@@ -524,7 +524,7 @@ fn handle_join(
             |> process.select_map(session, RoomBroadcast)
           mist.continue(next_state) |> mist.with_selector(selector)
         }
-        room.JoinRejected(_, reason) -> {
+        #(room.JoinRejected(_, reason), _) -> {
           logging.log(
             logging.Info,
             "join rejected: room="
@@ -541,13 +541,63 @@ fn handle_join(
         }
         // `Join` never yields any other event; kept for exhaustiveness since
         // `room.RoomEvent` is shared across every room command.
-        room.ParticipantLeft(_)
-        | room.LeaveRejected(_, _)
-        | room.BuzzAccepted(_, _, _)
-        | room.BuzzRejected(_, _)
-        | room.RoundReset -> mist.continue(state)
+        _ -> mist.continue(state)
       }
     }
+  }
+}
+
+/// The `state` message for a snapshot, seen from participant `self_id`.
+fn snapshot_message(
+  snapshot: room.Snapshot,
+  self_id: room.ParticipantId,
+) -> protocol.ServerMessage {
+  protocol.State(
+    instance_id: snapshot.instance_id,
+    self_id: to_wire_participant_id(self_id),
+    round_id: snapshot.round_id,
+    revision: snapshot.revision,
+    participants: list.map(snapshot.participants, to_wire_participant),
+    buzzes: list.map(snapshot.buzzes, to_wire_buzz_result),
+  )
+}
+
+/// Sends a fresh `state` to a client that detected a missing revision
+/// (#765). It is an ordinary message for rate limiting, so a client cannot
+/// force unbounded snapshot work.
+fn handle_sync(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case state.room {
+    None -> {
+      send_not_joined_error(connection, "sync", None)
+      mist.continue(state)
+    }
+    Some(handle) ->
+      case room.get_state(handle.subject) {
+        Ok(snapshot) -> {
+          // state を先に送る。溜まっている配信は state 以前のもの（重複として
+          // 捨てられる）か、取得後に受理された新しいもの（state の次として
+          // 適用される）なので、後から送れば表示が巻き戻らない。
+          send_server_message(
+            connection,
+            snapshot_message(snapshot, handle.participant_id),
+          )
+          flush_queued_broadcasts(connection, handle)
+          mist.continue(state)
+        }
+        Error(Nil) -> {
+          logging.log(
+            logging.Warning,
+            "room unavailable: room="
+              <> registry.room_id_to_string(handle.room_id)
+              <> ", reason=sync_timed_out",
+          )
+          send_room_busy(connection, None)
+          mist.continue(ConnectionState(..state, room: None))
+        }
+      }
   }
 }
 
@@ -570,30 +620,34 @@ pub fn buzz_reject_code_and_message(
       "buzzer_not_joined",
       "This connection has not joined the room yet.",
     )
+    room.BuzzStaleRound -> #("stale_round", stale_round_message)
   }
 }
 
 fn handle_buzz(
   state: ConnectionState,
   connection: WebsocketConnection,
+  round_id: Int,
+  request_id: Option(String),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection, "buzz")
+      send_not_joined_error(connection, "buzz", request_id)
       mist.continue(state)
     }
     Some(handle) -> {
       use event <- with_room_reply(
         state,
         connection,
+        request_id,
         room.dispatch(
           handle.subject,
-          room.Buzz(handle.participant_id),
+          room.Buzz(handle.participant_id, round_id),
           handle.session,
         ),
       )
       case event {
-        room.BuzzAccepted(id, display_name, position) -> {
+        room.BuzzAccepted(id:, position:, ..) ->
           logging.log(
             logging.Info,
             "buzz accepted: room="
@@ -603,16 +657,7 @@ fn handle_buzz(
               <> ", position="
               <> int.to_string(position),
           )
-          send_server_message(
-            connection,
-            protocol.BuzzAccepted(
-              to_wire_participant_id(id),
-              display_name,
-              position,
-            ),
-          )
-        }
-        room.BuzzRejected(id, reason) -> {
+        room.BuzzRejected(id, reason) ->
           logging.log(
             logging.Info,
             "buzz rejected: room="
@@ -622,20 +667,10 @@ fn handle_buzz(
               <> ", reason="
               <> string.inspect(reason),
           )
-          let #(code, message) = buzz_reject_code_and_message(reason)
-          send_server_message(
-            connection,
-            protocol.ProtocolErrorMessage(code, message),
-          )
-        }
-        // `Buzz` never yields any other event; kept for exhaustiveness since
-        // `room.RoomEvent` is shared across every room command.
-        room.ParticipantJoined(_)
-        | room.JoinRejected(_, _)
-        | room.ParticipantLeft(_)
-        | room.LeaveRejected(_, _)
-        | room.RoundReset -> Nil
+        _ -> Nil
       }
+      flush_queued_broadcasts(connection, handle)
+      send_direct_reply(connection, handle.instance_id, event, request_id)
       mist.continue(state)
     }
   }
@@ -644,42 +679,97 @@ fn handle_buzz(
 fn handle_reset(
   state: ConnectionState,
   connection: WebsocketConnection,
+  round_id: Int,
+  request_id: Option(String),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection, "reset")
+      send_not_joined_error(connection, "reset", request_id)
       mist.continue(state)
     }
     Some(handle) -> {
       use event <- with_room_reply(
         state,
         connection,
-        room.dispatch(handle.subject, room.ResetRound, handle.session),
+        request_id,
+        room.dispatch(handle.subject, room.ResetRound(round_id), handle.session),
       )
-      case event {
-        room.RoundReset -> {
-          logging.log(
-            logging.Info,
-            "round reset: room="
-              <> registry.room_id_to_string(handle.room_id)
-              <> ", by="
-              <> room.participant_id_to_string(handle.participant_id),
-          )
-          send_server_message(connection, protocol.RoundReset)
+      logging.log(
+        logging.Info,
+        "round reset "
+          <> case event {
+          room.RoundReset(..) -> "accepted"
+          _ -> "rejected"
         }
-        // `ResetRound` never yields any other event; kept for exhaustiveness
-        // since `room.RoomEvent` is shared across every room command.
-        room.ParticipantJoined(_)
-        | room.JoinRejected(_, _)
-        | room.ParticipantLeft(_)
-        | room.LeaveRejected(_, _)
-        | room.BuzzAccepted(_, _, _)
-        | room.BuzzRejected(_, _) -> Nil
-      }
+          <> ": room="
+          <> registry.room_id_to_string(handle.room_id)
+          <> ", by="
+          <> room.participant_id_to_string(handle.participant_id),
+      )
+      flush_queued_broadcasts(connection, handle)
+      send_direct_reply(connection, handle.instance_id, event, request_id)
       mist.continue(state)
     }
   }
 }
+
+/// Forwards room broadcasts that are already in this connection's mailbox
+/// before a direct reply is sent (#765).
+///
+/// The room actor broadcasts a change before it replies, and messages from
+/// one process arrive in order, so every broadcast older than the reply is
+/// already queued here. Without this, the reply (revision N) would overtake a
+/// queued broadcast (revision N-1) and the client would see a gap and resync
+/// for nothing.
+fn flush_queued_broadcasts(
+  connection: WebsocketConnection,
+  handle: RoomHandle,
+) -> Nil {
+  case process.receive(handle.session, 0) {
+    Ok(event) -> {
+      case room_event_to_server_message(event, handle.instance_id) {
+        Some(message) -> send_server_message(connection, message)
+        None -> Nil
+      }
+      flush_queued_broadcasts(connection, handle)
+    }
+    Error(Nil) -> Nil
+  }
+}
+
+/// Sends the direct answer to a buzz/reset: the accepted change (which the
+/// broadcast also delivers with the same revision) or the rejection, which
+/// only the requester ever sees (#765).
+fn send_direct_reply(
+  connection: WebsocketConnection,
+  instance_id: String,
+  event: room.RoomEvent,
+  request_id: Option(String),
+) -> Nil {
+  let message = case room_event_to_server_message(event, instance_id) {
+    Some(message) -> Some(message)
+    None ->
+      case event {
+        room.BuzzRejected(_, reason) -> {
+          let #(code, text) = buzz_reject_code_and_message(reason)
+          Some(protocol.ProtocolErrorMessage(code, text))
+        }
+        room.ResetRejected(room.ResetStaleRound) ->
+          Some(protocol.ProtocolErrorMessage("stale_round", stale_round_message))
+        _ -> None
+      }
+  }
+  case message {
+    Some(message) ->
+      send_server_message(connection, protocol.correlate(message, request_id))
+    None -> Nil
+  }
+}
+
+/// Sent when a buzz or reset names a round that is no longer current
+/// (#765). The client already has (or will receive) the newer round.
+pub const stale_round_message =
+  "That round has already ended. The screen shows the current round."
 
 /// registry へ `Release` を送る。送信前に named subject の登録先を
 /// `process.subject_owner` で確認し、registry が(再起動中などで)不在なら
@@ -785,8 +875,8 @@ fn with_join_reply(
   room_id: registry.RoomId,
   room_subject: Subject(room.Message),
   connection: WebsocketConnection,
-  reply: Result(room.RoomEvent, Nil),
-  next: fn(room.RoomEvent) -> Next(ConnectionState, ConnectionEvent),
+  reply: Result(a, Nil),
+  next: fn(a) -> Next(ConnectionState, ConnectionEvent),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case reply {
     Ok(event) -> next(event)
@@ -842,6 +932,7 @@ fn with_join_reply(
 fn with_room_reply(
   state: ConnectionState,
   connection: WebsocketConnection,
+  request_id: Option(String),
   reply: Result(room.RoomEvent, Nil),
   next: fn(room.RoomEvent) -> Next(ConnectionState, ConnectionEvent),
 ) -> Next(ConnectionState, ConnectionEvent) {
@@ -857,18 +948,24 @@ fn with_room_reply(
         }
           <> ", reason=reply_timed_out",
       )
-      send_room_busy(connection)
+      send_room_busy(connection, request_id)
       mist.continue(ConnectionState(..state, room: None))
     }
   }
 }
 
-fn send_room_busy(connection: WebsocketConnection) -> Nil {
+fn send_room_busy(
+  connection: WebsocketConnection,
+  request_id: Option(String),
+) -> Nil {
   send_server_message(
     connection,
-    protocol.ProtocolErrorMessage(
-      "room_busy",
-      room_unavailable_message(ReplyTimedOut),
+    protocol.correlate(
+      protocol.ProtocolErrorMessage(
+        "room_busy",
+        room_unavailable_message(ReplyTimedOut),
+      ),
+      request_id,
     ),
   )
 }
@@ -881,6 +978,7 @@ pub const not_joined_message = "Join a room before sending this command."
 fn send_not_joined_error(
   connection: WebsocketConnection,
   command: String,
+  request_id: Option(String),
 ) -> Nil {
   logging.log(
     logging.Info,
@@ -888,7 +986,10 @@ fn send_not_joined_error(
   )
   send_server_message(
     connection,
-    protocol.ProtocolErrorMessage("not_joined", not_joined_message),
+    protocol.correlate(
+      protocol.ProtocolErrorMessage("not_joined", not_joined_message),
+      request_id,
+    ),
   )
 }
 
@@ -921,22 +1022,36 @@ fn send_server_message(
 /// connection (#24).
 pub fn room_event_to_server_message(
   event: room.RoomEvent,
+  instance_id: String,
 ) -> Option(protocol.ServerMessage) {
   case event {
-    room.ParticipantJoined(participant) ->
-      Some(protocol.ParticipantJoined(to_wire_participant(participant)))
-    room.ParticipantLeft(id) ->
-      Some(protocol.ParticipantLeft(to_wire_participant_id(id)))
-    room.BuzzAccepted(id, display_name, position) ->
+    room.ParticipantJoined(participant, revision) ->
+      Some(protocol.ParticipantJoined(
+        instance_id,
+        revision,
+        to_wire_participant(participant),
+      ))
+    room.ParticipantLeft(id, revision) ->
+      Some(protocol.ParticipantLeft(
+        instance_id,
+        revision,
+        to_wire_participant_id(id),
+      ))
+    room.BuzzAccepted(id, display_name, position, round_id, revision) ->
       Some(protocol.BuzzAccepted(
+        instance_id,
+        revision,
+        round_id,
         to_wire_participant_id(id),
         display_name,
         position,
       ))
-    room.RoundReset -> Some(protocol.RoundReset)
+    room.RoundReset(round_id, revision) ->
+      Some(protocol.RoundReset(instance_id, revision, round_id))
     room.JoinRejected(_, _) -> None
     room.LeaveRejected(_, _) -> None
     room.BuzzRejected(_, _) -> None
+    room.ResetRejected(_) -> None
   }
 }
 
@@ -965,16 +1080,4 @@ pub fn to_wire_buzz_result(result: room.BuzzResult) -> protocol.BuzzResult {
     display_name: result.display_name,
     position: result.position,
   )
-}
-
-/// The state sent to a joining client when `room.get_state` times out right
-/// after join. Empty participants/buzzes is a safe default here (unlike
-/// poker's `phase`, buzzer has no "which state are we lying about" ambiguity
-/// to record — mirrors `poker_websocket.fallback_state_after_get_state_timeout`
-/// (#357, #411)).
-pub fn fallback_state_after_get_state_timeout() -> #(
-  List(room.Participant),
-  List(room.BuzzResult),
-) {
-  #([], [])
 }

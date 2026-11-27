@@ -6,9 +6,12 @@
 /// `<>`, so it runs inside the page's own IIFE and shares its scope. The page
 /// must declare, before this snippet is spliced in:
 ///
-/// - DOM refs `joinForm`, `roomInput`, `nameInput`, `logEl`
+/// - DOM refs `joinForm`, `roomInput`, `nameInput`, `logEl`, `statusEl`,
+///   `joinButton`
 /// - `let socket = null`
 /// - `const WS_PATH` (e.g. `"/ws"`)
+/// - `const JOIN_FIELDS` (extra fields for the `join` message, e.g. the
+///   buzzer's protocol version `{ v: 2 }`; `{}` when none)
 /// - `const afterSend = (message) => {...}` (called after a successful send)
 /// - functions `setConnected(connected)`, `resetRoomView()` (clear the
 ///   page's room state and re-render) and `handleServerMessage(message)`
@@ -102,9 +105,30 @@ pub const shared =
     logEl.scrollTop = logEl.scrollHeight;
   }
 
+  // サーバとページの版が合わない（#765）。再読み込みでしか直らないので、
+  // 自動再接続を止めて利用者に再読み込みを促す。
+  function markOutdated() {
+    clearJoinTimer();
+    stopPing();
+    cancelReconnect();
+    if (socket) socket.close();
+    socket = null;
+    lastJoin = null;
+    setConnected(false);
+    resetRoomView();
+    statusEl.textContent = \"ページを再読み込みしてください\";
+    statusEl.dataset.state = \"outdated\";
+    joinButton.disabled = true;
+    log(\"このページは古い版です。ページを再読み込みしてください\");
+  }
+
   // Handles the join/connection-level error codes common to both pages.
   // Returns true when the code was consumed.
   function handleConnectionError(code) {
+    if (code === \"client_outdated\") {
+      markOutdated();
+      return true;
+    }
     // room_full/invalid_room_id/invalid_display_name/room_unavailable は
     // 恒久的な拒否で、ソケットを閉じずに返る（websocket.gleam /
     // poker_websocket.gleam の with_room/JoinRejected/with_join_reply の
@@ -182,6 +206,7 @@ pub const shared =
       log(`connected, joining room ${roomId} as ${displayName}`);
       ws.send(JSON.stringify({
         type: \"join\",
+        ...JOIN_FIELDS,
         room_id: roomId,
         display_name: displayName,
       }));

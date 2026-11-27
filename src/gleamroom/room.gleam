@@ -1,3 +1,5 @@
+import gleam/bit_array
+import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
@@ -36,19 +38,32 @@ pub type BuzzResult {
   BuzzResult(participant_id: ParticipantId, display_name: String, position: Int)
 }
 
+/// `round_id` identifies the current round (one question) and only grows.
+/// `revision` counts accepted state changes and only grows; every accepted
+/// event carries the revision it produced, so a client can order events and
+/// detect stale or missing ones without comparing contents (#765, ADR 0010).
+/// Rejected commands leave both unchanged.
 pub type RoomState {
-  RoomState(participants: List(Participant), buzzes: List(BuzzResult))
+  RoomState(
+    participants: List(Participant),
+    buzzes: List(BuzzResult),
+    round_id: Int,
+    revision: Int,
+  )
 }
 
 pub fn new_state() -> RoomState {
-  RoomState(participants: [], buzzes: [])
+  RoomState(participants: [], buzzes: [], round_id: 1, revision: 0)
 }
 
+/// `Buzz` and `ResetRound` name the round the client saw. A command for any
+/// other round is rejected, so a button pressed on an outdated screen cannot
+/// affect a newer round (#765).
 pub type RoomCommand {
   Join(id: ParticipantId, display_name: String)
   Leave(id: ParticipantId)
-  Buzz(id: ParticipantId)
-  ResetRound
+  Buzz(id: ParticipantId, round_id: Int)
+  ResetRound(round_id: Int)
 }
 
 pub type JoinRejectReason {
@@ -65,16 +80,47 @@ pub type BuzzRejectReason {
   BuzzerNotJoined
   AlreadyBuzzed
   RoundFull
+  /// The buzz named a round that is not the current one (#765).
+  BuzzStaleRound
 }
 
+pub type ResetRejectReason {
+  /// The reset named a round that is not the current one, e.g. another
+  /// participant already reset it (#765).
+  ResetStaleRound
+}
+
+/// Accepted events carry the `revision` they produced (#765); rejections
+/// carry none because they change nothing.
 pub type RoomEvent {
-  ParticipantJoined(Participant)
+  ParticipantJoined(participant: Participant, revision: Int)
   JoinRejected(id: ParticipantId, reason: JoinRejectReason)
-  ParticipantLeft(ParticipantId)
+  ParticipantLeft(id: ParticipantId, revision: Int)
   LeaveRejected(id: ParticipantId, reason: LeaveRejectReason)
-  BuzzAccepted(id: ParticipantId, display_name: String, position: Int)
+  BuzzAccepted(
+    id: ParticipantId,
+    display_name: String,
+    position: Int,
+    round_id: Int,
+    revision: Int,
+  )
   BuzzRejected(id: ParticipantId, reason: BuzzRejectReason)
-  RoundReset
+  /// `round_id` is the new round that starts with this reset.
+  RoundReset(round_id: Int, revision: Int)
+  ResetRejected(reason: ResetRejectReason)
+}
+
+/// A consistent view of the room at one revision: what a joining or
+/// resyncing client starts from (#765). `instance_id` tells a room apart from
+/// an earlier room with the same code.
+pub type Snapshot {
+  Snapshot(
+    instance_id: String,
+    round_id: Int,
+    revision: Int,
+    participants: List(Participant),
+    buzzes: List(BuzzResult),
+  )
 }
 
 /// Pure state transition: given the current state and a command, returns the
@@ -88,9 +134,13 @@ pub fn apply_command(
   case command {
     Join(id, display_name) -> apply_join(state, id, display_name)
     Leave(id) -> apply_leave(state, id)
-    Buzz(id) -> apply_buzz(state, id)
-    ResetRound -> apply_reset_round(state)
+    Buzz(id, round_id) -> apply_buzz(state, id, round_id)
+    ResetRound(round_id) -> apply_reset_round(state, round_id)
   }
+}
+
+fn next_revision(state: RoomState) -> Int {
+  state.revision + 1
 }
 
 /// Domain-level ceiling on `display_name`, independent of the WebSocket
@@ -134,9 +184,14 @@ fn apply_join(
     Error(Nil), True, True -> #(state, JoinRejected(id, RoomFull))
     Error(Nil), True, False -> {
       let participant = Participant(id, display_name)
+      let revision = next_revision(state)
       let next =
-        RoomState(..state, participants: [participant, ..state.participants])
-      #(next, ParticipantJoined(participant))
+        RoomState(
+          ..state,
+          participants: [participant, ..state.participants],
+          revision:,
+        )
+      #(next, ParticipantJoined(participant, revision))
     }
   }
 }
@@ -157,7 +212,11 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
     Error(Nil) -> #(state, LeaveRejected(id, NotJoined))
     Ok(_) -> {
       let remaining = list.filter(state.participants, fn(p) { p.id != id })
-      #(RoomState(..state, participants: remaining), ParticipantLeft(id))
+      let revision = next_revision(state)
+      #(
+        RoomState(..state, participants: remaining, revision:),
+        ParticipantLeft(id, revision),
+      )
     }
   }
 }
@@ -166,13 +225,21 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
 /// the Room actor's mailbox processing order (one command at a time), so no
 /// client-supplied or wall-clock timestamp is ever consulted to decide who
 /// was first.
-fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
+fn apply_buzz(
+  state: RoomState,
+  id: ParticipantId,
+  round_id: Int,
+) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
     // Unreachable from the current websocket layer: Buzz is only sent when
     // `state.room` holds the handle from a prior successful Join, so the id
     // is always still a participant. Kept as a defensive branch for the same
     // reason as `apply_leave`'s NotJoined branch above (#52).
     Error(Nil) -> #(state, BuzzRejected(id, BuzzerNotJoined))
+    Ok(_) if round_id != state.round_id -> #(
+      state,
+      BuzzRejected(id, BuzzStaleRound),
+    )
     Ok(participant) ->
       case has_buzzed(state, id) {
         True -> #(state, BuzzRejected(id, AlreadyBuzzed))
@@ -181,20 +248,51 @@ fn apply_buzz(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
             True -> #(state, BuzzRejected(id, RoundFull))
             False -> {
               let position = list.length(state.buzzes) + 1
+              let revision = next_revision(state)
               let next =
-                RoomState(..state, buzzes: [
-                  BuzzResult(id, participant.display_name, position),
-                  ..state.buzzes
-                ])
-              #(next, BuzzAccepted(id, participant.display_name, position))
+                RoomState(
+                  ..state,
+                  buzzes: [
+                    BuzzResult(id, participant.display_name, position),
+                    ..state.buzzes
+                  ],
+                  revision:,
+                )
+              #(
+                next,
+                BuzzAccepted(
+                  id,
+                  participant.display_name,
+                  position,
+                  state.round_id,
+                  revision,
+                ),
+              )
             }
           }
       }
   }
 }
 
-fn apply_reset_round(state: RoomState) -> #(RoomState, RoomEvent) {
-  #(RoomState(..state, buzzes: []), RoundReset)
+/// Only the round the client saw can be reset. Two participants pressing
+/// reset at once therefore start exactly one new round; the second gets
+/// `ResetStaleRound` instead of wiping the buzzes of the round that just began
+/// (#765).
+fn apply_reset_round(
+  state: RoomState,
+  round_id: Int,
+) -> #(RoomState, RoomEvent) {
+  case round_id == state.round_id {
+    False -> #(state, ResetRejected(ResetStaleRound))
+    True -> {
+      let next_round = state.round_id + 1
+      let revision = next_revision(state)
+      #(
+        RoomState(..state, buzzes: [], round_id: next_round, revision:),
+        RoundReset(next_round, revision),
+      )
+    }
+  }
 }
 
 fn has_buzzed(state: RoomState, id: ParticipantId) -> Bool {
@@ -220,6 +318,17 @@ pub fn buzz_snapshot(state: RoomState) -> List(BuzzResult) {
   list.reverse(state.buzzes)
 }
 
+/// The whole room at its current revision (#765).
+pub fn full_snapshot(state: RoomState, instance_id: String) -> Snapshot {
+  Snapshot(
+    instance_id:,
+    round_id: state.round_id,
+    revision: state.revision,
+    participants: snapshot(state),
+    buzzes: buzz_snapshot(state),
+  )
+}
+
 pub type Message {
   Dispatch(
     command: RoomCommand,
@@ -233,7 +342,21 @@ pub type Message {
   /// 取得すると、その間に他の接続の Join/Leave/Buzz/Reset が割り込み、
   /// 互いに取得時点がずれたスナップショットの組み合わせになりうる。
   /// 同一メッセージ処理内で両方を読めば、常に同じ `state.room` 由来になる。
-  GetState(reply_to: Subject(#(List(Participant), List(BuzzResult))))
+  GetState(reply_to: Subject(Snapshot))
+  /// `Join` と参加直後のスナップショットを 1 メッセージで返す（#765）。
+  ///
+  /// 以前は join の応答を受けてから別の `GetState` で状態を取り直しており、
+  /// その間に他の接続の変更が割り込むと、スナップショットに含まれる変更が
+  /// 購読済みのメールボックスにも届いて二重に適用されうるうえ（#43）、
+  /// どこまでがスナップショットに入っているかをクライアントが判別できなかった。
+  /// 同じ処理の中で join・購読・スナップショット取得を行えば、以後に届く
+  /// 配信は必ずスナップショットの revision より新しい。
+  JoinWithSnapshot(
+    id: ParticipantId,
+    display_name: String,
+    session: Subject(RoomEvent),
+    reply_to: Subject(#(RoomEvent, Snapshot)),
+  )
   /// 自分が無人なら終了する（#26 / #36）。
   ///
   /// **判定と停止を 1 メッセージに閉じてある。** 呼び出し側が
@@ -265,6 +388,9 @@ pub type Message {
 /// process or a notion of "subscriber".
 type ActorState {
   ActorState(
+    /// この actor の生存期間を表す乱数（#765）。同じ部屋コードで作り直された
+    /// room の配信を、クライアントが前の room のものと取り違えないようにする。
+    instance_id: String,
     room: RoomState,
     subscribers: Dict(String, Subject(RoomEvent)),
     /// 監視中の接続プロセス pid → [(ParticipantId の文字列表現, Monitor)]（#56 / #69）。
@@ -307,6 +433,8 @@ pub fn start() -> actor.StartResult(Subject(Message)) {
         }
       })
     actor.initialised(ActorState(
+      instance_id: crypto.strong_random_bytes(16)
+        |> bit_array.base64_url_encode(False),
       room: new_state(),
       subscribers: dict.new(),
       sessions: dict.new(),
@@ -325,39 +453,25 @@ fn handle_message(
 ) -> actor.Next(ActorState, Message) {
   case message {
     Dispatch(command, session, reply_to) -> {
-      let #(next_room, event) = apply_command(state.room, command)
-      let next_subscribers =
-        update_subscribers(state.subscribers, event, session)
-      let next_sessions = update_sessions(state.sessions, event, session)
-      // The caller normally gets the event synchronously through `reply_to`,
-      // but `reply_to` is a throwaway subject created per call (`dispatch`'s
-      // `call.try_call`): if the caller already gave up on a timeout, this
-      // send is silently lost. For `BuzzAccepted`/`RoundReset`, the issuing
-      // session is therefore also included in `broadcast` (not excluded),
-      // so a late-arriving result still reaches the caller asynchronously
-      // through its own subject (#143). The transport layer already treats
-      // these two as idempotent (dedup by buzz position, unconditional
-      // clear), so a caller that *did* get the synchronous reply simply
-      // receives the same event twice. `ParticipantJoined` keeps excluding
-      // the issuer: unlike buzz/reset, a lost `Join` reply already leaves
-      // the connection without the selector needed to read a later
-      // broadcast (see `websocket.gleam`'s `with_join_reply`), so including
-      // it here would only add a spurious duplicate on the fast path
-      // without fixing the timeout case.
+      let #(next_state, event) = run_command(state, command, session)
       process.send(reply_to, event)
-      broadcast(next_subscribers, except: session, event: event)
-      actor.continue(ActorState(
-        room: next_room,
-        subscribers: next_subscribers,
-        sessions: next_sessions,
+      actor.continue(next_state)
+    }
+    JoinWithSnapshot(id, display_name, session, reply_to) -> {
+      let #(next_state, event) =
+        run_command(state, Join(id, display_name), session)
+      process.send(reply_to, #(
+        event,
+        full_snapshot(next_state.room, next_state.instance_id),
       ))
+      actor.continue(next_state)
     }
     GetSnapshot(reply_to) -> {
       process.send(reply_to, snapshot(state.room))
       actor.continue(state)
     }
     GetState(reply_to) -> {
-      process.send(reply_to, #(snapshot(state.room), buzz_snapshot(state.room)))
+      process.send(reply_to, full_snapshot(state.room, state.instance_id))
       actor.continue(state)
     }
     SessionDown(pid) ->
@@ -414,11 +528,14 @@ fn handle_message(
             // 空だと判定した瞬間に join が割り込むことはない。
             [] -> actor.stop()
             _ ->
-              actor.continue(ActorState(
-                room: next_room,
-                subscribers: next_subscribers,
-                sessions: dict.delete(state.sessions, pid),
-              ))
+              actor.continue(
+                ActorState(
+                  ..state,
+                  room: next_room,
+                  subscribers: next_subscribers,
+                  sessions: dict.delete(state.sessions, pid),
+                ),
+              )
           }
         }
       }
@@ -437,6 +554,38 @@ fn handle_message(
   }
 }
 
+/// Applies a command, then updates subscribers, monitors and broadcasts, all
+/// while handling one mailbox message. The caller sends the reply.
+///
+/// The caller normally gets the event synchronously through `reply_to`, but
+/// `reply_to` is a throwaway subject created per call (`dispatch`'s
+/// `call.try_call`): if the caller already gave up on a timeout, that send is
+/// silently lost. For `BuzzAccepted`/`RoundReset`, the issuing session is
+/// therefore also included in `broadcast` (not excluded), so a late-arriving
+/// result still reaches the caller asynchronously through its own subject
+/// (#143). Both copies carry the same `revision`, so a client applies the
+/// change once (#765). `ParticipantJoined` keeps excluding the issuer: the
+/// joiner gets a snapshot that already contains its own join.
+fn run_command(
+  state: ActorState,
+  command: RoomCommand,
+  session: Subject(RoomEvent),
+) -> #(ActorState, RoomEvent) {
+  let #(next_room, event) = apply_command(state.room, command)
+  let next_subscribers = update_subscribers(state.subscribers, event, session)
+  let next_sessions = update_sessions(state.sessions, event, session)
+  broadcast(next_subscribers, except: session, event: event)
+  #(
+    ActorState(
+      ..state,
+      room: next_room,
+      subscribers: next_subscribers,
+      sessions: next_sessions,
+    ),
+    event,
+  )
+}
+
 /// 参加時に接続プロセスを監視対象へ入れ、離脱時に外す（#56）。
 ///
 /// 監視するのは room 側だけ。接続プロセスは room の生死を気にしないが、
@@ -452,7 +601,7 @@ fn update_sessions(
   session: Subject(RoomEvent),
 ) -> Dict(process.Pid, List(#(String, process.Monitor))) {
   case event {
-    ParticipantJoined(participant) ->
+    ParticipantJoined(participant, _) ->
       case process.subject_owner(session) {
         Ok(pid) -> {
           let monitor = process.monitor(pid)
@@ -481,7 +630,7 @@ fn update_sessions(
           sessions
         }
       }
-    ParticipantLeft(id) -> {
+    ParticipantLeft(id, _) -> {
       let key = participant_id_to_string(id)
       // 値（ParticipantId）で引いて外す。pid は Down 側でしか分からない。
       // **監視も解除する**（#69）。残すと、Leave 後も生きている接続プロセスが
@@ -503,9 +652,10 @@ fn update_sessions(
     }
     JoinRejected(_, _)
     | LeaveRejected(_, _)
-    | BuzzAccepted(_, _, _)
+    | BuzzAccepted(..)
     | BuzzRejected(_, _)
-    | RoundReset -> sessions
+    | RoundReset(..)
+    | ResetRejected(_) -> sessions
   }
 }
 
@@ -525,19 +675,20 @@ fn update_subscribers(
   session: Subject(RoomEvent),
 ) -> Dict(String, Subject(RoomEvent)) {
   case event {
-    ParticipantJoined(participant) ->
+    ParticipantJoined(participant, _) ->
       dict.insert(
         subscribers,
         participant_id_to_string(participant.id),
         session,
       )
-    ParticipantLeft(id) ->
+    ParticipantLeft(id, _) ->
       dict.delete(subscribers, participant_id_to_string(id))
     JoinRejected(_, _)
     | LeaveRejected(_, _)
-    | BuzzAccepted(_, _, _)
+    | BuzzAccepted(..)
     | BuzzRejected(_, _)
-    | RoundReset -> subscribers
+    | RoundReset(..)
+    | ResetRejected(_) -> subscribers
   }
 }
 
@@ -558,8 +709,8 @@ fn broadcast(
   event event: RoomEvent,
 ) -> Nil {
   case event {
-    BuzzAccepted(_, _, _) | RoundReset -> broadcast_all(subscribers, event)
-    ParticipantJoined(_) | ParticipantLeft(_) ->
+    BuzzAccepted(..) | RoundReset(..) -> broadcast_all(subscribers, event)
+    ParticipantJoined(..) | ParticipantLeft(..) ->
       subscribers
       |> dict.to_list
       |> list.each(fn(entry) {
@@ -569,7 +720,10 @@ fn broadcast(
           False -> process.send(subject, event)
         }
       })
-    JoinRejected(_, _) | LeaveRejected(_, _) | BuzzRejected(_, _) -> Nil
+    JoinRejected(_, _)
+    | LeaveRejected(_, _)
+    | BuzzRejected(_, _)
+    | ResetRejected(_) -> Nil
   }
 }
 
@@ -601,13 +755,26 @@ pub fn get_snapshot(
   call.try_call(subject, call.default_timeout, GetSnapshot, "room.get_snapshot")
 }
 
-/// Reads the participant list and the current round's accepted buzzes from
-/// a running room actor in one call, so both reflect the same `RoomState`
-/// (#121).
-pub fn get_state(
-  subject: Subject(Message),
-) -> Result(#(List(Participant), List(BuzzResult)), Nil) {
+/// Reads the whole room at its current revision in one call, so participants
+/// and buzzes reflect the same `RoomState` (#121, #765).
+pub fn get_state(subject: Subject(Message)) -> Result(Snapshot, Nil) {
   call.try_call(subject, call.default_timeout, GetState, "room.get_state")
+}
+
+/// Joins and returns the resulting event together with a snapshot taken in
+/// the same mailbox message (#765). See `JoinWithSnapshot`.
+pub fn join(
+  subject: Subject(Message),
+  id: ParticipantId,
+  display_name: String,
+  session: Subject(RoomEvent),
+) -> Result(#(RoomEvent, Snapshot), Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    JoinWithSnapshot(id, display_name, session, _),
+    "room.join",
+  )
 }
 
 /// 無人なら room を停止させ、停止したかどうかを返す（#36）。

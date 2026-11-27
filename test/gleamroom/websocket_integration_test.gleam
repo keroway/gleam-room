@@ -1,10 +1,12 @@
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/crypto
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http/request.{type Request}
 import gleam/int
 import gleam/json
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import gleamroom
@@ -51,27 +53,35 @@ fn suspend_process(pid: process.Pid) -> Nil
 @external(erlang, "gleamroom_room_test_ffi", "resume")
 fn resume_process(pid: process.Pid) -> Nil
 
+@external(erlang, "gleamroom_room_test_ffi", "message_queue_len")
+fn message_queue_len(pid: process.Pid) -> Int
+
+@external(erlang, "gleamroom_room_test_ffi", "monitored_pids")
+fn monitored_pids(pid: process.Pid) -> List(process.Pid)
+
+/// 止めたプロセスに要求が届いた（mailbox に `count` 件以上ある）まで待つ。
+/// 固定 sleep では送信側の接続プロセスが遅れたときに順序が入れ替わる。
+fn wait_for_queue(pid: process.Pid, count: Int, label: String) -> Nil {
+  wait.until(fn() { message_queue_len(pid) >= count }, label)
+}
+
 pub fn ws_roundtrip_join_buzz_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(
-    socket,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(socket, join_message("ROOM1", "Alice"))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
   assert string.contains(join_reply, "\"display_name\":\"Alice\"")
+  assert string.contains(join_reply, "\"round_id\":1")
+  assert string.contains(join_reply, "\"revision\":1")
 
-  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  send_client_message(socket, buzz_message(1))
   let #(buzz_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(buzz_reply, "\"type\":\"buzz_accepted\"")
   assert string.contains(buzz_reply, "\"display_name\":\"Alice\"")
   assert string.contains(buzz_reply, "\"position\":1")
+  assert string.contains(buzz_reply, "\"revision\":2")
   // The room actor also broadcasts `buzz_accepted` back to the buzzer's own
   // session (#143: this is what lets a late reply after a `dispatch`
   // timeout still reach the client), so a second, identical copy of the
@@ -81,9 +91,11 @@ pub fn ws_roundtrip_join_buzz_reset_test() {
   let #(buzz_echo, buffer) = recv_text_message(socket, buffer)
   assert buzz_echo == buzz_reply
 
-  send_client_message(socket, json.object([#("type", json.string("reset"))]))
+  send_client_message(socket, reset_message(1))
   let #(reset_reply, buffer) = recv_text_message(socket, buffer)
-  assert reset_reply == "{\"type\":\"round_reset\"}"
+  assert string.contains(reset_reply, "\"type\":\"round_reset\"")
+  assert string.contains(reset_reply, "\"round_id\":2")
+  assert string.contains(reset_reply, "\"revision\":3")
   // `RoundReset` is on the same issuer-inclusive `broadcast_all` branch as
   // `Buzz` (#143, #465), so it also echoes back a second, identical copy;
   // pin that the same way `buzz_echo` above already is.
@@ -112,14 +124,7 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
     )
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(
-    socket,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(socket, join_message("ROOM1", "Alice"))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
 
@@ -130,19 +135,12 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   // room actor の死が registry/接続双方に伝播するのを待つ。
   process.sleep(50)
 
-  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  send_client_message(socket, buzz_message(1))
   let #(buzz_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(buzz_reply, "\"type\":\"error\"")
   assert string.contains(buzz_reply, "\"code\":\"room_busy\"")
 
-  send_client_message(
-    socket,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(socket, join_message("ROOM1", "Alice"))
   let #(rejoin_reply, _buffer) = recv_text_message(socket, buffer)
   assert string.contains(rejoin_reply, "\"type\":\"state\"")
   assert !string.contains(rejoin_reply, "already_joined")
@@ -169,39 +167,18 @@ pub fn ws_keeps_connection_after_room_lookup_failed_test() {
   let #(bob, bob_buffer) = handshake(port, 50)
 
   // Alice が ROOM1 を作り、上限（1）に達する。
-  send_client_message(
-    alice,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(alice, join_message("ROOM1", "Alice"))
   let #(alice_reply, _alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(alice_reply, "\"type\":\"state\"")
 
-  send_client_message(
-    bob,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM2")),
-      #("display_name", json.string("Bob")),
-    ]),
-  )
+  send_client_message(bob, join_message("ROOM2", "Bob"))
   let #(rejected, bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(rejected, "\"type\":\"error\"")
   assert string.contains(rejected, "\"code\":\"room_unavailable\"")
   assert string.contains(rejected, "The server is at room capacity.")
 
   // 接続は維持されている: 既存の ROOM1 へは同じ接続から join できる。
-  send_client_message(
-    bob,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("ROOM1")),
-      #("display_name", json.string("Bob")),
-    ]),
-  )
+  send_client_message(bob, join_message("ROOM1", "Bob"))
   let #(joined, _bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(joined, "\"type\":\"state\"")
 
@@ -238,14 +215,7 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
     )
   let #(socket, buffer) = handshake(port, 50)
 
-  send_client_message(
-    socket,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("STUCK1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(socket, join_message("STUCK1", "Alice"))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
 
@@ -256,7 +226,7 @@ pub fn ws_cleans_up_via_session_down_after_reply_timeout_test() {
   // room actor を生かしたまま応答不能にする。
   suspend_process(room_pid)
 
-  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  send_client_message(socket, buzz_message(1))
   // `recv_text_message` は必要ならフレームが揃うまで `tcp_recv` を繰り返す
   // ので、1000ms のタイムアウトが経過して `room_busy` が届くまで待てる。
   let #(buzz_reply, _buffer) = recv_text_message(socket, buffer)
@@ -316,14 +286,7 @@ pub fn ws_closes_and_cleans_up_after_join_timeout_test() {
   suspend_process(room_pid)
 
   let #(socket, buffer) = handshake(port, 50)
-  send_client_message(
-    socket,
-    json.object([
-      #("type", json.string("join")),
-      #("room_id", json.string("JSTUCK1")),
-      #("display_name", json.string("Alice")),
-    ]),
-  )
+  send_client_message(socket, join_message("JSTUCK1", "Alice"))
   let #(error_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(error_reply, "\"type\":\"error\"")
   assert string.contains(error_reply, "\"code\":\"room_unavailable\"")
@@ -397,13 +360,13 @@ pub fn ws_continues_after_rate_limited_test() {
   let buffer = send_and_drain_buzz(socket, buffer, 30)
 
   // 31件目は上限超過なので rate_limited を受け取る。
-  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  send_client_message(socket, buzz_message(1))
   let #(rate_limited_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(rate_limited_reply, "\"type\":\"error\"")
   assert string.contains(rate_limited_reply, "\"code\":\"rate_limited\"")
 
   // 接続はまだ生きている: もう1通送っても close frame ではなく応答が返る。
-  send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+  send_client_message(socket, buzz_message(1))
   let #(still_alive_reply, _buffer) = recv_text_message(socket, buffer)
   assert string.contains(still_alive_reply, "\"type\":\"error\"")
 
@@ -501,7 +464,7 @@ fn send_and_drain_buzz(
   case count {
     0 -> buffer
     _ -> {
-      send_client_message(socket, json.object([#("type", json.string("buzz"))]))
+      send_client_message(socket, buzz_message(1))
       let #(_reply, buffer) = recv_text_message(socket, buffer)
       send_and_drain_buzz(socket, buffer, count - 1)
     }
@@ -597,6 +560,41 @@ fn read_response_headers(
       read_response_headers(socket, <<acc:bits, chunk:bits>>)
     }
   }
+}
+
+fn join_message(room_id: String, display_name: String) -> json.Json {
+  json.object([
+    #("type", json.string("join")),
+    #("v", json.int(2)),
+    #("room_id", json.string(room_id)),
+    #("display_name", json.string(display_name)),
+  ])
+}
+
+fn buzz_message(round_id: Int) -> json.Json {
+  json.object([
+    #("type", json.string("buzz")),
+    #("round_id", json.int(round_id)),
+  ])
+}
+
+fn reset_message(round_id: Int) -> json.Json {
+  json.object([
+    #("type", json.string("reset")),
+    #("round_id", json.int(round_id)),
+  ])
+}
+
+fn with_request_id(
+  message_type: String,
+  round_id: Int,
+  request_id: String,
+) -> json.Json {
+  json.object([
+    #("type", json.string(message_type)),
+    #("round_id", json.int(round_id)),
+    #("request_id", json.string(request_id)),
+  ])
 }
 
 fn send_client_message(socket: TcpSocket, body: json.Json) -> Nil {
@@ -736,7 +734,7 @@ pub fn ws_pings_do_not_consume_message_rate_budget_test() {
 
   let buffer = ping_n_times_without_delay(socket, buffer, 4)
   let buffer = reset_n_times_expecting(socket, buffer, 30, "not_joined")
-  send_client_message(socket, json.object([#("type", json.string("reset"))]))
+  send_client_message(socket, reset_message(1))
   let #(reply, _buffer) = recv_text_message(socket, buffer)
   assert string.contains(reply, "\"code\":\"rate_limited\"")
   tcp_close(socket)
@@ -792,10 +790,7 @@ fn reset_n_times_expecting(
   case count {
     0 -> buffer
     _ -> {
-      send_client_message(
-        socket,
-        json.object([#("type", json.string("reset"))]),
-      )
+      send_client_message(socket, reset_message(1))
       let #(reply, buffer) = recv_text_message(socket, buffer)
       assert string.contains(reply, "\"code\":\"" <> expected_code <> "\"")
       reset_n_times_expecting(socket, buffer, count - 1, expected_code)
@@ -804,16 +799,18 @@ fn reset_n_times_expecting(
 }
 
 /// `sender` が100msごとに `reset` を `count` 回送る。返信は読まない。
+/// 毎回その時点の round を指定し、全ての reset が受理されて配信されるようにする。
 fn send_resets(sender: TcpSocket, count: Int) -> Nil {
+  send_resets_from_round(sender, 1, count)
+}
+
+fn send_resets_from_round(sender: TcpSocket, round_id: Int, count: Int) -> Nil {
   case count {
     0 -> Nil
     _ -> {
       process.sleep(100)
-      send_client_message(
-        sender,
-        json.object([#("type", json.string("reset"))]),
-      )
-      send_resets(sender, count - 1)
+      send_client_message(sender, reset_message(round_id))
+      send_resets_from_round(sender, round_id + 1, count - 1)
     }
   }
 }
@@ -855,15 +852,218 @@ fn join_and_drain(
   buffer: BitArray,
   display_name: String,
 ) -> BitArray {
+  send_client_message(socket, join_message("HEARTBEAT", display_name))
+  let #(join_reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(join_reply, "\"type\":\"state\"")
+  buffer
+}
+
+/// 同じ変更は直接応答と配信の両方で届くが、どちらも同じ revision を持つ。
+/// 他の参加者にも同じ revision で届く（#765）。
+///
+/// 配信は応答より前に room actor から送られているので、接続は応答の前に
+/// 溜まった配信を送る（`flush_queued_broadcasts`）。応答が古い配信を
+/// 追い越すとクライアントには欠番に見え、無駄な sync が起きるため。
+pub fn ws_reply_and_broadcast_carry_the_same_revision_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let alice_buffer = join_room_and_drain(alice, alice_buffer, "REV1", "Alice")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, "REV1", "Bob")
+  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(joined, "\"type\":\"participant_joined\"")
+  assert string.contains(joined, "\"revision\":2")
+
+  send_client_message(bob, with_request_id("buzz", 1, "b1"))
+  let #(broadcast_copy, bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.starts_with(broadcast_copy, "{\"type\":\"buzz_accepted\"")
+  assert string.contains(broadcast_copy, "\"revision\":3")
+  let #(reply, _bob_buffer) = recv_text_message(bob, bob_buffer)
+  assert string.starts_with(reply, "{\"type\":\"reply\",\"request_id\":\"b1\"")
+  assert string.contains(reply, "\"type\":\"buzz_accepted\"")
+  assert string.contains(reply, "\"revision\":3")
+  let #(seen_by_alice, _alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert seen_by_alice == broadcast_copy
+
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// 同じ round を2人が続けて reset しても新しい round は1つだけ始まり、
+/// 後の reset は `stale_round` で拒否されて配信されない（#765）。
+pub fn ws_second_reset_of_the_same_round_is_stale_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let alice_buffer = join_room_and_drain(alice, alice_buffer, "STALE1", "Alice")
+
+  send_client_message(alice, with_request_id("reset", 1, "r1"))
+  let #(_broadcast_copy, alice_buffer) = recv_text_message(alice, alice_buffer)
+  let #(first, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(first, "\"request_id\":\"r1\"")
+  assert string.contains(first, "\"round_id\":2")
+
+  send_client_message(alice, with_request_id("reset", 1, "r2"))
+  let #(second, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(second, "\"request_id\":\"r2\"")
+  assert string.contains(second, "\"code\":\"stale_round\"")
+
+  // 古い round への buzz も拒否される。
+  send_client_message(alice, with_request_id("buzz", 1, "b1"))
+  let #(stale_buzz, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(stale_buzz, "\"request_id\":\"b1\"")
+  assert string.contains(stale_buzz, "\"code\":\"stale_round\"")
+
+  // 拒否は revision を進めない: sync の state は reset 後の revision 2 のまま。
+  send_client_message(alice, json.object([#("type", json.string("sync"))]))
+  let #(state, _alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(state, "\"type\":\"state\"")
+  assert string.contains(state, "\"round_id\":2")
+  assert string.contains(state, "\"revision\":2")
+
+  tcp_close(alice)
+}
+
+/// 旧版（`v` の無い join）のクライアントは `client_outdated` を受け取り、
+/// 接続が閉じられる（#765, ADR 0010）。黙って旧形式のまま動かさない。
+pub fn ws_closes_outdated_client_test() {
+  let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(socket, buffer) = handshake(port, 50)
+
   send_client_message(
     socket,
     json.object([
       #("type", json.string("join")),
-      #("room_id", json.string("HEARTBEAT")),
-      #("display_name", json.string(display_name)),
+      #("room_id", json.string("OLD1")),
+      #("display_name", json.string("Alice")),
     ]),
   )
+  let #(reply, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reply, "\"code\":\"client_outdated\"")
+  let assert <<>> = recv_close_frame(socket, buffer)
+  let assert Error(_) = tcp_recv(socket, 2000)
+  tcp_close(socket)
+}
+
+fn join_room_and_drain(
+  socket: TcpSocket,
+  buffer: BitArray,
+  room_id: String,
+  display_name: String,
+) -> BitArray {
+  send_client_message(socket, join_message(room_id, display_name))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(join_reply, "\"type\":\"state\"")
   buffer
+}
+
+/// 他参加者の変更の配信が接続に溜まっている間に自分の操作の応答が返っても、
+/// 応答が古い配信を追い越さない（#765）。revision の順に届く。
+///
+/// room actor を止めてから Bob の buzz と Alice の reset をこの順に積み、
+/// 再開する。Alice の接続は reset の応答待ちで止まっているので、先に処理される
+/// Bob の buzz の配信（revision 3）は必ず Alice の接続のメールボックスに溜まり、
+/// その後に reset の応答（revision 4）が届く。
+pub fn ws_reply_does_not_overtake_queued_broadcasts_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let alice_buffer = join_room_and_drain(alice, alice_buffer, "ORDER1", "Alice")
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, "ORDER1", "Bob")
+  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(joined, "\"revision\":2")
+
+  let assert Ok(room_subject) =
+    registry.lookup(registry_subject, registry.room_id("ORDER1"))
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  suspend_process(room_pid)
+  send_client_message(bob, with_request_id("buzz", 1, "b1"))
+  wait_for_queue(room_pid, 1, "Bob の buzz が room に届く")
+  send_client_message(alice, with_request_id("reset", 1, "r1"))
+  wait_for_queue(room_pid, 2, "Alice の reset が room に届く")
+  resume_process(room_pid)
+
+  // buzz の配信(3)、reset の配信コピー(4)、reset の応答(4) の順。
+  assert collect_revisions(alice, alice_buffer, 3, []) == [3, 4, 4]
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// sync の state を取得した直後に別接続の変更が受理されても、古い state が
+/// 新しい配信の後から届いて表示を巻き戻さない（#765）。
+///
+/// room actor を止めて Alice の sync と Bob の reset をこの順に積み、さらに
+/// Alice の接続プロセスも止めてから room を再開する。Alice の接続には
+/// state(revision 2) の応答と reset の配信(revision 3) が両方溜まった状態で
+/// 再開されるので、送る順序の誤りが必ず表に出る。
+pub fn ws_sync_state_is_sent_before_newer_queued_broadcasts_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let alice_buffer = join_room_and_drain(alice, alice_buffer, "SYNC1", "Alice")
+  let assert Ok(room_subject) =
+    registry.lookup(registry_subject, registry.room_id("SYNC1"))
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  // この時点で room が監視しているのは Alice の接続だけ。
+  let assert [alice_connection] = monitored_pids(room_pid)
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, "SYNC1", "Bob")
+  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(joined, "\"revision\":2")
+
+  suspend_process(room_pid)
+  send_client_message(alice, json.object([#("type", json.string("sync"))]))
+  wait_for_queue(room_pid, 1, "Alice の sync が room に届く")
+  send_client_message(bob, with_request_id("reset", 1, "r1"))
+  wait_for_queue(room_pid, 2, "Bob の reset が room に届く")
+  suspend_process(alice_connection)
+  resume_process(room_pid)
+  wait.until(
+    fn() { message_queue_len(alice_connection) >= 2 },
+    "state の応答と reset の配信が Alice の接続に溜まる",
+  )
+  resume_process(alice_connection)
+
+  assert collect_revisions(alice, alice_buffer, 2, []) == [2, 3]
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// `count` 件のメッセージを読み、各メッセージ（reply は中身）の revision を
+/// 受信順に返す。
+fn collect_revisions(
+  socket: TcpSocket,
+  buffer: BitArray,
+  count: Int,
+  acc: List(Int),
+) -> List(Int) {
+  case count {
+    0 -> list.reverse(acc)
+    _ -> {
+      let #(text, buffer) = recv_text_message(socket, buffer)
+      let assert Ok(revision) =
+        json.parse(text, {
+          use revision <- decode.optional_field("revision", -1, decode.int)
+          use nested <- decode.optional_field(
+            "result",
+            -1,
+            decode.at(["revision"], decode.int),
+          )
+          decode.success(int.max(revision, nested))
+        })
+      collect_revisions(socket, buffer, count - 1, [revision, ..acc])
+    }
+  }
 }

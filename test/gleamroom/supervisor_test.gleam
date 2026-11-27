@@ -79,7 +79,7 @@ pub fn registry_crash_kills_joined_room_actor_test() {
 
   // 参加者を1人 join させ、「room に状態がある」ことを作る。
   let session = process.new_subject()
-  let assert Ok(room.ParticipantJoined(_)) =
+  let assert Ok(room.ParticipantJoined(..)) =
     room.dispatch(
       room_subject,
       room.Join(room.participant_id("p1"), "Alice"),
