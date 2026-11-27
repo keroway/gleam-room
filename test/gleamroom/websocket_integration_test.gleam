@@ -53,6 +53,18 @@ fn suspend_process(pid: process.Pid) -> Nil
 @external(erlang, "gleamroom_room_test_ffi", "resume")
 fn resume_process(pid: process.Pid) -> Nil
 
+@external(erlang, "gleamroom_room_test_ffi", "message_queue_len")
+fn message_queue_len(pid: process.Pid) -> Int
+
+@external(erlang, "gleamroom_room_test_ffi", "monitored_pids")
+fn monitored_pids(pid: process.Pid) -> List(process.Pid)
+
+/// 止めたプロセスに要求が届いた（mailbox に `count` 件以上ある）まで待つ。
+/// 固定 sleep では送信側の接続プロセスが遅れたときに順序が入れ替わる。
+fn wait_for_queue(pid: process.Pid, count: Int, label: String) -> Nil {
+  wait.until(fn() { message_queue_len(pid) >= count }, label)
+}
+
 pub fn ws_roundtrip_join_buzz_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
   let #(socket, buffer) = handshake(port, 50)
@@ -972,13 +984,59 @@ pub fn ws_reply_does_not_overtake_queued_broadcasts_test() {
   let assert Ok(room_pid) = process.subject_owner(room_subject)
   suspend_process(room_pid)
   send_client_message(bob, with_request_id("buzz", 1, "b1"))
-  process.sleep(50)
+  wait_for_queue(room_pid, 1, "Bob の buzz が room に届く")
   send_client_message(alice, with_request_id("reset", 1, "r1"))
-  process.sleep(50)
+  wait_for_queue(room_pid, 2, "Alice の reset が room に届く")
   resume_process(room_pid)
 
   // buzz の配信(3)、reset の配信コピー(4)、reset の応答(4) の順。
   assert collect_revisions(alice, alice_buffer, 3, []) == [3, 4, 4]
+  tcp_close(alice)
+  tcp_close(bob)
+}
+
+/// sync の state を取得した直後に別接続の変更が受理されても、古い state が
+/// 新しい配信の後から届いて表示を巻き戻さない（#765）。
+///
+/// room actor を止めて Alice の sync と Bob の reset をこの順に積み、さらに
+/// Alice の接続プロセスも止めてから room を再開する。Alice の接続には
+/// state(revision 2) の応答と reset の配信(revision 3) が両方溜まった状態で
+/// 再開されるので、送る順序の誤りが必ず表に出る。
+pub fn ws_sync_state_is_sent_before_newer_queued_broadcasts_test() {
+  let assert Ok(registry_started) = registry.start()
+  let registry_subject = registry_started.data
+  let assert Ok(poker_registry_started) = poker_registry.start()
+  let assert Ok(#(port, _)) =
+    gleamroom.start_web_only_on_ephemeral_port(
+      registry_subject,
+      poker_registry_started.data,
+    )
+  let #(alice, alice_buffer) = handshake(port, 50)
+  let #(bob, bob_buffer) = handshake(port, 50)
+  let alice_buffer = join_room_and_drain(alice, alice_buffer, "SYNC1", "Alice")
+  let assert Ok(room_subject) =
+    registry.lookup(registry_subject, registry.room_id("SYNC1"))
+  let assert Ok(room_pid) = process.subject_owner(room_subject)
+  // この時点で room が監視しているのは Alice の接続だけ。
+  let assert [alice_connection] = monitored_pids(room_pid)
+  let _bob_buffer = join_room_and_drain(bob, bob_buffer, "SYNC1", "Bob")
+  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(joined, "\"revision\":2")
+
+  suspend_process(room_pid)
+  send_client_message(alice, json.object([#("type", json.string("sync"))]))
+  wait_for_queue(room_pid, 1, "Alice の sync が room に届く")
+  send_client_message(bob, with_request_id("reset", 1, "r1"))
+  wait_for_queue(room_pid, 2, "Bob の reset が room に届く")
+  suspend_process(alice_connection)
+  resume_process(room_pid)
+  wait.until(
+    fn() { message_queue_len(alice_connection) >= 2 },
+    "state の応答と reset の配信が Alice の接続に溜まる",
+  )
+  resume_process(alice_connection)
+
+  assert collect_revisions(alice, alice_buffer, 2, []) == [2, 3]
   tcp_close(alice)
   tcp_close(bob)
 }

@@ -200,9 +200,9 @@ Still duplicated because they read or update `ConnectionState` (whose
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:748-781`,
+- `release_room` (`websocket.gleam:774-797`,
   `poker_websocket.gleam:758-776`) and the `with_room`/`with_join_reply`/
-  `with_room_reply` family (`websocket.gleam:795-940`,
+  `with_room_reply` family (`websocket.gleam:796-941`,
   `poker_websocket.gleam:799-889`) — these encode "how to talk to a room
   actor" but reference the concrete `room.Message`/`poker.Message`,
   `room.ParticipantId`/room event subject types via `ConnectionState`.

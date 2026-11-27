@@ -577,13 +577,14 @@ fn handle_sync(
     Some(handle) ->
       case room.get_state(handle.subject) {
         Ok(snapshot) -> {
-          // 先に届いていた配信は state より古いので、クライアントには
-          // 重複として捨てられる。順序を保つため先に送っておく。
-          flush_queued_broadcasts(connection, handle)
+          // state を先に送る。溜まっている配信は state 以前のもの（重複として
+          // 捨てられる）か、取得後に受理された新しいもの（state の次として
+          // 適用される）なので、後から送れば表示が巻き戻らない。
           send_server_message(
             connection,
             snapshot_message(snapshot, handle.participant_id),
           )
+          flush_queued_broadcasts(connection, handle)
           mist.continue(state)
         }
         Error(Nil) -> {

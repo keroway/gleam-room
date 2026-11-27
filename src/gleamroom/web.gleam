@@ -89,6 +89,13 @@ pub fn index_html() -> String {
   let revision = 0;
   let roundId = null;
   let syncRequested = false;
+  // 送った sync の request_id。拒否（rate_limited など）の応答を見分け、
+  // 間隔を空けて上限回数まで取り直す。state を受け取れば回数を戻す。
+  const SYNC_RETRY_MS = 1000;
+  const MAX_SYNC_RETRIES = 3;
+  let syncRequestId = null;
+  let syncRetries = 0;
+  let syncRetryTimer = null;
   // 応答待ちの buzz/reset（request_id → 内容）。直接応答（reply）で解決する。
   // 切断で破棄し、上限を超えたら古いものから捨てる。
   const MAX_PENDING_REQUESTS = 16;
@@ -106,7 +113,8 @@ pub fn index_html() -> String {
     instanceId = null;
     revision = 0;
     roundId = null;
-    syncRequested = false;
+    clearSyncRetry();
+    syncRetries = 0;
     pending = new Map();
     renderParticipants();
     renderBuzzes();
@@ -182,11 +190,38 @@ pub fn index_html() -> String {
     );
   }
 
+  function clearSyncRetry() {
+    syncRequested = false;
+    syncRequestId = null;
+    if (syncRetryTimer !== null) {
+      clearTimeout(syncRetryTimer);
+      syncRetryTimer = null;
+    }
+  }
+
   function requestSync() {
     if (syncRequested) return;
     syncRequested = true;
+    syncRequestId = String(nextRequestId++);
     log(\"missing update detected, requesting the current state\");
-    sendIfOpen({ type: \"sync\" });
+    sendIfOpen({ type: \"sync\", request_id: syncRequestId });
+  }
+
+  // sync が拒否されたら待機を解き、上限内なら間隔を空けて取り直す。
+  // 解かないと、以後の欠番でも sync を送れず古い表示が切断まで残る。
+  function handleSyncRejected() {
+    syncRequested = false;
+    syncRequestId = null;
+    if (syncRetries >= MAX_SYNC_RETRIES) {
+      log(\"sync rejected repeatedly, waiting for the next missing update\");
+      syncRetries = 0;
+      return;
+    }
+    syncRetries += 1;
+    syncRetryTimer = setTimeout(() => {
+      syncRetryTimer = null;
+      requestSync();
+    }, SYNC_RETRY_MS);
   }
 
   // 通知を適用してよいかを revision で判定する（#765）。
@@ -227,7 +262,8 @@ pub fn index_html() -> String {
     instanceId = message.room_instance_id;
     revision = message.revision;
     roundId = message.round_id;
-    syncRequested = false;
+    clearSyncRetry();
+    syncRetries = 0;
     selfId = message.self_id;
     participants = new Map(message.participants.map((p) => [p.participant_id, p]));
     buzzes = message.buzzes;
@@ -316,7 +352,10 @@ pub fn index_html() -> String {
           break;
         }
         pending.delete(message.request_id);
-        if (message.result.type === \"error\") {
+        if (message.request_id === syncRequestId && message.result.type === \"error\") {
+          log(`error [${message.result.code}]: ${message.result.message}`);
+          handleSyncRejected();
+        } else if (message.result.type === \"error\") {
           handleError(message.result);
         } else {
           applyChange(message.result);

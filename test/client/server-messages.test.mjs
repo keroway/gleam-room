@@ -572,3 +572,71 @@ for (const [name, deliver] of [
     }
   });
 }
+
+// sync 自体がレート制限で拒否されても取り直せる（#765 レビュー指摘）。
+// 拒否のまま待機し続けると、以後の欠番でも sync を送れず古い表示が残る。
+test("sync が rate_limited で拒否されたら間隔を空けて取り直し、上限で止める（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    const syncs = () => socket.sent.map((d) => JSON.parse(d)).filter((m) => m.type === "sync");
+    const reject = (requestId) =>
+      socket.handlers.message?.({
+        data: JSON.stringify({
+          type: "reply",
+          request_id: requestId,
+          result: { type: "error", code: "rate_limited", message: "slow down" },
+        }),
+      });
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "participant_left",
+        ...at(3),
+        participant_id: "gone",
+      }),
+    });
+    assert.equal(syncs().length, 1);
+    assert.equal(typeof syncs()[0].request_id, "string", "sync に request_id が無い");
+
+    // 拒否ごとに1回だけ遅延再送し、上限（3回）を超えたら止める。
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      reject(syncs().at(-1).request_id);
+      assert.equal(client.pendingTimers(), 1, `${attempt}回目の拒否で再試行を予約していない`);
+      client.runTimers();
+      assert.equal(syncs().length, attempt + 1);
+    }
+    reject(syncs().at(-1).request_id);
+    assert.equal(client.pendingTimers(), 0, "上限を超えても再試行を続けている");
+
+    // 待機は解けているので、次の欠番では再び sync を送れる。
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", ...at(5), participant_id: "gone" }),
+    });
+    assert.equal(syncs().length, 5, "拒否後の欠番で sync を送れない");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("sync の再試行待ちは切断で取り消す（#765）", () => {
+  const client = startClient();
+  try {
+    const socket = joinAndConnect(client);
+    socket.handlers.message?.({
+      data: JSON.stringify({ type: "participant_left", ...at(3), participant_id: "gone" }),
+    });
+    const sync = socket.sent.map((d) => JSON.parse(d)).find((m) => m.type === "sync");
+    socket.handlers.message?.({
+      data: JSON.stringify({
+        type: "reply",
+        request_id: sync.request_id,
+        result: { type: "error", code: "rate_limited", message: "slow down" },
+      }),
+    });
+    assert.deepEqual(client.timerDelays(), [1000]);
+    socket.handlers.close?.();
+    assert.ok(!client.timerDelays().includes(1000), "切断後も sync の再試行が残っている");
+  } finally {
+    client.dispose();
+  }
+});
