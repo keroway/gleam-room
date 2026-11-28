@@ -314,6 +314,8 @@ fn handle_request(
     // パスから読む。部屋の有無はここでは見ない（参加時に WebSocket で
     // `room_not_found` を返す）。招待 URL に載るのは部屋コードだけ。
     ["r", _room_code] -> buzzer_page(req)
+    // 会場表示（#768）。同じページで、JS がパスを見て表示専用の画面にする。
+    ["r", _room_code, "display"] -> buzzer_page(req)
 
     // **registry に実際に問い合わせてから答える（#93）。**
     //

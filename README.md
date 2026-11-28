@@ -25,7 +25,8 @@ MVP capabilities:
 - Participant join/leave presence.
 - Buzzer input.
 - Server-side ordering of buzzer events.
-- Round reset.
+- Round reset (since #768: the host's "next question"; the host also opens
+  and closes acceptance, and a display view shows the room on a big screen).
 - Basic reconnect handling.
 
 Explicitly out of scope for the MVP:
@@ -141,7 +142,7 @@ see `src/gleamroom/web.gleam`.
 ### Manual MVP acceptance procedure
 
 `ws://localhost:4000/ws` accepts WebSocket connections speaking the typed
-join/buzz/reset protocol described in
+join/buzz/host-command protocol described in
 [`docs/mvp.md`](docs/mvp.md#suggested-wire-protocol); see
 `src/gleamroom/protocol.gleam` and `src/gleamroom/websocket.gleam`. The
 handshake itself is rejected with `403` when the `Origin` header does not
@@ -153,23 +154,32 @@ the full MVP acceptance scenario from
 [`docs/mvp.md`](docs/mvp.md#acceptance-scenario) with the server running
 (room codes are case-insensitive when typed):
 
-1. Open `http://localhost:4000/`, enter a name (e.g. Alice) and press
-   「部屋を作る」. The page shows the room code, the invite URL and a QR code.
-2. Open the invite URL in two more tabs/windows and join as Bob and Carol by
-   entering only a name. All three should show the same participant presence. Opening
-   `/r/` with a code that has no room explains that the room was not found
-   and creates nothing.
-3. Reset the round, then press buzz in the order Bob, Alice, Carol. All
-   three clients should display the identical ordering B → A → C.
-4. Press buzz again from Bob. The ordering should not change or duplicate.
-5. Reset again; the results should clear on all three clients.
-6. Close one tab. The remaining two show that participant as （切断中）
+1. Open `http://localhost:4000/`, enter a name (e.g. Host) and press
+   「部屋を作る」. The page shows the room code, the invite URL, a QR code and
+   the host's control panel (#768). The host has no BUZZ button.
+2. Open the invite URL in three more tabs/windows and join as Alice, Bob and
+   Carol by entering only a name. Everyone should show the same participant
+   presence, with the host marked （司会）. Opening `/r/` with a code that has
+   no room explains that the room was not found and creates nothing.
+3. Open 「会場表示を開く」 from the host's panel (`/r/<code>/display`). It
+   shows the phase and the order in large type and has no buttons.
+4. BUZZ is disabled until the host presses 「受付開始」. Then press buzz in
+   the order Bob, Alice, Carol. All clients and the display should show the
+   identical ordering B → A → C and Bob as the answerer.
+5. Press buzz again from Bob. The ordering should not change or duplicate.
+6. The host presses 「次の問題へ」; the results clear everywhere and BUZZ is
+   disabled again until the next 「受付開始」.
+7. Close one player's tab. The others show that participant as （切断中）
    (disconnected); after 60 seconds without a return they see the
    participant leave.
-7. Reload a tab instead: it resumes as the same participant (same id, its
+8. Reload a tab instead: it resumes as the same participant (same id, its
    buzz kept) and the others see it reconnect, not a leave/join
    ([`docs/mvp.md`](docs/mvp.md#reconnect), #766). A newly opened tab joins
    as a new participant; the **Leave** button leaves for good.
+9. Reload the host's tab: it comes back as host (the saved host token goes
+   with the resume). Acceptance that was open while the host was away is
+   closed (#768). 「司会を渡す」 hands the role to a connected player, whose
+   page then shows the control panel.
 
 The invite URL and QR code use the host in the address bar, so a page opened
 at `localhost` invites to `localhost`, which a phone cannot reach. The server

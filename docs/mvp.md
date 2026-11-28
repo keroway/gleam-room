@@ -2,7 +2,7 @@
 
 > **Scope note (2026-11, #763).** This document describes the MVP as built
 > and still running. Its non-goals (no authorization, connection-scoped
-> participants, anyone may reset) are the MVP's scope, not a permanent
+> participants, anyone may reset) were the MVP's scope, not a permanent
 > decision for the buzzer. The real-use buzzer contract that replaces parts
 > of it is [ADR 0010](adr/0010-buzzer-session-model.md) /
 > [`docs/buzzer-session.md`](buzzer-session.md); each part takes effect only
@@ -23,10 +23,13 @@ The MVP is successful when multiple independent browser clients can join the sam
 3. The browser establishes a WebSocket connection.
 4. The server joins the participant to the room.
 5. Multiple participants can be present concurrently.
-6. During an open round, each participant can press the buzzer once.
-7. The room assigns buzzer positions in the order commands are accepted.
+6. The creator is the host (#768). The host opens acceptance; while it is
+   open, each player can press the buzzer once. The host does not buzz.
+7. The room assigns buzzer positions in the order commands are accepted. The
+   first accepted buzz locks the question and names the answerer.
 8. All connected participants receive the updated ordered result.
-9. A reset command clears the current round and allows buzzing again.
+9. The host's "next question" clears the buzzes and waits for the next
+   opening.
 10. Leaving/disconnecting updates room presence.
 
 ## Functional requirements
@@ -61,11 +64,21 @@ The MVP is successful when multiple independent browser clients can join the sam
 - All clients receive the same ordered result.
 - Client-provided timestamps do not determine the winner.
 
-### Reset
+### Host, players and displays (#768)
 
-- A reset clears accepted buzzes for the current room.
-- The next accepted buzz becomes position 1.
-- The initial MVP does not require authenticated host privileges; the command may be available to any connected participant until authorization is designed.
+The MVP's reset, which anyone could send, is gone. Roles and phases follow
+[`docs/buzzer-session.md`](buzzer-session.md#roles-and-permissions):
+
+- The room's creator is the **host**: opens and closes acceptance, skips a
+  question, moves to the next question, hands the role to a connected player
+  and ends the session. The room checks every one of these commands; hiding
+  the buttons is only a guide.
+- **Players** buzz, only while acceptance is open (`open`) or after the
+  first buzz locked the question (`locked`; later buzzes are queued).
+- A **display** (`/r/<room code>/display`) shows the phase, the answerer and
+  the order in large type. It is not a participant and cannot send commands.
+- "Next question" (`next_question`) clears the accepted buzzes; the next
+  accepted buzz becomes position 1.
 
 ### Reconnect
 
@@ -166,19 +179,33 @@ Client messages:
 ```json
 {"type":"create","v":2,"display_name":"Alice"}
 {"type":"join","v":2,"room_id":"ABCD","display_name":"Alice"}
-{"type":"resume","v":2,"room_id":"ABCD","room_instance_id":"...","resume_token":"..."}
+{"type":"resume","v":2,"room_id":"ABCD","room_instance_id":"...","resume_token":"...","host_token":"..."}
+{"type":"watch","v":2,"room_id":"ABCD"}
 {"type":"leave"}
 {"type":"buzz","round_id":1,"request_id":"7"}
-{"type":"reset","round_id":1,"request_id":"8"}
+{"type":"open","round_id":1,"request_id":"8"}
+{"type":"close","round_id":1}
+{"type":"skip","round_id":1}
+{"type":"next_question","round_id":1}
+{"type":"transfer_host","participant_id":"..."}
+{"type":"end_session"}
 {"type":"sync"}
 {"type":"ping"}
 ```
 
-- `create` (#767) makes a new room and joins it as its creator. The reply is
-  the usual `state` plus `room_id` (the issued code) and `host_token`.
+- `create` (#767) makes a new room and joins it as its creator, who becomes
+  the host (#768). The reply is the usual `state` plus `room_id` (the issued
+  code) and `host_token`.
+- `resume` carries `host_token` only from the host's browser (#768). A
+  matching host token brings the host back even after its grace period ran
+  out; otherwise `resume_token` decides as before.
+- `watch` (#768) attaches a display. Its `state` has `self_role: "display"`
+  and no `self_id`; every command it sends is answered `forbidden`.
+- `open`/`close`/`skip`/`next_question`/`transfer_host`/`end_session` are the
+  host's commands (#768). From anyone else they are answered `forbidden`.
 - `round_id` names the round the client saw; a command for any other round
-  is rejected with `stale_round`, so two people pressing reset at once start
-  exactly one new round.
+  is rejected with `stale_round`, so a double click or a resend of
+  `next_question` starts exactly one new question.
 - `request_id` (optional, 1–64 characters) only correlates the direct reply.
 - `sync` asks for a fresh `state` after the client detected a missing
   revision. It counts toward the normal rate limit.
@@ -186,13 +213,16 @@ Client messages:
 Server messages:
 
 ```json
-{"type":"state","protocol_version":2,"room_instance_id":"...","self_id":"...","round_id":1,"revision":3,"participants":[{"participant_id":"...","display_name":"Alice","connected":true}],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}],"resume_token":"...","room_id":"K7M2QX","host_token":"..."}
+{"type":"state","protocol_version":2,"room_instance_id":"...","self_role":"host","round_id":1,"revision":3,"phase":"waiting","participants":[{"participant_id":"...","display_name":"Alice","connected":true,"role":"host"}],"buzzes":[{"participant_id":"...","display_name":"Alice","position":1}],"self_id":"...","resume_token":"...","room_id":"K7M2QX","host_token":"..."}
 {"type":"participant_joined","room_instance_id":"...","revision":4,"participant":{}}
 {"type":"participant_left","room_instance_id":"...","revision":5,"participant_id":"..."}
 {"type":"participant_disconnected","room_instance_id":"...","revision":6,"participant_id":"..."}
 {"type":"participant_reconnected","room_instance_id":"...","revision":7,"participant_id":"..."}
-{"type":"buzz_accepted","room_instance_id":"...","revision":6,"round_id":1,"participant_id":"...","display_name":"Alice","position":1}
+{"type":"buzz_accepted","phase":"locked","room_instance_id":"...","revision":6,"round_id":1,"participant_id":"...","display_name":"Alice","position":1}
 {"type":"round_reset","room_instance_id":"...","revision":7,"round_id":2}
+{"type":"phase_changed","room_instance_id":"...","revision":8,"round_id":2,"phase":"open"}
+{"type":"host_transferred","room_instance_id":"...","revision":9,"from":"...","to":"..."}
+{"type":"host_assigned","host_token":"..."}
 {"type":"reply","request_id":"7","result":{"type":"buzz_accepted","...":"..."}}
 {"type":"error","code":"...","message":"..."}
 ```
@@ -207,9 +237,13 @@ Server messages:
   join itself, so every later broadcast on that connection is newer than it.
 - `resume_token` is present only in the reply to the participant's own
   `join`/`create`; `room_id` and `host_token` only in the reply to `create`
-  (#767). The host token is kept by the creator's browser for the host role
-  (#768); no command checks it yet.
-- A buzz/reset with a `request_id` is answered with `reply`, wrapping either
+  (#767). After `transfer_host`, the new host alone receives
+  `host_assigned` with a fresh host token, and the previous one stops
+  working (#768).
+- `phase` is `waiting`, `open`, `locked` or `finished` (#768). `round_reset`
+  (the host's next question) always starts in `waiting` with no buzzes.
+- Participants carry `role` (`host` or `player`).
+- A command with a `request_id` is answered with `reply`, wrapping either
   the accepted change or the `error`. Errors raised before decoding
   (`rate_limited`, `invalid_message`, …) are also wrapped when the frame
   carried a readable `request_id`.
@@ -228,18 +262,25 @@ may vary for the same code.
 | `room_not_found` | A `join` named a room code that has no room (it ended, or the code is wrong). No room is created (#767). The connection stays open. |
 | `room_full` | The room rejected a `join` because it already holds the maximum number of participants (64). |
 | `already_buzzed` | This participant already buzzed for the current round. |
-| `round_full` | The current round already holds the maximum number of accepted buzzes (128, counting buzzes by participants who have since left). Further `buzz` messages are rejected until the round is reset; existing positions are unchanged (#691). |
+| `round_full` | The current round already holds the maximum number of accepted buzzes (128, counting buzzes by participants who have since left). Further `buzz` messages are rejected until the next question; existing positions are unchanged (#691). |
 | `buzzer_not_joined` | A `buzz` came from a connection that is not this participant's current connection (e.g. one already replaced by a `resume`), or for a participant no longer in the room (#766). |
 | `room_unavailable` | A `create` could not start a room, the server is at its `MAX_ROOMS` capacity (the `message` then says so; retrying will not help until another room ends), or a `join` did not get a reply in time. The connection is *not* closed when the room could not be started; it *is* closed (by the server) when a `join` reply timed out — clients must rely on the actual close event, not this code, to detect disconnection. |
-| `room_busy` | An already-joined connection's `buzz`/`reset` did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another `buzz`/`reset` (see "Reconnect" above, #570). |
-| `not_joined` | This connection sent `buzz`, `reset`, `sync` or `leave` before joining a room. |
+| `room_busy` | An already-joined connection's command did not get a reply in time. The connection is kept open, but the server has reset this session to "not joined" — the client must reconnect and re-join before sending another command (see "Reconnect" above, #570). |
+| `not_joined` | This connection sent a command, `sync` or `leave` before joining a room, or from a connection already replaced by a `resume`. |
+| `not_accepting` | A `buzz` arrived while the phase is `waiting` (#768). |
+| `forbidden` | The sender's role cannot do that (#768): a player or display sent a host command, a display buzzed, or the host buzzed. |
+| `invalid_phase` | A host command is not possible in the current phase, e.g. `open` while already open, `close` after the first buzz (#768). |
+| `session_finished` | The host ended the session (#768). Joining, buzzing and host commands are rejected; a resume still works so the results stay visible. |
+| `session_full` | `next_question` beyond the 200-question limit (#768). |
+| `invalid_target` | `transfer_host` named someone who is not a connected player (#768). |
+| `displays_full` | A `watch` for a room that already has 8 displays (#768). |
 | `room_gone` | A `resume` named a room code with no room, or a room instance that no longer exists (the room ended or the server restarted) (#766, #767). Join as a new participant. |
 | `resume_expired` | A `resume` named a participant who left or whose grace period expired (#766). Join as a new participant. |
 | `invalid_token` | A `resume` carried a token this room never issued, or a malformed token/instance (#766). Join as a new participant. |
 | `session_replaced` | The same participant resumed on another connection; this one is closed (#766). The client must not reconnect automatically. |
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
-| `stale_round` | A `buzz` or `reset` named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
+| `stale_round` | A `buzz` or host command named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
 | `client_outdated` | A `join`, `create` or `resume` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
@@ -266,14 +307,15 @@ README.md for the full response table.
 
 Using three browser tabs/windows:
 
-1. One creates a room; the other two open its invite URL. All three use
-   different display names.
-2. All three see the other participants.
-3. Reset the round.
+1. The host creates a room; three players open its invite URL. Everyone uses
+   a different display name. A fifth tab opens the display URL.
+2. Everyone sees the other participants; the host is marked as host.
+3. Buzzing before the host opens acceptance does nothing. The host opens.
 4. Press buzz in the order B, A, C.
-5. All three clients display the identical ordering B → A → C.
+5. All clients and the display show the identical ordering B → A → C, and B
+   as the answerer.
 6. A second buzz from B does not change the current ordering.
-7. Reset clears the results on all clients.
+7. The host's "next question" clears the results on all clients.
 8. Close one client; remaining clients eventually reflect that participant leaving.
 
 ## Explicit non-goals
@@ -281,7 +323,8 @@ Using three browser tabs/windows:
 - Fairness compensation for Internet latency.
 - Anti-cheat controls.
 - User accounts.
-- Host/admin authorization.
+- Host/admin authentication (the host role of #768 is a capability token,
+  not an account).
 - Persistent rooms/history.
 - Cross-node room routing.
 - Mobile-native apps.

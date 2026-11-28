@@ -1,35 +1,39 @@
-// buzz/reset クリックが WebSocket readyState 未チェックで CLOSING/CLOSED 時に
+// buzz/次の問題 クリックが WebSocket readyState 未チェックで CLOSING/CLOSED 時に
 // 無音に失敗する問題の回帰テスト（#122）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
 import { buzzerState } from "./buzzer-wire.mjs";
 
-test("OPEN な接続では buzz/reset クリックがそのまま送信される", () => {
-  const client = startClient();
-  try {
-    client.submitJoin();
-    const socket = client.latestSocket();
-    socket.handlers.open?.();
-    socket.handlers.message?.({
-      data: JSON.stringify(buzzerState()),
-    });
-    socket.sent = [];
+test("OPEN な接続では buzz/次の問題 クリックがそのまま送信される", () => {
+  for (const [selfRole, button, type] of [
+    ["player", "buzz", "buzz"],
+    ["host", "next-question", "next_question"],
+  ]) {
+    const client = startClient();
+    try {
+      client.submitJoin();
+      const socket = client.latestSocket();
+      socket.handlers.open?.();
+      socket.handlers.message?.({
+        data: JSON.stringify(buzzerState({ selfRole })),
+      });
+      socket.sent = [];
 
-    client.click("buzz");
-    client.click("reset");
+      client.click(button);
 
-    assert.deepEqual(
-      socket.sent.map((raw) => JSON.parse(raw).type),
-      ["buzz", "reset"],
-    );
-  } finally {
-    client.dispose();
+      assert.deepEqual(
+        socket.sent.map((raw) => JSON.parse(raw).type),
+        [type],
+      );
+    } finally {
+      client.dispose();
+    }
   }
 });
 
 for (const state of ["CLOSING", "CLOSED"]) {
-  test(`readyState が ${state} の間は buzz/reset クリックを送信せずログに残す`, () => {
+  test(`readyState が ${state} の間は buzz/次の問題 クリックを送信せずログに残す`, () => {
     const client = startClient();
     try {
       client.submitJoin();
@@ -47,7 +51,7 @@ for (const state of ["CLOSING", "CLOSED"]) {
       const logEntriesBefore = client.logEntryCount();
 
       client.click("buzz");
-      client.click("reset");
+      client.click("next-question");
 
       assert.equal(socket.sent.length, 0);
       assert.ok(client.logEntryCount() > logEntriesBefore);

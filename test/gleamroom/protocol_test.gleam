@@ -81,9 +81,58 @@ pub fn encode_pong_test() {
   assert protocol.encode_server_message(protocol.Pong) == "{\"type\":\"pong\"}"
 }
 
-pub fn decode_reset_test() {
-  assert protocol.decode_client_message("{\"type\":\"reset\",\"round_id\":1}")
-    == Ok(protocol.Reset(1, None))
+/// MVP の reset は v2 には無い（#768）。司会の next_question に置き換わった。
+pub fn decode_reset_is_no_longer_a_message_test() {
+  let assert Error(ProtocolError(code: "invalid_message", ..)) =
+    protocol.decode_client_message("{\"type\":\"reset\",\"round_id\":1}")
+}
+
+pub fn decode_host_commands_test() {
+  assert protocol.decode_client_message(
+      "{\"type\":\"open\",\"round_id\":1,\"request_id\":\"r1\"}",
+    )
+    == Ok(protocol.OpenAcceptance(1, Some("r1")))
+  assert protocol.decode_client_message("{\"type\":\"close\",\"round_id\":2}")
+    == Ok(protocol.CloseAcceptance(2, None))
+  assert protocol.decode_client_message("{\"type\":\"skip\",\"round_id\":3}")
+    == Ok(protocol.Skip(3, None))
+  assert protocol.decode_client_message(
+      "{\"type\":\"next_question\",\"round_id\":4}",
+    )
+    == Ok(protocol.NextQuestion(4, None))
+  assert protocol.decode_client_message(
+      "{\"type\":\"transfer_host\",\"participant_id\":\"p2\"}",
+    )
+    == Ok(protocol.TransferHost(ParticipantId("p2"), None))
+  assert protocol.decode_client_message("{\"type\":\"end_session\"}")
+    == Ok(protocol.EndSession(None))
+}
+
+pub fn decode_host_command_without_round_is_invalid_test() {
+  let assert Error(ProtocolError(code: "invalid_message", ..)) =
+    protocol.decode_client_message("{\"type\":\"open\"}")
+  let assert Error(ProtocolError(code: "invalid_message", ..)) =
+    protocol.decode_client_message(
+      "{\"type\":\"transfer_host\",\"participant_id\":\"\"}",
+    )
+}
+
+pub fn decode_watch_test() {
+  assert protocol.decode_client_message(
+      "{\"type\":\"watch\",\"v\":2,\"room_id\":\" abc234 \"}",
+    )
+    == Ok(protocol.Watch(RoomId("ABC234")))
+  assert protocol.decode_client_message(
+      "{\"type\":\"watch\",\"room_id\":\"ABC234\"}",
+    )
+    == Error(protocol.client_outdated_error)
+}
+
+pub fn decode_resume_with_a_host_token_test() {
+  let json =
+    "{\"type\":\"resume\",\"v\":2,\"room_id\":\"ABC234\",\"room_instance_id\":\"i1\",\"resume_token\":\"r\",\"host_token\":\"h\"}"
+  assert protocol.decode_client_message(json)
+    == Ok(protocol.Resume(RoomId("ABC234"), "i1", "r", Some("h")))
 }
 
 pub fn decode_join_missing_display_name_test() {
@@ -254,10 +303,14 @@ pub fn encode_state_test() {
   let message =
     State(
       instance_id: "i1",
-      self_id: ParticipantId("p1"),
+      self_id: Some(ParticipantId("p1")),
+      self_role: protocol.PlayerRole,
       round_id: 2,
       revision: 7,
-      participants: [Participant(ParticipantId("p1"), "Alice", True)],
+      phase: protocol.Open,
+      participants: [
+        Participant(ParticipantId("p1"), "Alice", True, protocol.PlayerRole),
+      ],
       buzzes: [BuzzResult(ParticipantId("p1"), "Alice", 1)],
       resume_token: None,
       created_room_id: None,
@@ -265,15 +318,19 @@ pub fn encode_state_test() {
     )
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"state\",\"protocol_version\":2,\"room_instance_id\":\"i1\",\"self_id\":\"p1\",\"round_id\":2,\"revision\":7,\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}]}"
+    == "{\"type\":\"state\",\"protocol_version\":2,\"room_instance_id\":\"i1\",\"self_role\":\"player\",\"round_id\":2,\"revision\":7,\"phase\":\"open\",\"participants\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true,\"role\":\"player\"}],\"buzzes\":[{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}],\"self_id\":\"p1\"}"
 }
 
 pub fn encode_participant_joined_test() {
   let message =
-    ParticipantJoined("i1", 3, Participant(ParticipantId("p1"), "Alice", True))
+    ParticipantJoined(
+      "i1",
+      3,
+      Participant(ParticipantId("p1"), "Alice", True, protocol.HostRole),
+    )
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"participant_joined\",\"room_instance_id\":\"i1\",\"revision\":3,\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true}}"
+    == "{\"type\":\"participant_joined\",\"room_instance_id\":\"i1\",\"revision\":3,\"participant\":{\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"connected\":true,\"role\":\"host\"}}"
 }
 
 pub fn encode_participant_left_test() {
@@ -284,15 +341,58 @@ pub fn encode_participant_left_test() {
 }
 
 pub fn encode_buzz_accepted_test() {
-  let message = BuzzAccepted("i1", 5, 2, ParticipantId("p1"), "Alice", 1)
+  let message =
+    BuzzAccepted("i1", 5, 2, ParticipantId("p1"), "Alice", 1, protocol.Locked)
 
   assert protocol.encode_server_message(message)
-    == "{\"type\":\"buzz_accepted\",\"room_instance_id\":\"i1\",\"revision\":5,\"round_id\":2,\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}"
+    == "{\"type\":\"buzz_accepted\",\"phase\":\"locked\",\"room_instance_id\":\"i1\",\"revision\":5,\"round_id\":2,\"participant_id\":\"p1\",\"display_name\":\"Alice\",\"position\":1}"
 }
 
 pub fn encode_round_reset_test() {
   assert protocol.encode_server_message(RoundReset("i1", 6, 3))
     == "{\"type\":\"round_reset\",\"room_instance_id\":\"i1\",\"revision\":6,\"round_id\":3}"
+}
+
+pub fn encode_phase_changed_test() {
+  assert protocol.encode_server_message(protocol.PhaseChanged(
+      "i1",
+      8,
+      3,
+      protocol.Waiting,
+    ))
+    == "{\"type\":\"phase_changed\",\"room_instance_id\":\"i1\",\"revision\":8,\"round_id\":3,\"phase\":\"waiting\"}"
+}
+
+pub fn encode_host_transferred_and_assigned_test() {
+  assert protocol.encode_server_message(protocol.HostTransferred(
+      "i1",
+      9,
+      ParticipantId("p1"),
+      ParticipantId("p2"),
+    ))
+    == "{\"type\":\"host_transferred\",\"room_instance_id\":\"i1\",\"revision\":9,\"from\":\"p1\",\"to\":\"p2\"}"
+  assert protocol.encode_server_message(protocol.HostAssigned("h2"))
+    == "{\"type\":\"host_assigned\",\"host_token\":\"h2\"}"
+}
+
+/// 会場表示の state には self_id が無く、self_role が display（#768）。
+pub fn encode_state_for_a_display_test() {
+  let encoded =
+    protocol.encode_server_message(State(
+      instance_id: "i1",
+      self_id: None,
+      self_role: protocol.DisplayRole,
+      round_id: 1,
+      revision: 0,
+      phase: protocol.Waiting,
+      participants: [],
+      buzzes: [],
+      resume_token: None,
+      created_room_id: None,
+      host_token: None,
+    ))
+  assert string.contains(encoded, "\"self_role\":\"display\"")
+  assert !string.contains(encoded, "self_id")
 }
 
 pub fn encode_reply_test() {
@@ -341,9 +441,11 @@ pub fn encode_state_for_the_creator_test() {
   let message =
     State(
       instance_id: "i1",
-      self_id: ParticipantId("p1"),
+      self_id: Some(ParticipantId("p1")),
+      self_role: protocol.HostRole,
       round_id: 1,
       revision: 1,
+      phase: protocol.Waiting,
       participants: [],
       buzzes: [],
       resume_token: Some("r"),

@@ -76,6 +76,10 @@ type RoomHandle {
     // join 時のスナップショットにあった room の世代（#765）。この接続へ送る
     // 全ての状態通知に付け、クライアントが前の room の通知と区別できるようにする。
     instance_id: String,
+    // 会場表示の接続か（#768）。会場表示は参加者ではないので、閉じるときは
+    // `detach` ではなく `unwatch` を送る。`participant_id` はどの参加者とも
+    // 一致しない値で、ここから送られたコマンドは room が拒否する。
+    is_display: Bool,
   )
 }
 
@@ -167,7 +171,11 @@ fn on_close(state: ConnectionState) -> Nil {
       //
       // 非同期に送る。閉じる接続は応答を待つ必要がなく、既に別の接続へ
       // 付け替わっていれば room が無視する。
-      room.detach(handle.subject, handle.participant_id, handle.session)
+      case handle.is_display {
+        True -> room.unwatch(handle.subject, handle.session)
+        False ->
+          room.detach(handle.subject, handle.participant_id, handle.session)
+      }
     }
   }
 }
@@ -336,12 +344,64 @@ fn handle_text(
               handle_join(state, connection, wire_room_id, display_name)
             Ok(protocol.Create(display_name)) ->
               handle_create(state, connection, display_name)
+            Ok(protocol.Watch(wire_room_id)) ->
+              handle_watch(state, connection, wire_room_id)
             Ok(protocol.Buzz(round_id, request_id)) ->
               handle_buzz(state, connection, round_id, request_id)
-            Ok(protocol.Reset(round_id, request_id)) ->
-              handle_reset(state, connection, round_id, request_id)
-            Ok(protocol.Resume(wire_room_id, instance_id, token)) ->
-              handle_resume(state, connection, wire_room_id, instance_id, token)
+            Ok(protocol.OpenAcceptance(round_id, request_id)) ->
+              handle_host_command(state, connection, "open", request_id, fn(by) {
+                room.OpenAcceptance(by, round_id)
+              })
+            Ok(protocol.CloseAcceptance(round_id, request_id)) ->
+              handle_host_command(
+                state,
+                connection,
+                "close",
+                request_id,
+                fn(by) { room.CloseAcceptance(by, round_id) },
+              )
+            Ok(protocol.Skip(round_id, request_id)) ->
+              handle_host_command(state, connection, "skip", request_id, fn(by) {
+                room.Skip(by, round_id)
+              })
+            Ok(protocol.NextQuestion(round_id, request_id)) ->
+              handle_host_command(
+                state,
+                connection,
+                "next_question",
+                request_id,
+                fn(by) { room.NextQuestion(by, round_id) },
+              )
+            Ok(protocol.TransferHost(to, request_id)) ->
+              handle_host_command(
+                state,
+                connection,
+                "transfer_host",
+                request_id,
+                fn(by) {
+                  room.TransferHost(
+                    by,
+                    room.participant_id(wire.participant_id_to_string(to)),
+                  )
+                },
+              )
+            Ok(protocol.EndSession(request_id)) ->
+              handle_host_command(
+                state,
+                connection,
+                "end_session",
+                request_id,
+                fn(by) { room.EndSession(by) },
+              )
+            Ok(protocol.Resume(wire_room_id, instance_id, token, host_token)) ->
+              handle_resume(
+                state,
+                connection,
+                wire_room_id,
+                instance_id,
+                token,
+                host_token,
+              )
             Ok(protocol.Leave) -> handle_leave(state, connection)
             Ok(protocol.Sync) -> handle_sync(state, connection)
             Ok(protocol.Ping) -> handle_ping(state, connection)
@@ -446,8 +506,16 @@ pub fn join_reject_code_and_message(
       "already_joined",
       "This connection has already joined a room.",
     )
+    room.JoinSessionFinished -> session_finished_error
   }
 }
+
+/// The answer to joining, buzzing or running the host's commands after the
+/// host ended the session (#768).
+pub const session_finished_error = #(
+  "session_finished",
+  "This session has ended.",
+)
 
 fn handle_join(
   state: ConnectionState,
@@ -594,13 +662,21 @@ fn complete_join(
         connection,
         snapshot_message(
           snapshot,
-          participant.id,
+          Some(participant.id),
           resume_token,
           created_room_id,
           host_token,
         ),
       )
-      attached(state, room_subject, participant_id, session, room_id, snapshot)
+      attached(
+        state,
+        room_subject,
+        participant_id,
+        session,
+        room_id,
+        snapshot,
+        False,
+      )
     }
     room.JoinReply(room.JoinRejected(_, reason), _, _, _) -> {
       logging.log(
@@ -637,6 +713,7 @@ fn attached(
   session: Subject(room.RoomEvent),
   room_id: registry.RoomId,
   snapshot: room.Snapshot,
+  is_display: Bool,
 ) -> Next(ConnectionState, ConnectionEvent) {
   let next_state =
     ConnectionState(
@@ -647,6 +724,7 @@ fn attached(
         session,
         room_id,
         snapshot.instance_id,
+        is_display,
       )),
     )
   let selector =
@@ -692,6 +770,7 @@ fn handle_resume(
   wire_room_id: wire.RoomId,
   instance_id: String,
   token: String,
+  host_token: Option(String),
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     Some(_) -> {
@@ -716,7 +795,13 @@ fn handle_resume(
         room_id,
         room_subject,
         connection,
-        room.resume_session(room_subject, token, instance_id, session),
+        room.resume_session(
+          room_subject,
+          token,
+          host_token,
+          instance_id,
+          session,
+        ),
       )
       case reply {
         room.Resumed(participant_id, snapshot) -> {
@@ -729,7 +814,7 @@ fn handle_resume(
           )
           send_server_message(
             connection,
-            snapshot_message(snapshot, participant_id, None, None, None),
+            snapshot_message(snapshot, Some(participant_id), None, None, None),
           )
           attached(
             state,
@@ -738,6 +823,7 @@ fn handle_resume(
             session,
             room_id,
             snapshot,
+            False,
           )
         }
         room.ResumeRejected(reason) -> {
@@ -760,6 +846,73 @@ fn handle_resume(
   }
 }
 
+/// 会場表示として部屋を見る（#768）。参加者にはならず、token も無い。
+/// 切れたら同じ `watch` で付け直せばよい。`participant_id` にはどの参加者
+/// とも一致しない値を入れ、この接続から送られたコマンドは room が拒否する。
+fn handle_watch(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  wire_room_id: wire.RoomId,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case state.room {
+    Some(handle) -> reject_already_joined(state, connection, handle)
+    None -> {
+      let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
+      use room_subject <- with_existing_room(
+        state,
+        connection,
+        room_id,
+        room_not_found_error,
+      )
+      let session = process.new_subject()
+      use reply <- with_join_reply(
+        state.registry,
+        room_id,
+        room_subject,
+        connection,
+        room.watch(room_subject, session),
+      )
+      case reply {
+        room.Watching(snapshot) -> {
+          logging.log(
+            logging.Info,
+            "display attached: room=" <> registry.room_id_to_string(room_id),
+          )
+          send_server_message(
+            connection,
+            snapshot_message(snapshot, None, None, None, None),
+          )
+          attached(
+            state,
+            room_subject,
+            room.participant_id(new_participant_id()),
+            session,
+            room_id,
+            snapshot,
+            True,
+          )
+        }
+        room.DisplaysFull -> {
+          logging.log(
+            logging.Info,
+            "display rejected: room="
+              <> registry.room_id_to_string(room_id)
+              <> ", reason=displays_full",
+          )
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(
+              "displays_full",
+              "This room already has the maximum number of displays.",
+            ),
+          )
+          mist.continue(state)
+        }
+      }
+    }
+  }
+}
+
 /// 明示的な退出（#766）。参加者をすぐに外し、resume token を無効にする。
 /// 退出した接続には用が無いので閉じる。最後の参加者なら room も止まる。
 fn handle_leave(
@@ -770,6 +923,10 @@ fn handle_leave(
     None -> {
       send_not_joined_error(connection, "leave", None)
       mist.continue(state)
+    }
+    Some(RoomHandle(is_display: True, ..) as handle) -> {
+      room.unwatch(handle.subject, handle.session)
+      mist.stop()
     }
     Some(handle) -> {
       case
@@ -796,21 +953,32 @@ fn handle_leave(
   }
 }
 
-/// The `state` message for a snapshot, seen from participant `self_id`.
-/// `resume_token` is set only when answering that participant's own join;
-/// `created_room_id` and `host_token` only when answering the creator (#767).
+/// The `state` message for a snapshot, seen from participant `self_id`, or
+/// from a display when `self_id` is `None` (#768). `resume_token` is set only
+/// when answering that participant's own join; `created_room_id` and
+/// `host_token` only when answering the creator (#767).
 fn snapshot_message(
   snapshot: room.Snapshot,
-  self_id: room.ParticipantId,
+  self_id: Option(room.ParticipantId),
   resume_token: Option(String),
   created_room_id: Option(String),
   host_token: Option(String),
 ) -> protocol.ServerMessage {
+  let self_role = case self_id {
+    None -> protocol.DisplayRole
+    Some(id) ->
+      case list.find(snapshot.participants, fn(p) { p.id == id }) {
+        Ok(room.Participant(role: room.Host, ..)) -> protocol.HostRole
+        _ -> protocol.PlayerRole
+      }
+  }
   protocol.State(
     instance_id: snapshot.instance_id,
-    self_id: to_wire_participant_id(self_id),
+    self_id: option.map(self_id, to_wire_participant_id),
+    self_role:,
     round_id: snapshot.round_id,
     revision: snapshot.revision,
+    phase: to_wire_phase(snapshot.phase),
     participants: list.map(snapshot.participants, to_wire_participant),
     buzzes: list.map(snapshot.buzzes, to_wire_buzz_result),
     resume_token:,
@@ -837,9 +1005,13 @@ fn handle_sync(
           // state を先に送る。溜まっている配信は state 以前のもの（重複として
           // 捨てられる）か、取得後に受理された新しいもの（state の次として
           // 適用される）なので、後から送れば表示が巻き戻らない。
+          let self_id = case handle.is_display {
+            True -> None
+            False -> Some(handle.participant_id)
+          }
           send_server_message(
             connection,
-            snapshot_message(snapshot, handle.participant_id, None, None, None),
+            snapshot_message(snapshot, self_id, None, None, None),
           )
           flush_queued_broadcasts(connection, handle)
           mist.continue(state)
@@ -878,8 +1050,44 @@ pub fn buzz_reject_code_and_message(
       "This connection has not joined the room yet.",
     )
     room.BuzzStaleRound -> #("stale_round", stale_round_message)
+    room.NotAccepting -> #(
+      "not_accepting",
+      "Buzzes are not being accepted right now. Wait for the host to open.",
+    )
+    room.BuzzSessionFinished -> session_finished_error
+    room.HostCannotBuzz -> #("forbidden", forbidden_message)
   }
 }
+
+/// Maps a `room.CommandRejectReason` (#768) to the `code`/`message` pair
+/// sent to the client.
+pub fn command_reject_code_and_message(
+  reason: room.CommandRejectReason,
+) -> #(String, String) {
+  case reason {
+    room.Forbidden -> #("forbidden", forbidden_message)
+    room.StaleRound -> #("stale_round", stale_round_message)
+    room.InvalidPhase -> #(
+      "invalid_phase",
+      "That is not possible at this stage of the question.",
+    )
+    room.SessionFinished -> session_finished_error
+    room.SessionFull -> #(
+      "session_full",
+      "This session has reached its question limit.",
+    )
+    room.InvalidTarget -> #(
+      "invalid_target",
+      "The host role can only be given to a connected player.",
+    )
+    room.CommandNotJoined -> #("not_joined", not_joined_message)
+  }
+}
+
+/// Sent when a command comes from someone whose role does not allow it
+/// (#768): a player or a display running a host command, or the host
+/// buzzing.
+pub const forbidden_message = "Your role in this room cannot do that."
 
 fn handle_buzz(
   state: ConnectionState,
@@ -933,15 +1141,18 @@ fn handle_buzz(
   }
 }
 
-fn handle_reset(
+/// 司会の操作（#768）を room へ送る。司会かどうか・段階・ラウンドの判定は
+/// すべて room が行い、ここは送られた接続の参加者を `by` として渡すだけ。
+fn handle_host_command(
   state: ConnectionState,
   connection: WebsocketConnection,
-  round_id: Int,
+  label: String,
   request_id: Option(String),
+  make: fn(room.ParticipantId) -> room.RoomCommand,
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
     None -> {
-      send_not_joined_error(connection, "reset", request_id)
+      send_not_joined_error(connection, label, request_id)
       mist.continue(state)
     }
     Some(handle) -> {
@@ -949,14 +1160,21 @@ fn handle_reset(
         state,
         connection,
         request_id,
-        room.dispatch(handle.subject, room.ResetRound(round_id), handle.session),
+        room.dispatch(
+          handle.subject,
+          make(handle.participant_id),
+          handle.session,
+        ),
       )
       logging.log(
         logging.Info,
-        "round reset "
+        "host command "
+          <> label
+          <> " "
           <> case event {
-          room.RoundReset(..) -> "accepted"
-          _ -> "rejected"
+          room.CommandRejected(reason) ->
+            "rejected (" <> string.inspect(reason) <> ")"
+          _ -> "accepted"
         }
           <> ": room="
           <> registry.room_id_to_string(handle.room_id)
@@ -1011,12 +1229,10 @@ fn send_direct_reply(
           let #(code, text) = buzz_reject_code_and_message(reason)
           Some(protocol.ProtocolErrorMessage(code, text))
         }
-        room.ResetRejected(room.ResetStaleRound) ->
-          Some(protocol.ProtocolErrorMessage("stale_round", stale_round_message))
-        // 付け替え済みの古い接続からの reset（#766）。応答しないと要求が
-        // 解決されないまま残る。
-        room.ResetRejected(room.ResetNotJoined) ->
-          Some(protocol.ProtocolErrorMessage("not_joined", not_joined_message))
+        room.CommandRejected(reason) -> {
+          let #(code, text) = command_reject_code_and_message(reason)
+          Some(protocol.ProtocolErrorMessage(code, text))
+        }
         _ -> None
       }
   }
@@ -1314,7 +1530,7 @@ pub fn room_event_to_server_message(
         revision,
         to_wire_participant_id(id),
       ))
-    room.BuzzAccepted(id, display_name, position, round_id, revision) ->
+    room.BuzzAccepted(id, display_name, position, round_id, phase, revision) ->
       Some(protocol.BuzzAccepted(
         instance_id,
         revision,
@@ -1322,9 +1538,27 @@ pub fn room_event_to_server_message(
         to_wire_participant_id(id),
         display_name,
         position,
+        to_wire_phase(phase),
       ))
     room.RoundReset(round_id, revision) ->
       Some(protocol.RoundReset(instance_id, revision, round_id))
+    room.PhaseChanged(phase, round_id, revision) ->
+      Some(protocol.PhaseChanged(
+        instance_id,
+        revision,
+        round_id,
+        to_wire_phase(phase),
+      ))
+    room.HostTransferred(from, to, revision) ->
+      Some(protocol.HostTransferred(
+        instance_id,
+        revision,
+        to_wire_participant_id(from),
+        to_wire_participant_id(to),
+      ))
+    // 新しい司会本人にだけ届く（room がその接続にだけ送る）。token なので
+    // ログには出さない。
+    room.HostAssigned(token) -> Some(protocol.HostAssigned(token))
     room.ParticipantDisconnected(id, revision) ->
       Some(protocol.ParticipantDisconnected(
         instance_id,
@@ -1343,7 +1577,7 @@ pub fn room_event_to_server_message(
     room.JoinRejected(_, _) -> None
     room.LeaveRejected(_, _) -> None
     room.BuzzRejected(_, _) -> None
-    room.ResetRejected(_) -> None
+    room.CommandRejected(_) -> None
   }
 }
 
@@ -1356,7 +1590,21 @@ pub fn to_wire_participant(
     id: to_wire_participant_id(participant.id),
     display_name: participant.display_name,
     connected: participant.connected,
+    role: case participant.role {
+      room.Host -> protocol.HostRole
+      room.Player -> protocol.PlayerRole
+    },
   )
+}
+
+/// Converts a domain `Phase` to its wire representation (#768).
+pub fn to_wire_phase(phase: room.Phase) -> protocol.Phase {
+  case phase {
+    room.Waiting -> protocol.Waiting
+    room.Open -> protocol.Open
+    room.Locked -> protocol.Locked
+    room.Finished -> protocol.Finished
+  }
 }
 
 /// Converts a domain `ParticipantId` to its wire representation. Pure and

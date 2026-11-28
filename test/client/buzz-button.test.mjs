@@ -1,7 +1,9 @@
 // BUZZ ボタンの押下済み状態（#576）。#765 以降は推測をやめ、サーバの buzz 一覧と
 // 応答待ちの要求（request_id）だけから決める。以前の相関IDなしの推測で個別に
 // 塞いでいた取り違え（#689/#690/#708/#710/#724）は、ここで同じ場面を再現して
-// 起きないことを確かめる。
+// 起きないことを確かめる。#768 以降、次の問題へ進めるのは司会だけなので、
+// 参加者が自分で reset を送る場面（#689/#690/#708）はもう起きない。次の問題は
+// 受付前（waiting）から始まり、司会が受付を開くまで BUZZ は押せない。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
@@ -9,6 +11,7 @@ import {
   buzzerState,
   buzzAccepted,
   roundReset,
+  phaseChanged,
   reply,
   error,
   lastSent,
@@ -80,41 +83,6 @@ test("BUZZ が拒否されたらボタンが有効に戻る（rate_limited な�
   }
 });
 
-test("BUZZ と reset を続けて送り、reset だけが拒否されても BUZZ の応答待ちは残る（#708 の場面）", () => {
-  const client = startClient();
-  try {
-    const socket = joinAs(client);
-    client.click("buzz");
-    const buzzId = lastSent(socket, "buzz").request_id;
-    client.click("reset");
-    const resetId = lastSent(socket, "reset").request_id;
-    send(socket, reply(resetId, error("rate_limited")));
-    assert.equal(client.isDisabled("buzz"), true, "reset の拒否で BUZZ の応答待ちが解除された");
-    send(socket, reply(buzzId, error("rate_limited")));
-    assert.equal(client.isDisabled("buzz"), false, "両方の拒否後もボタンが無効のまま");
-  } finally {
-    client.dispose();
-  }
-});
-
-test("受理済み BUZZ の後の reset が拒否されても押下済みのまま（#690 の場面）", () => {
-  const client = startClient();
-  try {
-    const socket = joinAs(client, aliceAndBob());
-    client.click("buzz");
-    send(
-      socket,
-      reply(lastSent(socket, "buzz").request_id,
-        buzzAccepted(2, { participantId: "alice", displayName: "Alice" })),
-    );
-    client.click("reset");
-    send(socket, reply(lastSent(socket, "reset").request_id, error("rate_limited")));
-    assert.equal(client.isDisabled("buzz"), true, "reset 拒否で押下済み状態が解除された");
-  } finally {
-    client.dispose();
-  }
-});
-
 test("他参加者の受理通知の後に自分の BUZZ が拒否されたらボタンが有効に戻る（#710 の場面）", () => {
   const client = startClient();
   try {
@@ -128,7 +96,7 @@ test("他参加者の受理通知の後に自分の BUZZ が拒否されたら�
   }
 });
 
-test("round_reset で次の round に進み、ボタンが有効に戻る", () => {
+test("次の問題（round_reset）で受付前に戻り、司会が受付を開くと押せる", () => {
   const client = startClient();
   try {
     const socket = joinAs(client, aliceAndBob());
@@ -139,8 +107,10 @@ test("round_reset で次の round に進み、ボタンが有効に戻る", () =
         buzzAccepted(2, { participantId: "alice", displayName: "Alice" })),
     );
     send(socket, roundReset(3, 2));
-    assert.equal(client.isDisabled("buzz"), false, "round_reset 後もボタンが無効のまま");
+    assert.equal(client.isDisabled("buzz"), true, "受付前なのに押せる");
     assert.deepEqual(client.childTextContents("buzzes"), []);
+    send(socket, phaseChanged(4, "open", 2));
+    assert.equal(client.isDisabled("buzz"), false, "受付開始後もボタンが無効のまま");
     client.click("buzz");
     assert.equal(lastSent(socket, "buzz").round_id, 2);
   } finally {
@@ -148,30 +118,16 @@ test("round_reset で次の round に進み、ボタンが有効に戻る", () =
   }
 });
 
-test("reset の応答後に送った BUZZ は reset の配信コピーで押下可能に戻らない（#689 の場面）", () => {
-  const client = startClient();
-  try {
-    const socket = joinAs(client, aliceAndBob());
-    client.click("reset");
-    send(socket, reply(lastSent(socket, "reset").request_id, roundReset(2, 2)));
-    client.click("buzz");
-    send(socket, roundReset(2, 2));
-    assert.equal(client.isDisabled("buzz"), true, "配信コピーで押下済み状態が解除された");
-  } finally {
-    client.dispose();
-  }
-});
-
-test("reset の応答前に送った BUZZ が新しい round で成功したらボタンは無効のまま（#724 の場面）", () => {
+test("次の問題で送った BUZZ が成功したらボタンは無効のまま（#724 の場面）", () => {
   const client = startClient();
   try {
     const socket = joinAs(client, aliceAndBob({
       buzzes: [{ participant_id: "bob", display_name: "Bob", position: 1 }],
     }));
-    client.click("reset");
     send(socket, roundReset(2, 2));
+    send(socket, phaseChanged(3, "open", 2));
     client.click("buzz");
-    send(socket, buzzAccepted(3, { participantId: "alice", displayName: "Alice", roundId: 2 }));
+    send(socket, buzzAccepted(4, { participantId: "alice", displayName: "Alice", roundId: 2 }));
     assert.equal(client.isDisabled("buzz"), true, "成功した本人のボタンが有効に戻った");
   } finally {
     client.dispose();
@@ -185,7 +141,8 @@ test("reset 後の他参加者の成功通知では自分のボタンは有効�
       buzzes: [{ participant_id: "bob", display_name: "Bob", position: 1 }],
     }));
     send(socket, roundReset(2, 2));
-    send(socket, buzzAccepted(3, { participantId: "bob", displayName: "Bob", roundId: 2 }));
+    send(socket, phaseChanged(3, "open", 2));
+    send(socket, buzzAccepted(4, { participantId: "bob", displayName: "Bob", roundId: 2 }));
     assert.equal(client.isDisabled("buzz"), false, "他参加者の通知で無効化された");
   } finally {
     client.dispose();
@@ -200,6 +157,7 @@ test("前の round を名指しした BUZZ は stale_round で拒否され、新
     const staleId = lastSent(socket, "buzz").request_id;
     send(socket, reply(staleId, error("stale_round")));
     send(socket, roundReset(2, 2));
+    send(socket, phaseChanged(3, "open", 2));
     assert.equal(client.isDisabled("buzz"), false);
   } finally {
     client.dispose();
@@ -251,10 +209,11 @@ test("応答待ちの要求は上限を超えると古いものから捨てる",
   const client = startClient();
   try {
     const socket = joinAs(client);
-    for (let i = 0; i < 40; i += 1) client.click("reset");
-    client.click("buzz");
+    // 押下を40回送る（ボタンは応答待ちで無効になるが、harness の click は
+    // 無効でも発火する）。上限を超えた古い要求から捨てる。
+    for (let i = 0; i < 40; i += 1) client.click("buzz");
     const ids = socket.sent.map((d) => JSON.parse(d)).filter((m) => m.request_id);
-    // 最初の reset の応答は既に捨てた要求への応答になるが、例外にならない。
+    // 最初の要求の応答は既に捨てた要求への応答になるが、例外にならない。
     send(socket, reply(ids[0].request_id, error("rate_limited")));
     assert.equal(client.isDisabled("buzz"), true, "最新の BUZZ の応答待ちが消えた");
   } finally {

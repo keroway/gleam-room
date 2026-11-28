@@ -51,6 +51,19 @@ pub fn index_html() -> String {
     touch-action: manipulation;
   }
   #buzz:disabled { opacity: 0.5; }
+  #phase { font-size: 1.6rem; font-weight: bold; margin: 0.5rem 0; }
+  #phase[data-phase=\"open\"] { color: green; }
+  #phase[data-phase=\"locked\"] { color: darkorange; }
+  #notice { min-height: 1.5em; }
+  #host-panel { border: 2px solid currentColor; border-radius: 0.5rem; padding: 0 1rem 1rem; }
+  #host-panel .controls { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+  #host-panel .controls button { flex: 1 1 9rem; }
+  #host-panel select { font-size: 1rem; padding: 0.5rem; }
+  /* 会場表示（#768）。離れた席からも読めるよう大きく出し、操作部品は出さない。 */
+  body.display-mode { max-width: none; }
+  body.display-mode #phase { font-size: 4rem; text-align: center; }
+  body.display-mode #buzzes { font-size: 2.5rem; }
+  body.display-mode #participant-count { font-size: 1.5rem; }
   #participants { padding-left: 1.2rem; }
   #log {
     height: 12rem;
@@ -88,11 +101,30 @@ pub fn index_html() -> String {
 
 <p id=\"status\" role=\"status\" aria-live=\"polite\" data-state=\"disconnected\">未接続</p>
 
+<p id=\"phase\" aria-live=\"polite\" hidden></p>
+<p id=\"notice\" role=\"status\" aria-live=\"polite\"></p>
+
+<p id=\"player-help\" hidden>司会が受付を始めたら BUZZ を押してください。一番早く押した人が回答者です。押せるのは1問につき1回です。</p>
 <button id=\"buzz\" disabled>BUZZ</button>
-<p>
-  <button id=\"reset\" disabled>次の問題へ（押した順をリセット）</button>
-  <button id=\"leave\" disabled>退出する</button>
-</p>
+
+<section id=\"host-panel\" hidden aria-labelledby=\"host-heading\">
+  <h2 id=\"host-heading\">司会の操作</h2>
+  <p>問題を読み上げたら「受付開始」。最初に押した人が回答者になり、受付は自動で締まります。答えが出たら「次の問題へ」。誰も答えられないときは「この問題を閉じる」。</p>
+  <div class=\"controls\">
+    <button type=\"button\" id=\"open-acceptance\" disabled>受付開始</button>
+    <button type=\"button\" id=\"close-acceptance\" disabled>受付を止める</button>
+    <button type=\"button\" id=\"skip\" disabled>この問題を閉じる</button>
+    <button type=\"button\" id=\"next-question\" disabled>次の問題へ</button>
+  </div>
+  <p><a id=\"display-link\" target=\"_blank\" rel=\"noopener\">会場表示を開く</a>（プロジェクタや大きな画面に映す用。操作はできません）</p>
+  <p>
+    <label>司会を渡す相手 <select id=\"transfer-target\"></select></label>
+    <button type=\"button\" id=\"transfer-host\" disabled>司会を渡す</button>
+  </p>
+  <p><button type=\"button\" id=\"end-session\" disabled>部屋を終了する</button></p>
+</section>
+
+<p><button id=\"leave\" disabled>退出する</button></p>
 
 <section id=\"invite\" hidden aria-labelledby=\"invite-heading\">
   <h2 id=\"invite-heading\">参加者を招待する</h2>
@@ -103,7 +135,9 @@ pub fn index_html() -> String {
   <p><span id=\"invite-qr-hint\">スマホのカメラでQRコードを読み取るか、招待URLを送ってください。</span>招待から入った人は名前を入れるだけで参加できます。</p>
 </section>
 
-<h2>参加者</h2>
+<p id=\"display-help\" hidden>この画面は会場のスクリーン用です。操作はできません。</p>
+
+<h2>参加者 <span id=\"participant-count\"></span></h2>
 <ul id=\"participants\"></ul>
 
 <h2>押した順</h2>
@@ -135,8 +169,21 @@ pub fn index_html() -> String {
   const inviteQrEl = document.getElementById(\"invite-qr\");
   const inviteQrHintEl = document.getElementById(\"invite-qr-hint\");
   const buzzButton = document.getElementById(\"buzz\");
-  const resetButton = document.getElementById(\"reset\");
   const leaveButton = document.getElementById(\"leave\");
+  const phaseEl = document.getElementById(\"phase\");
+  const noticeEl = document.getElementById(\"notice\");
+  const playerHelpEl = document.getElementById(\"player-help\");
+  const displayHelpEl = document.getElementById(\"display-help\");
+  const participantCountEl = document.getElementById(\"participant-count\");
+  const hostPanel = document.getElementById(\"host-panel\");
+  const openButton = document.getElementById(\"open-acceptance\");
+  const closeButton = document.getElementById(\"close-acceptance\");
+  const skipButton = document.getElementById(\"skip\");
+  const nextQuestionButton = document.getElementById(\"next-question\");
+  const displayLink = document.getElementById(\"display-link\");
+  const transferSelect = document.getElementById(\"transfer-target\");
+  const transferButton = document.getElementById(\"transfer-host\");
+  const endButton = document.getElementById(\"end-session\");
   const participantsEl = document.getElementById(\"participants\");
   const buzzesEl = document.getElementById(\"buzzes\");
   const logEl = document.getElementById(\"log\");
@@ -146,6 +193,12 @@ pub fn index_html() -> String {
   let buzzes = [];
   let selfId = null;
   let isConnected = false;
+  // 受付の段階と自分の役割（#768）。どちらもサーバの state と通知だけで決める。
+  // 画面のボタンを隠すのは操作の案内で、権限はサーバが確かめる。
+  let phase = null;
+  let selfRole = null;
+  // 「部屋を終了する」は取り消せないので、2回押して確定する。
+  let endArmed = false;
   // サーバ権威の状態の位置（#765）。通知は room_instance_id が一致し、
   // revision がちょうど次のものだけを適用する。内容を比べて新旧を推測しない。
   let instanceId = null;
@@ -170,6 +223,9 @@ pub fn index_html() -> String {
   let nextRequestId = 1;
 
   const PROTOCOL_VERSION = 2;
+  const PHASES = [\"waiting\", \"open\", \"locked\", \"finished\"];
+  // /r/部屋コード/display で開いた会場表示（#768）。
+  const displayMode = /^[/]r[/][^/]+[/]display[/]?$/.test(location.pathname ?? \"\");
   const WS_PATH = \"/ws\";
   // このタブで参加した部屋と resume token（#766）。タブ単位の sessionStorage に
   // 置くので、再読み込みでは同じ参加者に戻り、新しいタブは別の人として参加する。
@@ -213,15 +269,20 @@ pub fn index_html() -> String {
     if (roomId === null) {
       return { type: \"create\", v: PROTOCOL_VERSION, display_name: displayName };
     }
+    // 会場表示は参加者にならず、token も持たない（#768）。
+    if (displayMode) return { type: \"watch\", v: PROTOCOL_VERSION, room_id: roomId };
     const saved = loadResume();
     if (saved && saved.room_id === roomId && saved.display_name === displayName) {
-      return {
+      const resume = {
         type: \"resume\",
         v: PROTOCOL_VERSION,
         room_id: roomId,
         room_instance_id: saved.room_instance_id,
         resume_token: saved.resume_token,
       };
+      // 司会は司会 token も添える。猶予が切れた後でも司会として戻れる（#768）。
+      if (typeof saved.host_token === \"string\") resume.host_token = saved.host_token;
+      return resume;
     }
     return { type: \"join\", v: PROTOCOL_VERSION, room_id: roomId, display_name: displayName };
   }
@@ -233,11 +294,15 @@ pub fn index_html() -> String {
     instanceId = null;
     revision = 0;
     roundId = null;
+    phase = null;
+    selfRole = null;
+    noticeEl.textContent = \"\";
     clearSyncRetry();
     syncRetries = 0;
     pending = new Map();
     renderParticipants();
     renderBuzzes();
+    renderRoleView();
     hideInvite();
     // 作成の応答（部屋コード付きの state）を受け取る前に接続が終わった。
     // 部屋が二重にできないよう、作成は自動で送り直さない（#767）。
@@ -262,6 +327,8 @@ pub fn index_html() -> String {
   }
 
   function showInvite(roomId) {
+    displayLink.href = `${inviteUrl(roomId)}/display`;
+    if (displayMode) return;
     const url = inviteUrl(roomId);
     inviteCodeEl.textContent = roomId;
     inviteUrlInput.value = url;
@@ -323,7 +390,7 @@ pub fn index_html() -> String {
 
   function invitedRoomFromPath() {
     // サーバは空のパス要素を無視するので、末尾の / も同じ招待として扱う。
-    const match = /^[/]r[/]([^/]+)[/]?$/.exec(location.pathname ?? \"\");
+    const match = /^[/]r[/]([^/]+)(?:[/]display)?[/]?$/.exec(location.pathname ?? \"\");
     if (!match) return null;
     let roomId;
     try {
@@ -349,7 +416,78 @@ pub fn index_html() -> String {
   }
 
   function updateBuzzButton() {
-    buzzButton.disabled = !isConnected || hasBuzzed();
+    buzzButton.disabled =
+      !isConnected ||
+      selfRole !== \"player\" ||
+      (phase !== \"open\" && phase !== \"locked\") ||
+      hasBuzzed();
+  }
+
+  function answererName() {
+    const first = buzzes.find((b) => b.position === 1);
+    return first ? first.display_name : null;
+  }
+
+  function phaseText() {
+    switch (phase) {
+      case \"waiting\":
+        return selfRole === \"host\" ? \"受付前（「受付開始」で始まります）\" : \"受付前：司会が始めるのを待っています\";
+      case \"open\":
+        return selfRole === \"player\" ? \"受付中：BUZZ を押してください\" : \"受付中\";
+      case \"locked\":
+        return `回答者：${answererName() ?? \"\"}`;
+      case \"finished\":
+        return \"この部屋は終了しました\";
+      default:
+        return \"\";
+    }
+  }
+
+  // 役割と段階に合わせて、出す部品と押せるボタンを決める（#768）。
+  function renderRoleView() {
+    const joined = isConnected && phase !== null;
+    phaseEl.hidden = !joined;
+    phaseEl.textContent = phaseText();
+    phaseEl.dataset.phase = phase ?? \"\";
+    playerHelpEl.hidden = !joined || selfRole !== \"player\" || phase === \"finished\";
+    buzzButton.hidden = selfRole === \"host\" || displayMode;
+    displayHelpEl.hidden = !displayMode;
+    leaveButton.hidden = displayMode;
+    const isHost = joined && selfRole === \"host\";
+    hostPanel.hidden = !isHost;
+    const running = isHost && phase !== \"finished\";
+    openButton.disabled = !(running && phase === \"waiting\");
+    closeButton.disabled = !(running && phase === \"open\");
+    skipButton.disabled = !(running && (phase === \"open\" || phase === \"locked\"));
+    nextQuestionButton.disabled = !running;
+    endButton.disabled = !running;
+    if (!running) disarmEnd();
+    renderTransferTargets(running);
+    updateBuzzButton();
+  }
+
+  // 司会を渡せるのは接続中の参加者だけ（サーバも同じ条件で確かめる）。
+  function renderTransferTargets(running) {
+    const previous = transferSelect.value;
+    const targets = [...participants.values()].filter(
+      (p) => p.role !== \"host\" && p.connected !== false,
+    );
+    transferSelect.replaceChildren(
+      ...targets.map((p) => {
+        const option = document.createElement(\"option\");
+        option.value = p.participant_id;
+        option.textContent = p.display_name;
+        return option;
+      }),
+    );
+    if (targets.some((p) => p.participant_id === previous)) transferSelect.value = previous;
+    else transferSelect.value = targets[0]?.participant_id ?? \"\";
+    transferButton.disabled = !running || targets.length === 0;
+  }
+
+  function disarmEnd() {
+    endArmed = false;
+    endButton.textContent = \"部屋を終了する\";
   }
 
   function setConnected(connected) {
@@ -361,11 +499,10 @@ pub fn index_html() -> String {
     createButton.disabled = connected;
     createNameInput.disabled = connected;
     // 参加中は入力欄を畳み、狭い画面でも BUZZ を上の方に出す。
-    entryEl.hidden = connected;
+    entryEl.hidden = connected || displayMode;
     isConnected = connected;
-    updateBuzzButton();
-    resetButton.disabled = !connected;
     leaveButton.disabled = !connected;
+    renderRoleView();
   }
 
   function renderParticipants() {
@@ -373,10 +510,14 @@ pub fn index_html() -> String {
       ...[...participants.values()].map((p) => {
         const li = document.createElement(\"li\");
         // 切断中（猶予内）の参加者は、戻ってくるまで印を付けて残す（#766）。
-        li.textContent = p.connected === false ? `${p.display_name}（切断中）` : p.display_name;
+        const role = p.role === \"host\" ? \"（司会）\" : \"\";
+        const away = p.connected === false ? \"（切断中）\" : \"\";
+        li.textContent = `${p.display_name}${role}${away}`;
         return li;
       }),
     );
+    const players = [...participants.values()].filter((p) => p.role !== \"host\").length;
+    participantCountEl.textContent = phase === null ? \"\" : `（${players}人）`;
   }
 
   function renderBuzzes() {
@@ -397,7 +538,8 @@ pub fn index_html() -> String {
     isObject(p) &&
     typeof p.participant_id === \"string\" &&
     typeof p.display_name === \"string\" &&
-    (p.connected === undefined || typeof p.connected === \"boolean\");
+    (p.connected === undefined || typeof p.connected === \"boolean\") &&
+    (p.role === undefined || p.role === \"host\" || p.role === \"player\");
   const isBuzz = (b) =>
     isObject(b) &&
     typeof b.participant_id === \"string\" &&
@@ -473,7 +615,9 @@ pub fn index_html() -> String {
       !message.buzzes.every(isBuzz) ||
       !hasPosition(message) ||
       !Number.isInteger(message.round_id) ||
-      typeof message.self_id !== \"string\"
+      !PHASES.includes(message.phase) ||
+      ![\"host\", \"player\", \"display\"].includes(message.self_role) ||
+      (message.self_role !== \"display\" && typeof message.self_id !== \"string\")
     ) {
       log(`state message missing expected fields: ${JSON.stringify(message)}`);
       return;
@@ -490,7 +634,9 @@ pub fn index_html() -> String {
     roundId = message.round_id;
     clearSyncRetry();
     syncRetries = 0;
-    selfId = message.self_id;
+    selfId = message.self_role === \"display\" ? null : message.self_id;
+    selfRole = message.self_role;
+    phase = message.phase;
     // 作った部屋のコードは作成の応答でだけ届く（#767）。以後の再接続はこの
     // 部屋への resume/join になり、作成を繰り返さない。招待 URL にもしておき、
     // 再読み込みしても同じ部屋に戻れるようにする。
@@ -503,8 +649,8 @@ pub fn index_html() -> String {
     }
     pendingCreate = null;
     // join の応答にだけ resume token が付く（#766）。resume の応答には付かず、
-    // 保存済みのものをそのまま使い続ける。司会 token（#767）は作成の応答に
-    // だけ付く。使うのは司会の役割が入る #768 から。
+    // 保存済みのものをそのまま使い続ける。司会 token（#767）は作成の応答と、
+    // 移譲で司会になったときの host_assigned（#768）でだけ届く。
     if (typeof message.resume_token === \"string\" && lastJoin) {
       const saved = {
         room_id: lastJoin.roomId,
@@ -521,7 +667,8 @@ pub fn index_html() -> String {
     renderParticipants();
     renderBuzzes();
     if (lastJoin) showInvite(lastJoin.roomId);
-    log(`state: ${message.participants.length} participant(s), round ${roundId}`);
+    renderRoleView();
+    log(`state: ${message.participants.length} participant(s), round ${roundId}, ${phase}, ${selfRole}`);
   }
 
   // 状態変更の通知（直接応答の中身を含む）を適用する。適用したら true。
@@ -574,6 +721,7 @@ pub fn index_html() -> String {
           display_name: message.display_name,
           position: message.position,
         });
+        if (PHASES.includes(message.phase)) phase = message.phase;
         renderBuzzes();
         log(`buzz accepted: ${message.participant_id} (#${message.position})`);
         break;
@@ -585,16 +733,75 @@ pub fn index_html() -> String {
         if (admit(message) !== \"apply\") return false;
         roundId = message.round_id;
         buzzes = [];
+        phase = \"waiting\";
         renderBuzzes();
-        log(`round reset (round ${roundId})`);
+        log(`round reset: next question (round ${roundId})`);
         break;
+      case \"phase_changed\":
+        if (!hasPosition(message) || !PHASES.includes(message.phase) || !Number.isInteger(message.round_id)) {
+          log(`phase_changed message missing expected fields: ${JSON.stringify(message)}`);
+          return false;
+        }
+        if (admit(message) !== \"apply\") return false;
+        phase = message.phase;
+        log(`phase: ${phase}`);
+        break;
+      case \"host_transferred\": {
+        if (!hasPosition(message) || typeof message.from !== \"string\" || typeof message.to !== \"string\") {
+          log(`host_transferred message missing expected fields: ${JSON.stringify(message)}`);
+          return false;
+        }
+        if (admit(message) !== \"apply\") return false;
+        for (const [id, role] of [[message.from, \"player\"], [message.to, \"host\"]]) {
+          const participant = participants.get(id);
+          if (participant) participants.set(id, { ...participant, role });
+        }
+        if (message.from === selfId) {
+          selfRole = \"player\";
+          forgetHostToken();
+          noticeEl.textContent = \"司会を渡しました。これからは参加者として BUZZ できます\";
+        }
+        if (message.to === selfId) {
+          selfRole = \"host\";
+          noticeEl.textContent = \"あなたが司会になりました\";
+        }
+        renderParticipants();
+        log(`host: ${participants.get(message.to)?.display_name ?? message.to}`);
+        break;
+      }
       default:
         log(`unrecognized message: ${JSON.stringify(message)}`);
         return false;
     }
     revision = message.revision;
+    renderRoleView();
     return true;
   }
+
+  // 司会 token を保存し直す（#768）。移譲で司会になったときに届く。
+  function rememberHostToken(token) {
+    const saved = loadResume();
+    if (saved) saveResume({ ...saved, host_token: token });
+  }
+
+  function forgetHostToken() {
+    const saved = loadResume();
+    if (saved && \"host_token\" in saved) {
+      const { host_token: _dropped, ...rest } = saved;
+      saveResume(rest);
+    }
+  }
+
+  // 操作が通らなかった理由（#768）。接続は続く。
+  const COMMAND_PROBLEMS = {
+    not_accepting: \"まだ受付が始まっていません\",
+    forbidden: \"この操作は司会だけができます\",
+    invalid_phase: \"今の段階ではその操作はできません\",
+    stale_round: \"画面が古い問題のままでした。最新の状態を表示しています\",
+    session_finished: \"この部屋は終了しています\",
+    session_full: \"問題数の上限（200問）に達しました\",
+    invalid_target: \"司会を渡せるのは接続中の参加者だけです\",
+  };
 
   // 同じ参加者に戻れなかった理由（#766）。どれも新規参加し直せば続けられる。
   const RESUME_FAILURES = {
@@ -662,6 +869,20 @@ pub fn index_html() -> String {
       if (Object.hasOwn(JOIN_PROBLEMS, message.code)) showProblem(JOIN_PROBLEMS[message.code]);
       return;
     }
+    if (!isConnected && (message.code === \"session_finished\" || message.code === \"displays_full\")) {
+      // 参加前の拒否（#768）。部屋は続いていない／会場表示が多すぎる。
+      endParticipation(
+        message.code === \"session_finished\"
+          ? \"この部屋は終了しています。新しく部屋を作ることもできます\"
+          : \"この部屋の会場表示は上限（8画面）に達しています\",
+        \"disconnected\",
+      );
+      if (message.code === \"session_finished\") createForm.hidden = false;
+      return;
+    }
+    if (Object.hasOwn(COMMAND_PROBLEMS, message.code)) {
+      noticeEl.textContent = COMMAND_PROBLEMS[message.code];
+    }
     // 押下済みだとサーバが言うのに手元の一覧に無いなら、どこかで通知を
     // 取りこぼしている。内容を推測せず state を取り直す（#765）。
     if (message.code === \"already_buzzed\") requestSync();
@@ -692,10 +913,16 @@ pub fn index_html() -> String {
       case \"error\":
         handleError(message);
         break;
+      case \"host_assigned\":
+        // 移譲で司会になった本人にだけ届く（#768）。状態の変更ではないので
+        // revision は無い。token はログにも画面にも出さない。
+        if (typeof message.host_token === \"string\") rememberHostToken(message.host_token);
+        log(\"received the host role\");
+        break;
       default:
         applyChange(message);
     }
-    updateBuzzButton();
+    renderRoleView();
   }
 
   function sendRequest(type) {
@@ -712,8 +939,34 @@ pub fn index_html() -> String {
     updateBuzzButton();
   }
 
-  buzzButton.addEventListener(\"click\", () => sendRequest(\"buzz\"));
-  resetButton.addEventListener(\"click\", () => sendRequest(\"reset\"));
+  function sendCommand(message) {
+    const requestId = String(nextRequestId++);
+    sendIfOpen({ ...message, request_id: requestId });
+  }
+
+  buzzButton.addEventListener(\"click\", () => {
+    noticeEl.textContent = \"\";
+    sendRequest(\"buzz\");
+  });
+  // 司会の操作（#768）。どれも今の問題（round_id）を名指しするので、古い
+  // 画面で押しても新しい問題には効かない。
+  openButton.addEventListener(\"click\", () => sendRequest(\"open\"));
+  closeButton.addEventListener(\"click\", () => sendRequest(\"close\"));
+  skipButton.addEventListener(\"click\", () => sendRequest(\"skip\"));
+  nextQuestionButton.addEventListener(\"click\", () => sendRequest(\"next_question\"));
+  transferButton.addEventListener(\"click\", () => {
+    if (!transferSelect.value) return;
+    sendCommand({ type: \"transfer_host\", participant_id: transferSelect.value });
+  });
+  endButton.addEventListener(\"click\", () => {
+    if (!endArmed) {
+      endArmed = true;
+      endButton.textContent = \"もう一度押すと終了します（取り消せません）\";
+      return;
+    }
+    disarmEnd();
+    sendCommand({ type: \"end_session\" });
+  });
   // 明示的な退出（#766）。サーバはすぐに参加者を外し、token は使えなくなる。
   // 接続を閉じるだけ（タブを閉じる・再読み込み）は退出ではない。
   leaveButton.addEventListener(\"click\", () => {
@@ -772,6 +1025,14 @@ pub fn index_html() -> String {
 
   // 招待 URL（/r/部屋コード）から開いたら、名前を入れるだけで参加できる（#767）。
   const invitedRoom = invitedRoomFromPath();
+  // 会場表示（/r/部屋コード/display）は名前も入力も無く、すぐ見始める（#768）。
+  if (displayMode && invitedRoom !== null) {
+    document.body?.classList?.add(\"display-mode\");
+    entryEl.hidden = true;
+    lastJoin = { roomId: invitedRoom, displayName: \"会場表示\" };
+    connect(invitedRoom, \"会場表示\");
+    return;
+  }
   if (invitedRoom !== null) enterInviteMode(invitedRoom);
 
   // 再読み込み・タブの復元では、保存した参加に自動で戻る（#766）。別の部屋の

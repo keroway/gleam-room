@@ -94,25 +94,25 @@ layer in 1.1.
 Duplicated infrastructure (not domain state machine):
 
 - The `select_monitors`-based `SessionDown` wiring in `start`
-  (`room.gleam:547-575`, `poker.gleam:312-337`).
+  (`room.gleam:820-863`, `poker.gleam:312-337`).
 - Monitor bookkeeping. Poker keeps `sessions: Dict(process.Pid, List(#(String,
   process.Monitor)))` with `update_sessions` (`poker.gleam:428-481`). **Since
   #766 the buzzer diverged**: it keeps one monitor per participant
   `Attachment`, set and released by `attach`/`release_attachment`
-  (`room.gleam:853-878`), because a participant can now outlive and change
+  (`room.gleam:1209-1234`), because a participant can now outlive and change
   its connection.
 - Broadcasting: Poker's `broadcast_all` (`poker.gleam:484-491`) vs the
-  buzzer's `broadcast_to_attached` (`room.gleam:1075-1090`), which skips
+  buzzer's `broadcast_to_attached` (`room.gleam:1481-1498`), which skips
   participants within the resume grace (#766).
-- `SessionDown` handler (`room.gleam:727-752`, `poker.gleam:365-411`) and
-  `ShutdownIfEmpty` handler (`room.gleam:753-765`, `poker.gleam:412-422`).
+- `SessionDown` handler (`room.gleam:1002-1034`, `poker.gleam:365-411`) and
+  `ShutdownIfEmpty` handler (`room.gleam:1035-1046`, `poker.gleam:412-422`).
   The buzzer's `SessionDown` now marks the participant disconnected and
   starts a grace timer instead of removing them (#766).
 - Public `dispatch`/`shutdown_if_empty` API delegating through
   `call.try_call` (`room.gleam:1037-1125`, `poker.gleam:551-598`).
 - `apply_join` validation shape: same `max_display_name_length = 64` /
   `max_participants = 64` constants and the same three-way branch
-  (`room.gleam:177-223`, `poker.gleam:144-174`); `is_valid_display_name` is
+  (`room.gleam:374-429`, `poker.gleam:144-174`); `is_valid_display_name` is
   identical.
 
 Why this is deferred rather than classified "抽出すべき": generalizing it
@@ -200,14 +200,14 @@ Still duplicated because they read or update `ConnectionState` (whose
 
 - `on_init` heartbeat subject + `send_after` scheduling
   (`websocket.gleam:118-138`, `poker_websocket.gleam:113-136`).
-- `mark_active`/`record_message` (`websocket.gleam:226-237`,
+- `mark_active`/`record_message` (`websocket.gleam:237-248`,
   `poker_websocket.gleam:209-220`).
 - `handle_heartbeat_tick` (`websocket.gleam:239-266`,
   `poker_websocket.gleam:222-249`).
 
 Judgment-deferred, larger-scope duplication:
 
-- `release_room` (`websocket.gleam:1043-1058`,
+- `release_room` (`websocket.gleam:1259-1274`,
   `poker_websocket.gleam:758-776`) and the `with_existing_room`/`with_join_reply`/
   `with_room_reply` family (`websocket.gleam:1088-1232`,
   `poker_websocket.gleam:799-889`) — these encode "how to talk to a room
@@ -285,12 +285,16 @@ for both (#295).
   (votes are overwritable pre-reveal, phase-gated) are different state
   machines. `RoomState` holds `participants` + `buzzes`; `PokerState` holds
   `participants` + `votes: Dict` + `phase: RoundPhase` (`poker.gleam:55-61`).
-- **Wire message types.** `ClientMessage`'s `Buzz`/`Reset` vs
+- **Wire message types.** `ClientMessage`'s `Buzz` and host commands
+  (`OpenAcceptance`/`NextQuestion`/..., #768) vs
   `Vote(Card)`/`Reveal`/`Reset`; `ServerMessage`'s
   `State(participants, buzzes)` vs
   `State(phase, participants: List(ParticipantView))`.
-- **The phase concept.** `RoundPhase` (`Voting`/`Revealed`) has no buzzer
-  counterpart, nor does `VoteRejectReason`'s `RoundAlreadyRevealed`.
+- **The phase concept.** Both apps now have a phase, but different ones:
+  Poker's `RoundPhase` (`Voting`/`Revealed`) is driven by anyone, the
+  buzzer's `Phase` (`Waiting`/`Open`/`Locked`/`Finished`, #768) only by the
+  host and the first buzz. Same word, different state machine and
+  permissions; not a shared abstraction.
 - **The vote-secrecy design.** `ParticipantView`'s `has_voted: Bool` (no
   vote value exposed, `poker_protocol.gleam:78-83`) and the
   `VoteRegistered` event's "deliberately carries no vote value" comment

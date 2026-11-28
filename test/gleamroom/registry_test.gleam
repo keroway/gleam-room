@@ -31,7 +31,7 @@ pub fn different_room_ids_resolve_to_isolated_rooms_test() {
   let assert Ok(_) = room.dispatch(room_a, room.Join(alice, "Alice"), session)
 
   assert room.get_snapshot(room_a)
-    == Ok([room.Participant(alice, "Alice", True)])
+    == Ok([room.Participant(alice, "Alice", True, room.Player)])
   assert room.get_snapshot(room_b) == Ok([])
 }
 
@@ -143,7 +143,7 @@ pub fn the_last_participants_session_dying_stops_the_room_via_registry_test() {
   wait.until(
     fn() {
       room.get_snapshot(subject)
-      == Ok([room.Participant(doomed, "Doomed", True)])
+      == Ok([room.Participant(doomed, "Doomed", True, room.Player)])
     },
     "唯一の参加者が join し終わる",
   )

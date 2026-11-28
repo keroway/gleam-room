@@ -3,6 +3,8 @@
 // ちょうど次の revision だけを適用する。テストではこの規則に沿った値を組み立てる。
 export const INSTANCE = "inst-1";
 
+// 既定は「受付中の部屋の参加者」（#768）。BUZZ を押せる状態から始まるので、
+// 並び順や再送を確かめるテストは段階を意識せずに書ける。
 export function buzzerState({
   selfId = "p1",
   participants = [],
@@ -11,18 +13,38 @@ export function buzzerState({
   roundId = 1,
   instance = INSTANCE,
   protocolVersion = 2,
+  phase = "open",
+  selfRole = "player",
 } = {}) {
-  return {
+  const state = {
     type: "state",
     protocol_version: protocolVersion,
     room_instance_id: instance,
-    self_id: selfId,
+    self_role: selfRole,
     round_id: roundId,
     revision,
+    phase,
     participants,
     buzzes,
   };
+  if (selfId !== null) state.self_id = selfId;
+  return state;
 }
+
+export const participant = (id, displayName, { role = "player", connected = true } = {}) => ({
+  participant_id: id,
+  display_name: displayName,
+  connected,
+  role,
+});
+
+export const phaseChanged = (revision, phase, roundId = 1, instance = INSTANCE) => ({
+  type: "phase_changed",
+  room_instance_id: instance,
+  revision,
+  round_id: roundId,
+  phase,
+});
 
 export const participantJoined = (revision, participant, instance = INSTANCE) => ({
   type: "participant_joined",
@@ -44,6 +66,7 @@ export const buzzAccepted = (
   instance = INSTANCE,
 ) => ({
   type: "buzz_accepted",
+  phase: "locked",
   room_instance_id: instance,
   revision,
   round_id: roundId,
