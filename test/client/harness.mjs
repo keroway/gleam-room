@@ -23,8 +23,19 @@ export function flapWithoutJoining(client, rounds) {
 }
 
 /// `storage` は sessionStorage の初期内容（key → 文字列）。ページを開き直した
-/// 場面（#766 の自動復帰）を作るのに使う。
-export function startClient({ modulePath, functionName, storage = {} } = {}) {
+/// 場面（#766 の自動復帰）を作るのに使う。`pathname` は開いたページのパス
+/// （#767 の招待 URL `/r/<部屋コード>`）、`clipboard` は navigator.clipboard の
+/// 代わり（省略時は無し＝コピー API の無い環境）。`execCommand` は
+/// document.execCommand の代わり（省略時は無し）。`host` は開いたページのホスト。
+export function startClient({
+  modulePath,
+  functionName,
+  storage = {},
+  pathname = "/",
+  host = "127.0.0.1:4000",
+  clipboard,
+  execCommand,
+} = {}) {
   const knownIds = extractElementIds(modulePath, functionName);
   const nodes = new Map();
   const listeners = new Map();
@@ -52,16 +63,21 @@ export function startClient({ modulePath, functionName, storage = {} } = {}) {
       },
       classList: { add() {}, remove() {}, toggle() {} },
       appendChild() {},
-      append(child) {
-        if (!child) return;
-        children.push(child);
-        child.remove = () => {
-          const index = children.indexOf(child);
-          if (index !== -1) children.splice(index, 1);
-        };
-        if (typeof child.textContent === "string") logs.push(child.textContent);
+      append(...appended) {
+        for (const child of appended) {
+          if (!child) continue;
+          children.push(child);
+          child.remove = () => {
+            const index = children.indexOf(child);
+            if (index !== -1) children.splice(index, 1);
+          };
+          if (typeof child.textContent === "string") logs.push(child.textContent);
+        }
       },
       remove() {},
+      select() {
+        this.selected = true;
+      },
       replaceChildren(...newChildren) {
         children.length = 0;
         children.push(...newChildren);
@@ -73,6 +89,7 @@ export function startClient({ modulePath, functionName, storage = {} } = {}) {
   };
 
   const sockets = [];
+  const historyUrls = [];
   const stored = new Map(Object.entries(storage));
   let timers = [];
   let intervals = [];
@@ -86,8 +103,15 @@ export function startClient({ modulePath, functionName, storage = {} } = {}) {
         return nodes.get(id);
       },
       createElement: () => makeNode("created"),
+      createElementNS: (_namespace, name) => makeNode(name),
+      execCommand,
     },
-    location: { protocol: "http:", host: "127.0.0.1:4000" },
+    location: { protocol: "http:", host, pathname },
+    history: {
+      replaceState(_state, _title, url) {
+        historyUrls.push(url);
+      },
+    },
     sessionStorage: {
       getItem: (key) => (stored.has(key) ? stored.get(key) : null),
       setItem: (key, value) => {
@@ -164,6 +188,13 @@ export function startClient({ modulePath, functionName, storage = {} } = {}) {
     saved[key] = globalThis[key];
     globalThis[key] = sandbox[key];
   }
+  // Node の navigator は代入できない getter なので、定義し直して差し替える。
+  const savedNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.defineProperty(globalThis, "navigator", {
+    value: { clipboard },
+    configurable: true,
+    writable: true,
+  });
   // 抽出したクライアントスクリプトを差し替え済みグローバルの文脈で実行するために eval を使う。
   (0, eval)(extractClientScript(modulePath, functionName));
 
@@ -239,6 +270,18 @@ export function startClient({ modulePath, functionName, storage = {} } = {}) {
     /// 差し替えたグローバルを元に戻す。テストごとに必ず呼ぶ。
     dispose() {
       for (const key of Object.keys(sandbox)) globalThis[key] = saved[key];
+      if (savedNavigator) Object.defineProperty(globalThis, "navigator", savedNavigator);
+    },
+    /// history.replaceState に渡された URL（#767）。
+    historyUrls,
+    /// 指定した id の要素（スタブ）そのもの。
+    node(id) {
+      return nodes.get(id);
+    },
+    /// 部屋作成フォームを送信する（#767）。
+    submitCreate(displayName = "Host") {
+      nodes.get("create-name").value = displayName;
+      listeners.get("create-form:submit")({ preventDefault() {} });
     },
   };
 }

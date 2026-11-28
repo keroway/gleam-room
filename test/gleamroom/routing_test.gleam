@@ -132,9 +132,23 @@ pub fn routing_serves_the_expected_paths_test() {
   assert response.get_header(health_get_response, "content-type")
     == Ok("text/plain; charset=utf-8")
 
+  // 招待 URL `/r/<部屋コード>` は `/` と同じページを返す（#767）。部屋の有無は
+  // ここでは見ない。参照元に部屋コードを渡さない。
+  let assert Ok(#(invite_status, invite_body)) = get(port, "/r/ABC234")
+  assert invite_status == 200
+  assert invite_body == body
+  let assert Ok(invite_response) =
+    request_with_method(port, "/r/ABC234", http.Get)
+  assert response.get_header(invite_response, "referrer-policy")
+    == Ok("no-referrer")
+  let assert Ok(invite_post) = request_with_method(port, "/r/ABC234", http.Post)
+  assert invite_post.status == 405
+
   // 未知のパスは 404。
   let assert Ok(#(missing_status, _)) = get(port, "/nope")
   assert missing_status == 404
+  let assert Ok(#(invite_extra_status, _)) = get(port, "/r/ABC234/extra")
+  assert invite_extra_status == 404
 
   // `/ws` は WebSocket upgrade を要求する。素の GET は mist が **400** を返す
   // （vendored mist: "If the request is not upgradable, a 400 response will be

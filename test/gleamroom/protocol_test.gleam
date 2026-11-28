@@ -260,6 +260,8 @@ pub fn encode_state_test() {
       participants: [Participant(ParticipantId("p1"), "Alice", True)],
       buzzes: [BuzzResult(ParticipantId("p1"), "Alice", 1)],
       resume_token: None,
+      created_room_id: None,
+      host_token: None,
     )
 
   assert protocol.encode_server_message(message)
@@ -305,4 +307,52 @@ pub fn encode_error_test() {
 
   assert protocol.encode_server_message(message)
     == "{\"type\":\"error\",\"code\":\"invalid_message\",\"message\":\"bad input\"}"
+}
+
+// --- #767: 部屋の作成 ---------------------------------------------------------
+
+pub fn decode_create_test() {
+  let json = "{\"type\":\"create\",\"v\":2,\"display_name\":\" Alice \"}"
+
+  assert protocol.decode_client_message(json) == Ok(protocol.Create("Alice"))
+}
+
+pub fn decode_create_without_version_is_client_outdated_test() {
+  let json = "{\"type\":\"create\",\"display_name\":\"Alice\"}"
+
+  assert protocol.decode_client_message(json)
+    == Error(protocol.client_outdated_error)
+}
+
+pub fn decode_create_with_an_invalid_display_name_test() {
+  let empty = "{\"type\":\"create\",\"v\":2,\"display_name\":\"  \"}"
+  let too_long =
+    "{\"type\":\"create\",\"v\":2,\"display_name\":\""
+    <> string.repeat("あ", 22)
+    <> "\"}"
+
+  let assert Error(ProtocolError(code: "invalid_display_name", ..)) =
+    protocol.decode_client_message(empty)
+  let assert Error(ProtocolError(code: "invalid_display_name", ..)) =
+    protocol.decode_client_message(too_long)
+}
+
+pub fn encode_state_for_the_creator_test() {
+  let message =
+    State(
+      instance_id: "i1",
+      self_id: ParticipantId("p1"),
+      round_id: 1,
+      revision: 1,
+      participants: [],
+      buzzes: [],
+      resume_token: Some("r"),
+      created_room_id: Some("ABC234"),
+      host_token: Some("h"),
+    )
+
+  assert string.ends_with(
+    protocol.encode_server_message(message),
+    ",\"resume_token\":\"r\",\"room_id\":\"ABC234\",\"host_token\":\"h\"}",
+  )
 }

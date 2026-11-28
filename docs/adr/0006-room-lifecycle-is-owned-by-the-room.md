@@ -74,4 +74,14 @@ rule of this ADR still holds: the room judges and acts in one message.
   `Release`. A separate empty-room timer is not needed until rooms can exist
   without participants (explicit creation, #767).
 
+## Amendment (ADR 0010, #767)
+
+Buzzer rooms are now created explicitly (`create`), so a room can exist
+before anyone has joined it. The room schedules one `EmptyRoomGrace`
+message to itself when it starts (60 s); if it still has no participant when
+that message arrives, it stops itself in that same message. This reclaims a
+room whose creator's first join never arrived. Joining an unknown code no
+longer creates a room, so the "a fresh room is created on the next `lookup`"
+consequence above no longer applies to the buzzer's WebSocket path.
+
 Planning Poker keeps the original trigger.

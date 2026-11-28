@@ -869,7 +869,7 @@ pub fn join_snapshot_is_taken_with_the_join_test() {
     room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
   let assert Ok(_) = room.dispatch(subject, room.Buzz(alice, 1), alice_session)
 
-  let assert Ok(room.JoinReply(event, snapshot, _token)) =
+  let assert Ok(room.JoinReply(event, snapshot, _token, _)) =
     room.join(subject, bob, "Bob", bob_session)
 
   assert event == room.ParticipantJoined(room.Participant(bob, "Bob", True), 3)
@@ -904,6 +904,7 @@ fn join_with_token(
     room.ParticipantJoined(..),
     snapshot,
     option.Some(token),
+    option.None,
   )) = room.join(subject, id, name, session)
   #(token, snapshot)
 }
@@ -1154,4 +1155,88 @@ pub fn departed_participants_are_tracked_within_a_bound_test() {
     == Ok(room.ResumeRejected(room.InvalidToken))
   assert room.resume_session(subject, last_token, snapshot.instance_id, other)
     == Ok(room.ResumeRejected(room.ResumeExpired))
+}
+
+// --- #767: 部屋の作成と司会 token ---------------------------------------------
+
+/// 部屋を作った参加者にだけ司会 token が発行される。2人目以降は作成者の
+/// 経路を通っても受け取れず、通常の join（招待）は常に受け取らない。
+pub fn only_the_creator_receives_the_host_token_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+
+  let assert Ok(room.JoinReply(
+    room.ParticipantJoined(..),
+    _,
+    option.Some(alice_resume),
+    option.Some(host_token),
+  )) =
+    room.join_as_creator(
+      subject,
+      room.participant_id("p1"),
+      "Alice",
+      process.new_subject(),
+    )
+  assert host_token != alice_resume
+
+  let assert Ok(room.JoinReply(room.ParticipantJoined(..), _, _, option.None)) =
+    room.join(subject, room.participant_id("p2"), "Bob", process.new_subject())
+  let assert Ok(room.JoinReply(room.ParticipantJoined(..), _, _, option.None)) =
+    room.join_as_creator(
+      subject,
+      room.participant_id("p3"),
+      "Carol",
+      process.new_subject(),
+    )
+}
+
+/// 拒否された作成者の join には token が付かず、司会の席も空いたまま。
+pub fn a_rejected_creator_join_issues_no_host_token_test() {
+  let assert Ok(started) = room.start()
+  let subject = started.data
+
+  let assert Ok(room.JoinReply(
+    room.JoinRejected(..),
+    _,
+    option.None,
+    option.None,
+  )) =
+    room.join_as_creator(
+      subject,
+      room.participant_id("p1"),
+      "",
+      process.new_subject(),
+    )
+  let assert Ok(room.JoinReply(_, _, _, option.Some(_))) =
+    room.join_as_creator(
+      subject,
+      room.participant_id("p2"),
+      "Alice",
+      process.new_subject(),
+    )
+}
+
+/// 作られたまま誰も参加しない部屋は、空室の猶予が過ぎると止まる。
+pub fn an_unused_room_stops_after_the_empty_room_grace_test() {
+  let assert Ok(started) = room.start_with_timings(60_000, 30)
+  let assert Ok(pid) = process.subject_owner(started.data)
+
+  wait.until(fn() { !process.is_alive(pid) }, "誰も来ない部屋が止まる")
+}
+
+/// 猶予の前に参加者が来た部屋は止まらない。
+pub fn a_joined_room_outlives_the_empty_room_grace_test() {
+  let assert Ok(started) = room.start_with_timings(60_000, 30)
+  let subject = started.data
+  let assert Ok(pid) = process.subject_owner(subject)
+  let assert Ok(_) =
+    room.join_as_creator(
+      subject,
+      room.participant_id("p1"),
+      "Alice",
+      process.new_subject(),
+    )
+
+  process.sleep(80)
+  assert process.is_alive(pid)
 }

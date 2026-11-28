@@ -96,9 +96,15 @@ pub const shared =
 
   const MAX_LOG_ENTRIES = 200;
 
+  // token をログに出さない（#767）。ログは画面に表示され、会場のスクリーンに
+  // 映ることもある。受信メッセージを丸ごと書く行でも値を伏せる。
+  function redactTokens(line) {
+    return String(line).replace(/(\"[A-Za-z_]*token\"\\s*:\\s*\")[^\"]*\"/g, '$1[redacted]\"');
+  }
+
   function log(line) {
     const entry = document.createElement(\"div\");
-    entry.textContent = `[${new Date().toLocaleTimeString()}] ${line}`;
+    entry.textContent = `[${new Date().toLocaleTimeString()}] ${redactTokens(line)}`;
     logEl.append(entry);
     while (logEl.children.length > MAX_LOG_ENTRIES) {
       logEl.firstElementChild.remove();
@@ -205,7 +211,11 @@ pub const shared =
       // 「5 回で諦める」という約束が効かなくなる。
       startPing(ws, isCurrent);
       const first = joinMessage(roomId, displayName);
-      log(`connected, ${first.type === \"resume\" ? \"resuming\" : \"joining\"} room ${roomId} as ${displayName}`);
+      const action =
+        first.type === \"create\"
+          ? \"creating a room\"
+          : `${first.type === \"resume\" ? \"resuming\" : \"joining\"} room ${roomId}`;
+      log(`connected, ${action} as ${displayName}`);
       ws.send(JSON.stringify(first));
     });
 
@@ -256,13 +266,16 @@ pub const shared =
     const displayName = nameInput.value.trim();
     if (!roomId || !displayName) {
       log(\"room ID と display name を入力してください\");
+      statusEl.textContent = \"部屋コードと名前を入力してください\";
       return;
     }
     // maxlength=\"64\" は UTF-16 コード単位でのみ制限するが、サーバの
     // is_valid_field は UTF-8 バイト数(<=64)も要求する。マルチバイト文字は
     // maxlength を満たしても超過しうるため、送信前にここで検知する(#549)。
     if (byteLength(roomId) > 64 || byteLength(displayName) > 64) {
-      log(\"room ID・display name は UTF-8 で64バイト以内にしてください（マルチバイト文字は文字数より少なく入力してください）\");
+      const problem = \"room ID・display name は UTF-8 で64バイト以内にしてください（マルチバイト文字は文字数より少なく入力してください）\";
+      log(problem);
+      statusEl.textContent = problem;
       return;
     }
 
@@ -283,5 +296,320 @@ pub const shared =
     }
     log(\"not connected, ignoring \" + message.type);
     return false;
+  }
+"
+
+/// QR code encoder for the buzzer's invite URL (#767), spliced into the
+/// buzzer page only. Generated in the page so the invite URL is never sent to
+/// an external QR service. It defines `qrMatrix(text, mask?)`; the client
+/// tests (`test/client/qr.test.mjs`) compare its output with reference
+/// matrices.
+///
+/// Adapted from Project Nayuki's QR Code generator library (MIT License). The
+/// notice below is part of the served JS on purpose: the MIT License requires
+/// it in every copy, and the page is the copy that gets distributed. See also
+/// `THIRD_PARTY_NOTICES.md`.
+pub const qr_code =
+  "
+  // 招待 URL の QR コード（#767）。外部サービスへ URL を送らないよう、ページ内で
+  // 生成する。対象は短い URL だけなので、バイトモード・誤り訂正レベル M・
+  // 型番 1〜10 に限った最小の実装にしている（JIS X 0510 / ISO/IEC 18004）。
+  // 戻り値は行ごとの真偽値の配列（true が暗）。収まらなければ null。
+  // mask を指定しなければ減点が最小のマスクを選ぶ。
+  //
+  // Project Nayuki の QR Code generator library を、この用途に必要な部分だけに
+  // 絞って書き直したもの。
+  //
+  // QR Code generator library
+  // Copyright (c) Project Nayuki. (MIT License)
+  // https://www.nayuki.io/page/qr-code-generator-library
+  //
+  // Permission is hereby granted, free of charge, to any person obtaining a copy of
+  // this software and associated documentation files (the \"Software\"), to deal in
+  // the Software without restriction, including without limitation the rights to
+  // use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+  // the Software, and to permit persons to whom the Software is furnished to do so,
+  // subject to the following conditions:
+  // - The above copyright notice and this permission notice shall be included in
+  //   all copies or substantial portions of the Software.
+  // - The Software is provided \"as is\", without warranty of any kind, express or
+  //   implied, including but not limited to the warranties of merchantability,
+  //   fitness for a particular purpose and noninfringement. In no event shall the
+  //   authors or copyright holders be liable for any claim, damages or other
+  //   liability, whether in an action of contract, tort or otherwise, arising from,
+  //   out of or in connection with the Software or the use or other dealings in the
+  //   Software.
+  const QR_EC_CODEWORDS_PER_BLOCK = [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
+  const QR_EC_BLOCKS = [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
+
+  function qrRawModules(ver) {
+    let result = (16 * ver + 128) * ver + 64;
+    if (ver >= 2) {
+      const numAlign = Math.floor(ver / 7) + 2;
+      result -= (25 * numAlign - 10) * numAlign - 55;
+      if (ver >= 7) result -= 36;
+    }
+    return result;
+  }
+
+  function qrDataCodewords(ver) {
+    return Math.floor(qrRawModules(ver) / 8) - QR_EC_CODEWORDS_PER_BLOCK[ver] * QR_EC_BLOCKS[ver];
+  }
+
+  function qrAlignmentPositions(ver) {
+    if (ver === 1) return [];
+    const numAlign = Math.floor(ver / 7) + 2;
+    const step = Math.ceil((ver * 4 + 4) / (numAlign * 2 - 2)) * 2;
+    const result = [6];
+    for (let pos = ver * 4 + 10; result.length < numAlign; pos -= step) {
+      result.splice(1, 0, pos);
+    }
+    return result;
+  }
+
+  function qrMultiply(x, y) {
+    let z = 0;
+    for (let i = 7; i >= 0; i--) {
+      z = (z << 1) ^ ((z >>> 7) * 0x11d);
+      z ^= ((y >>> i) & 1) * x;
+    }
+    return z;
+  }
+
+  function qrReedSolomon(data, degree) {
+    const divisor = new Array(degree).fill(0);
+    divisor[degree - 1] = 1;
+    let root = 1;
+    for (let i = 0; i < degree; i++) {
+      for (let j = 0; j < degree; j++) {
+        divisor[j] = qrMultiply(divisor[j], root);
+        if (j + 1 < degree) divisor[j] ^= divisor[j + 1];
+      }
+      root = qrMultiply(root, 0x02);
+    }
+    const result = new Array(degree).fill(0);
+    for (const b of data) {
+      const factor = b ^ result.shift();
+      result.push(0);
+      divisor.forEach((coef, i) => {
+        result[i] ^= qrMultiply(coef, factor);
+      });
+    }
+    return result;
+  }
+
+  function qrMatrix(text, mask) {
+    const bytes = [...new TextEncoder().encode(text)];
+    let ver = 1;
+    while (ver <= 10 && 4 + (ver < 10 ? 8 : 16) + bytes.length * 8 > qrDataCodewords(ver) * 8) ver++;
+    if (ver > 10) return null;
+
+    const capacity = qrDataCodewords(ver) * 8;
+    const bits = [];
+    const put = (value, length) => {
+      for (let i = length - 1; i >= 0; i--) bits.push((value >>> i) & 1);
+    };
+    put(0b0100, 4);
+    put(bytes.length, ver < 10 ? 8 : 16);
+    bytes.forEach((b) => put(b, 8));
+    put(0, Math.min(4, capacity - bits.length));
+    put(0, (8 - (bits.length % 8)) % 8);
+    for (let pad = 0xec; bits.length < capacity; pad ^= 0xec ^ 0x11) put(pad, 8);
+    const data = [];
+    for (let i = 0; i < bits.length; i += 8) {
+      data.push(bits.slice(i, i + 8).reduce((acc, bit) => (acc << 1) | bit, 0));
+    }
+
+    // 誤り訂正符号を付け、ブロックを交互に並べる。
+    const numBlocks = QR_EC_BLOCKS[ver];
+    const eccLen = QR_EC_CODEWORDS_PER_BLOCK[ver];
+    const rawCodewords = Math.floor(qrRawModules(ver) / 8);
+    const numShortBlocks = numBlocks - (rawCodewords % numBlocks);
+    const shortBlockLen = Math.floor(rawCodewords / numBlocks);
+    const blocks = [];
+    for (let i = 0, k = 0; i < numBlocks; i++) {
+      const dat = data.slice(k, k + shortBlockLen - eccLen + (i < numShortBlocks ? 0 : 1));
+      k += dat.length;
+      const ecc = qrReedSolomon(dat, eccLen);
+      if (i < numShortBlocks) dat.push(0);
+      blocks.push(dat.concat(ecc));
+    }
+    const codewords = [];
+    for (let i = 0; i < blocks[0].length; i++) {
+      blocks.forEach((block, j) => {
+        if (i !== shortBlockLen - eccLen || j >= numShortBlocks) codewords.push(block[i]);
+      });
+    }
+
+    const size = ver * 4 + 17;
+    const modules = Array.from({ length: size }, () => new Array(size).fill(false));
+    const isFunction = Array.from({ length: size }, () => new Array(size).fill(false));
+    const setFunction = (x, y, dark) => {
+      modules[y][x] = dark;
+      isFunction[y][x] = true;
+    };
+
+    for (let i = 0; i < size; i++) {
+      setFunction(6, i, i % 2 === 0);
+      setFunction(i, 6, i % 2 === 0);
+    }
+    for (const [cx, cy] of [[3, 3], [size - 4, 3], [3, size - 4]]) {
+      for (let dy = -4; dy <= 4; dy++) {
+        for (let dx = -4; dx <= 4; dx++) {
+          const dist = Math.max(Math.abs(dx), Math.abs(dy));
+          const x = cx + dx;
+          const y = cy + dy;
+          if (x >= 0 && x < size && y >= 0 && y < size) setFunction(x, y, dist !== 2 && dist !== 4);
+        }
+      }
+    }
+    const align = qrAlignmentPositions(ver);
+    align.forEach((ay, i) => {
+      align.forEach((ax, j) => {
+        const corner =
+          (i === 0 && j === 0) || (i === 0 && j === align.length - 1) || (i === align.length - 1 && j === 0);
+        if (corner) return;
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dx = -2; dx <= 2; dx++) {
+            setFunction(ax + dx, ay + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+          }
+        }
+      });
+    });
+
+    const drawFormat = (maskId) => {
+      // 誤り訂正レベル M の書式ビットは 00。
+      const formatData = maskId;
+      let rem = formatData;
+      for (let i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+      const format = ((formatData << 10) | rem) ^ 0x5412;
+      const bit = (i) => ((format >>> i) & 1) !== 0;
+      for (let i = 0; i <= 5; i++) setFunction(8, i, bit(i));
+      setFunction(8, 7, bit(6));
+      setFunction(8, 8, bit(7));
+      setFunction(7, 8, bit(8));
+      for (let i = 9; i < 15; i++) setFunction(14 - i, 8, bit(i));
+      for (let i = 0; i < 8; i++) setFunction(size - 1 - i, 8, bit(i));
+      for (let i = 8; i < 15; i++) setFunction(8, size - 15 + i, bit(i));
+      setFunction(8, size - 8, true);
+    };
+    drawFormat(0);
+    if (ver >= 7) {
+      let rem = ver;
+      for (let i = 0; i < 12; i++) rem = (rem << 1) ^ ((rem >>> 11) * 0x1f25);
+      const version = (ver << 12) | rem;
+      for (let i = 0; i < 18; i++) {
+        const dark = ((version >>> i) & 1) !== 0;
+        const a = size - 11 + (i % 3);
+        const b = Math.floor(i / 3);
+        setFunction(a, b, dark);
+        setFunction(b, a, dark);
+      }
+    }
+
+    // データを右下から 2 列ずつジグザグに置く。
+    let index = 0;
+    for (let right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (let vert = 0; vert < size; vert++) {
+        for (let j = 0; j < 2; j++) {
+          const x = right - j;
+          const upward = ((right + 1) & 2) === 0;
+          const y = upward ? size - 1 - vert : vert;
+          if (!isFunction[y][x] && index < codewords.length * 8) {
+            modules[y][x] = ((codewords[index >>> 3] >>> (7 - (index & 7))) & 1) !== 0;
+            index++;
+          }
+        }
+      }
+    }
+
+    const masks = [
+      (x, y) => (x + y) % 2 === 0,
+      (x, y) => y % 2 === 0,
+      (x, y) => x % 3 === 0,
+      (x, y) => (x + y) % 3 === 0,
+      (x, y) => (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0,
+      (x, y) => ((x * y) % 2) + ((x * y) % 3) === 0,
+      (x, y) => (((x * y) % 2) + ((x * y) % 3)) % 2 === 0,
+      (x, y) => (((x + y) % 2) + ((x * y) % 3)) % 2 === 0,
+    ];
+    const applyMask = (maskId) => {
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (!isFunction[y][x] && masks[maskId](x, y)) modules[y][x] = !modules[y][x];
+        }
+      }
+    };
+
+    const penalty = () => {
+      let result = 0;
+      const finderLike = (history) => {
+        const n = history[1];
+        const core = n > 0 && history[2] === n && history[3] === n * 3 && history[4] === n && history[5] === n;
+        return (
+          (core && history[0] >= n * 4 && history[6] >= n ? 1 : 0) +
+          (core && history[6] >= n * 4 && history[0] >= n ? 1 : 0)
+        );
+      };
+      const addHistory = (length, history) => {
+        if (history[0] === 0) length += size;
+        history.pop();
+        history.unshift(length);
+      };
+      const scanLine = (get) => {
+        let runColor = false;
+        let run = 0;
+        const history = [0, 0, 0, 0, 0, 0, 0];
+        for (let i = 0; i < size; i++) {
+          if (get(i) === runColor) {
+            run++;
+            if (run === 5) result += 3;
+            else if (run > 5) result++;
+          } else {
+            addHistory(run, history);
+            if (!runColor) result += finderLike(history) * 40;
+            runColor = get(i);
+            run = 1;
+          }
+        }
+        if (runColor) {
+          addHistory(run, history);
+          run = 0;
+        }
+        addHistory(run + size, history);
+        result += finderLike(history) * 40;
+      };
+      for (let y = 0; y < size; y++) scanLine((x) => modules[y][x]);
+      for (let x = 0; x < size; x++) scanLine((y) => modules[y][x]);
+      for (let y = 0; y < size - 1; y++) {
+        for (let x = 0; x < size - 1; x++) {
+          const c = modules[y][x];
+          if (c === modules[y][x + 1] && c === modules[y + 1][x] && c === modules[y + 1][x + 1]) result += 3;
+        }
+      }
+      const dark = modules.reduce((sum, row) => sum + row.filter(Boolean).length, 0);
+      const total = size * size;
+      result += (Math.ceil(Math.abs(dark * 20 - total * 10) / total) - 1) * 10;
+      return result;
+    };
+
+    let chosen = mask;
+    if (chosen === undefined) {
+      let best = Infinity;
+      for (let m = 0; m < 8; m++) {
+        applyMask(m);
+        drawFormat(m);
+        const score = penalty();
+        if (score < best) {
+          best = score;
+          chosen = m;
+        }
+        applyMask(m);
+      }
+    }
+    applyMask(chosen);
+    drawFormat(chosen);
+    return modules;
   }
 "

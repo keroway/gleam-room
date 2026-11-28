@@ -8,7 +8,8 @@ pre-commit:
       glob: "*.gleam"
       run: gleam format --check {staged_files}
     - name: typos
-      run: typos {staged_files}
+      # ファイルを直接渡しても _typos.toml の除外を守らせる（#767 の QR 参照行列）。
+      run: typos --force-exclude {staged_files}
 
 pre-push:
   jobs:

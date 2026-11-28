@@ -386,6 +386,11 @@ pub fn full_snapshot(state: RoomState, instance_id: String) -> Snapshot {
 /// (#766, ADR 0010). Counted from when the room learns of the disconnect.
 pub const default_participant_grace_ms = 60_000
 
+/// How long a room may stay without any participant before it stops itself
+/// (#767, ADR 0010). A room created for someone whose first join never
+/// arrives (the connection died in between) is reclaimed by this timer.
+pub const default_empty_room_grace_ms = 60_000
+
 /// Ceiling on participants a room keeps track of, including those who already
 /// left (their token then answers `ResumeExpired`). Departed entries beyond it
 /// are dropped oldest first, so churn cannot grow the room without bound
@@ -393,14 +398,16 @@ pub const default_participant_grace_ms = 60_000
 const max_tracked_participants = 128
 
 /// The answer to `join`: the event, a snapshot taken in the same mailbox
-/// message (#765), and the resume token issued to the joiner (#766). The
-/// token is `None` when the join was rejected. It must reach only the joining
-/// client: it is never broadcast or logged.
+/// message (#765), the resume token issued to the joiner (#766), and the host
+/// token when the joiner is the room's creator (#767). Tokens are `None` when
+/// the join was rejected. They must reach only the joining client: they are
+/// never broadcast or logged.
 pub type JoinReply {
   JoinReply(
     event: RoomEvent,
     snapshot: Snapshot,
     resume_token: option.Option(String),
+    host_token: option.Option(String),
   )
 }
 
@@ -442,10 +449,15 @@ pub type Message {
   /// どこまでがスナップショットに入っているかをクライアントが判別できなかった。
   /// 同じ処理の中で join・購読・スナップショット取得を行えば、以後に届く
   /// 配信は必ずスナップショットの revision より新しい。
+  ///
+  /// `as_host` は部屋を作った接続の最初の join だけが True にする（#767）。
+  /// まだ司会がいなければ、その参加者に司会 token を発行する。招待から
+  /// 入る join は常に False なので、招待 URL から司会にはなれない。
   JoinWithSnapshot(
     id: ParticipantId,
     display_name: String,
     session: Subject(RoomEvent),
+    as_host: Bool,
     reply_to: Subject(JoinReply),
   )
   /// 既存の参加者として新しい接続を付け直す（#766）。`instance_id` は
@@ -463,6 +475,11 @@ pub type Message {
   /// 猶予タイマーの満了（#766）。`generation` が現在の接続世代と一致し、
   /// まだ切断中のときだけ参加者を外す。復帰後に届いた古いタイマーは無視する。
   GraceExpired(participant_key: String, generation: Int)
+  /// 起動から `empty_room_grace_ms` 経った（#767）。その時点で参加者が
+  /// 1人もいなければ止まる。作成直後の join が届かなかった部屋の回収で、
+  /// 一度でも参加者がいた部屋は、最後の退出・猶予切れの時点で既に止まって
+  /// いる。
+  EmptyRoomGrace
   /// 自分が無人なら終了する（#26 / #36）。
   ///
   /// **判定と停止を 1 メッセージに閉じてある。** 呼び出し側が
@@ -532,20 +549,37 @@ type ActorState {
     /// resume token → ParticipantId の文字列表現。
     tokens: Dict(String, String),
     next_issue: Int,
+    /// 部屋を作った参加者に発行した司会 token（#767）。権限の確認に使うのは
+    /// 役割を入れる #768 から。配信・スナップショット・ログには出さない。
+    host: option.Option(HostSeat),
   )
+}
+
+/// The host capability of this room instance (#767, ADR 0010).
+type HostSeat {
+  HostSeat(token: String, participant_key: String)
 }
 
 /// Starts one isolated room actor with empty state. Each call produces an
 /// independent process with its own mailbox, so multiple rooms never share
 /// participant state (ADR 0002).
 pub fn start() -> actor.StartResult(Subject(Message)) {
-  start_with_grace(default_participant_grace_ms)
+  start_with_timings(default_participant_grace_ms, default_empty_room_grace_ms)
 }
 
 /// `start` with a different resume grace period. Production always uses
 /// `start`; tests use this to observe grace expiry without waiting a minute.
 pub fn start_with_grace(
   participant_grace_ms: Int,
+) -> actor.StartResult(Subject(Message)) {
+  start_with_timings(participant_grace_ms, default_empty_room_grace_ms)
+}
+
+/// `start` with both grace periods replaced. Test-only, like
+/// `start_with_grace` (#767).
+pub fn start_with_timings(
+  participant_grace_ms: Int,
+  empty_room_grace_ms: Int,
 ) -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     // 接続プロセスの死を signal ではなくメッセージとして受ける（#56）。
@@ -565,6 +599,8 @@ pub fn start_with_grace(
           process.PortDown(..) -> SessionDown(process.self())
         }
       })
+    // 作られたまま誰も参加しない部屋を回収する（#767）。
+    process.send_after(subject, empty_room_grace_ms, EmptyRoomGrace)
     actor.initialised(ActorState(
       self: subject,
       instance_id: random_string(),
@@ -573,6 +609,7 @@ pub fn start_with_grace(
       members: dict.new(),
       tokens: dict.new(),
       next_issue: 0,
+      host: option.None,
     ))
     |> actor.selecting(selector)
     |> actor.returning(subject)
@@ -582,7 +619,8 @@ pub fn start_with_grace(
   |> actor.start
 }
 
-/// 128-bit random, URL-safe. Used for the room instance id and resume tokens.
+/// 128-bit random, URL-safe. Used for the room instance id and the resume and
+/// host tokens.
 fn random_string() -> String {
   crypto.strong_random_bytes(16)
   |> bit_array.base64_url_encode(False)
@@ -601,15 +639,32 @@ fn handle_message(
       process.send(reply_to, event)
       actor.continue(next_state)
     }
-    JoinWithSnapshot(id, display_name, session, reply_to) -> {
+    JoinWithSnapshot(id, display_name, session, as_host, reply_to) -> {
       let #(next_state, event) =
         run_command(state, Join(id, display_name), session)
-      let resume_token = case event {
-        ParticipantJoined(participant, _) ->
-          dict.get(next_state.members, participant_id_to_string(participant.id))
-          |> option.from_result
-          |> option.map(fn(member) { member.token })
-        _ -> option.None
+      let #(next_state, resume_token, host_token) = case event {
+        ParticipantJoined(participant, _) -> {
+          let key = participant_id_to_string(participant.id)
+          let resume_token =
+            dict.get(next_state.members, key)
+            |> option.from_result
+            |> option.map(fn(member) { member.token })
+          let #(next_state, host_token) = case as_host, next_state.host {
+            True, option.None -> {
+              let token = random_string()
+              #(
+                ActorState(
+                  ..next_state,
+                  host: option.Some(HostSeat(token:, participant_key: key)),
+                ),
+                option.Some(token),
+              )
+            }
+            _, _ -> #(next_state, option.None)
+          }
+          #(next_state, resume_token, host_token)
+        }
+        _ -> #(next_state, option.None, option.None)
       }
       process.send(
         reply_to,
@@ -617,6 +672,7 @@ fn handle_message(
           event,
           full_snapshot(next_state.room, next_state.instance_id),
           resume_token,
+          host_token,
         ),
       )
       actor.continue(next_state)
@@ -651,6 +707,13 @@ fn handle_message(
           }
         }
         // 復帰済み・退出済み・別世代のタイマー。
+        _ -> actor.continue(state)
+      }
+    EmptyRoomGrace ->
+      case state.room.participants {
+        // 判定と停止が 1 メッセージに閉じているので join と競合しない。
+        // registry は `RoomDown` で登録を外す（ADR 0006）。
+        [] -> actor.stop()
         _ -> actor.continue(state)
       }
     GetSnapshot(reply_to) -> {
@@ -1072,7 +1135,23 @@ pub fn join(
   call.try_call(
     subject,
     call.default_timeout,
-    JoinWithSnapshot(id, display_name, session, _),
+    JoinWithSnapshot(id, display_name, session, False, _),
+    "room.join",
+  )
+}
+
+/// `join` for the connection that just created the room (#767): the joiner
+/// also gets the host token if the room has no host yet.
+pub fn join_as_creator(
+  subject: Subject(Message),
+  id: ParticipantId,
+  display_name: String,
+  session: Subject(RoomEvent),
+) -> Result(JoinReply, Nil) {
+  call.try_call(
+    subject,
+    call.default_timeout,
+    JoinWithSnapshot(id, display_name, session, True, _),
     "room.join",
   )
 }

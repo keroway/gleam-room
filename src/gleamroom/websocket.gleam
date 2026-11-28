@@ -334,6 +334,8 @@ fn handle_text(
             }
             Ok(protocol.Join(wire_room_id, display_name)) ->
               handle_join(state, connection, wire_room_id, display_name)
+            Ok(protocol.Create(display_name)) ->
+              handle_create(state, connection, display_name)
             Ok(protocol.Buzz(round_id, request_id)) ->
               handle_buzz(state, connection, round_id, request_id)
             Ok(protocol.Reset(round_id, request_id)) ->
@@ -454,90 +456,175 @@ fn handle_join(
   display_name: String,
 ) -> Next(ConnectionState, ConnectionEvent) {
   case state.room {
-    Some(handle) -> {
+    Some(handle) -> reject_already_joined(state, connection, handle)
+    None -> {
+      let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
+      // 無いコードの部屋は作らない（#767）。期限切れの招待や打ち間違いから
+      // 無断で同じコードの部屋ができると、別の集まりと取り違える。
+      use room_subject <- with_existing_room(
+        state,
+        connection,
+        room_id,
+        room_not_found_error,
+      )
+      complete_join(
+        state,
+        connection,
+        room_id,
+        room_subject,
+        display_name,
+        False,
+      )
+    }
+  }
+}
+
+/// 新しい部屋を作り、作った本人として参加する（#767）。部屋コードは
+/// registry が発行し、司会 token と一緒にこの接続にだけ返す。
+fn handle_create(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  display_name: String,
+) -> Next(ConnectionState, ConnectionEvent) {
+  case state.room {
+    Some(handle) -> reject_already_joined(state, connection, handle)
+    None ->
+      case registry.create(state.registry) {
+        Ok(#(room_id, room_subject)) ->
+          complete_join(
+            state,
+            connection,
+            room_id,
+            room_subject,
+            display_name,
+            True,
+          )
+        Error(create_error) -> {
+          let reason = case create_error {
+            room_registry.CapacityReached -> RoomCapacityReached
+            room_registry.Unavailable -> RoomLookupFailed
+          }
+          logging.log(
+            logging.Warning,
+            "room create failed: reason=" <> string.inspect(reason),
+          )
+          send_server_message(
+            connection,
+            protocol.ProtocolErrorMessage(
+              "room_unavailable",
+              room_unavailable_message(reason),
+            ),
+          )
+          mist.continue(state)
+        }
+      }
+  }
+}
+
+fn reject_already_joined(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  handle: RoomHandle,
+) -> Next(ConnectionState, ConnectionEvent) {
+  logging.log(
+    logging.Info,
+    "already joined: room="
+      <> registry.room_id_to_string(handle.room_id)
+      <> ", participant="
+      <> room.participant_id_to_string(handle.participant_id),
+  )
+  let #(code, message) = join_reject_code_and_message(room.AlreadyJoined)
+  send_server_message(connection, protocol.ProtocolErrorMessage(code, message))
+  mist.continue(state)
+}
+
+/// join（`created` が False）と作成直後の join（True）の共通部分。
+fn complete_join(
+  state: ConnectionState,
+  connection: WebsocketConnection,
+  room_id: registry.RoomId,
+  room_subject: Subject(room.Message),
+  display_name: String,
+  created: Bool,
+) -> Next(ConnectionState, ConnectionEvent) {
+  let participant_id = room.participant_id(new_participant_id())
+  let session = process.new_subject()
+  let join = case created {
+    True -> room.join_as_creator
+    False -> room.join
+  }
+
+  // room が応答しなければ join を諦め、理由をクライアントへ返す（#33）。
+  // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
+  // クライアントには何も届かなかった。
+  use reply <- with_join_reply(
+    state.registry,
+    room_id,
+    room_subject,
+    connection,
+    join(room_subject, participant_id, display_name, session),
+  )
+  case reply {
+    room.JoinReply(
+      room.ParticipantJoined(participant, _),
+      snapshot,
+      resume_token,
+      host_token,
+    ) -> {
       logging.log(
         logging.Info,
-        "already joined: room="
-          <> registry.room_id_to_string(handle.room_id)
+        case created {
+          True -> "room created and joined: room="
+          False -> "join accepted: room="
+        }
+          <> registry.room_id_to_string(room_id)
           <> ", participant="
-          <> room.participant_id_to_string(handle.participant_id),
+          <> room.participant_id_to_string(participant.id),
       )
-      let #(code, message) = join_reject_code_and_message(room.AlreadyJoined)
+      // スナップショットは join と同じ room メッセージの中で取られている
+      // （`room.join`、#765）。以後この接続に届く配信は必ずこの revision
+      // より新しく、取得時点のずれ（#121）や二重適用（#43）は起きない。
+      // resume token（#766）と司会 token（#767）はこの応答でだけ本人に渡す。
+      // 配信にもログにも出さない。
+      let created_room_id = case created {
+        True -> Some(registry.room_id_to_string(room_id))
+        False -> None
+      }
+      send_server_message(
+        connection,
+        snapshot_message(
+          snapshot,
+          participant.id,
+          resume_token,
+          created_room_id,
+          host_token,
+        ),
+      )
+      attached(state, room_subject, participant_id, session, room_id, snapshot)
+    }
+    room.JoinReply(room.JoinRejected(_, reason), _, _, _) -> {
+      logging.log(
+        logging.Info,
+        "join rejected: room="
+          <> registry.room_id_to_string(room_id)
+          <> ", reason="
+          <> string.inspect(reason),
+      )
+      // 作ったばかりで誰もいない部屋は残さない。room 自身が空かを判定する。
+      case created {
+        True -> release_room(state.registry, room_id, room_subject)
+        False -> Nil
+      }
+      let #(code, message) = join_reject_code_and_message(reason)
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(code, message),
       )
       mist.continue(state)
     }
-    None -> {
-      let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
-      // room の起動に失敗したら、その旨を返して接続は生かす（#32）。
-      // 以前は registry が `let assert` でクラッシュしており、1 ルームの
-      // 起動失敗が無関係な全ルームの lookup を巻き添えにしていた。
-      use room_subject <- with_room(state, connection, room_id)
-      let participant_id = room.participant_id(new_participant_id())
-      let session = process.new_subject()
-
-      // room が応答しなければ join を諦め、理由をクライアントへ返す（#33）。
-      // 以前は actor.call のタイムアウトで**この接続プロセスごとクラッシュ**し、
-      // クライアントには何も届かなかった。
-      use reply <- with_join_reply(
-        state.registry,
-        room_id,
-        room_subject,
-        connection,
-        room.join(room_subject, participant_id, display_name, session),
-      )
-      case reply {
-        room.JoinReply(
-          room.ParticipantJoined(participant, _),
-          snapshot,
-          resume_token,
-        ) -> {
-          logging.log(
-            logging.Info,
-            "join accepted: room="
-              <> registry.room_id_to_string(room_id)
-              <> ", participant="
-              <> room.participant_id_to_string(participant.id),
-          )
-          // スナップショットは join と同じ room メッセージの中で取られている
-          // （`room.join`、#765）。以後この接続に届く配信は必ずこの revision
-          // より新しく、取得時点のずれ（#121）や二重適用（#43）は起きない。
-          // resume token はこの応答でだけ本人に渡す（#766）。配信にもログにも出さない。
-          send_server_message(
-            connection,
-            snapshot_message(snapshot, participant.id, resume_token),
-          )
-          attached(
-            state,
-            room_subject,
-            participant_id,
-            session,
-            room_id,
-            snapshot,
-          )
-        }
-        room.JoinReply(room.JoinRejected(_, reason), _, _) -> {
-          logging.log(
-            logging.Info,
-            "join rejected: room="
-              <> registry.room_id_to_string(room_id)
-              <> ", reason="
-              <> string.inspect(reason),
-          )
-          let #(code, message) = join_reject_code_and_message(reason)
-          send_server_message(
-            connection,
-            protocol.ProtocolErrorMessage(code, message),
-          )
-          mist.continue(state)
-        }
-        // `Join` never yields any other event; kept for exhaustiveness since
-        // `room.RoomEvent` is shared across every room command.
-        _ -> mist.continue(state)
-      }
-    }
+    // `Join` never yields any other event; kept for exhaustiveness since
+    // `room.RoomEvent` is shared across every room command.
+    _ -> mist.continue(state)
   }
 }
 
@@ -598,9 +685,7 @@ pub const session_replaced_message =
 
 /// 保存済みの resume token で、同じ参加者として付け直す（#766）。
 ///
-/// 部屋が無ければ registry は新しい room を作るが、その room の世代は
-/// クライアントが持つものと一致しないので `room_gone` になる。作られた
-/// 空の room は Release で片付ける（join の拒否と同じ）。
+/// 部屋が無ければ作らずに `room_gone` を返す（#767）。
 fn handle_resume(
   state: ConnectionState,
   connection: WebsocketConnection,
@@ -619,7 +704,12 @@ fn handle_resume(
     }
     None -> {
       let room_id = registry.room_id(wire.room_id_to_string(wire_room_id))
-      use room_subject <- with_room(state, connection, room_id)
+      use room_subject <- with_existing_room(
+        state,
+        connection,
+        room_id,
+        resume_reject_code_and_message(room.RoomGone),
+      )
       let session = process.new_subject()
       use reply <- with_join_reply(
         state.registry,
@@ -639,7 +729,7 @@ fn handle_resume(
           )
           send_server_message(
             connection,
-            snapshot_message(snapshot, participant_id, None),
+            snapshot_message(snapshot, participant_id, None, None, None),
           )
           attached(
             state,
@@ -658,7 +748,6 @@ fn handle_resume(
               <> ", reason="
               <> string.inspect(reason),
           )
-          release_room(state.registry, room_id, room_subject)
           let #(code, message) = resume_reject_code_and_message(reason)
           send_server_message(
             connection,
@@ -708,11 +797,14 @@ fn handle_leave(
 }
 
 /// The `state` message for a snapshot, seen from participant `self_id`.
-/// `resume_token` is set only when answering that participant's own join.
+/// `resume_token` is set only when answering that participant's own join;
+/// `created_room_id` and `host_token` only when answering the creator (#767).
 fn snapshot_message(
   snapshot: room.Snapshot,
   self_id: room.ParticipantId,
   resume_token: Option(String),
+  created_room_id: Option(String),
+  host_token: Option(String),
 ) -> protocol.ServerMessage {
   protocol.State(
     instance_id: snapshot.instance_id,
@@ -722,6 +814,8 @@ fn snapshot_message(
     participants: list.map(snapshot.participants, to_wire_participant),
     buzzes: list.map(snapshot.buzzes, to_wire_buzz_result),
     resume_token:,
+    created_room_id:,
+    host_token:,
   )
 }
 
@@ -745,7 +839,7 @@ fn handle_sync(
           // 適用される）なので、後から送れば表示が巻き戻らない。
           send_server_message(
             connection,
-            snapshot_message(snapshot, handle.participant_id, None),
+            snapshot_message(snapshot, handle.participant_id, None, None, None),
           )
           flush_queued_broadcasts(connection, handle)
           mist.continue(state)
@@ -991,30 +1085,46 @@ pub fn room_unavailable_message(reason: RoomUnavailableReason) -> String {
   }
 }
 
-/// room を引けたときだけ `next` を実行する。引けなければクライアントへ
-/// `room_unavailable` を返し、接続はそのまま維持する（#32）。
-fn with_room(
+/// The answer to a join for a code that names no room (#767).
+pub const room_not_found_error = #(
+  "room_not_found",
+  "No room has this code. It may have ended, or the code may be wrong.",
+)
+
+/// 既存の room を引けたときだけ `next` を実行する（#767）。部屋が無ければ
+/// `not_found`（code, message）を返し、registry が応答しなければ
+/// `room_unavailable` を返す。どちらも接続は維持する（#32）。
+fn with_existing_room(
   state: ConnectionState,
   connection: WebsocketConnection,
   room_id: registry.RoomId,
+  not_found: #(String, String),
   next: fn(Subject(room.Message)) -> Next(ConnectionState, ConnectionEvent),
 ) -> Next(ConnectionState, ConnectionEvent) {
-  case registry.lookup(state.registry, room_id) {
+  case registry.find(state.registry, room_id) {
     Ok(room_subject) -> next(room_subject)
-    Error(lookup_error) -> {
+    Error(registry.RoomNotFound) -> {
+      logging.log(
+        logging.Info,
+        "room not found: room=" <> registry.room_id_to_string(room_id),
+      )
+      let #(code, message) = not_found
+      send_server_message(
+        connection,
+        protocol.ProtocolErrorMessage(code, message),
+      )
+      mist.continue(state)
+    }
+    Error(registry.RegistryUnavailable) -> {
       logging.log(
         logging.Warning,
         "room unavailable: room=" <> registry.room_id_to_string(room_id),
       )
-      let reason = case lookup_error {
-        room_registry.CapacityReached -> RoomCapacityReached
-        room_registry.Unavailable -> RoomLookupFailed
-      }
       send_server_message(
         connection,
         protocol.ProtocolErrorMessage(
           "room_unavailable",
-          room_unavailable_message(reason),
+          room_unavailable_message(RoomLookupFailed),
         ),
       )
       mist.continue(state)

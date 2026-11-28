@@ -46,7 +46,8 @@ function unescapeGleam(literal) {
   return literal.replace(/\\"/g, '"').replace(/\\\\/g, "\\");
 }
 
-function clientJsConst(name) {
+/// `src/gleamroom/client_js.gleam` の文字列定数を JS として取り出す。
+export function clientJsConst(name) {
   const source = fs.readFileSync(path.join(repoRoot, "src/gleamroom/client_js.gleam"), "utf8");
   const literal = new RegExp(`pub const ${name} =\\s*"((?:[^"\\\\]|\\\\[\\s\\S])*)"`).exec(source);
   if (!literal) {
