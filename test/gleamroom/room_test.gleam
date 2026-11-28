@@ -7,18 +7,23 @@ import gleamroom/room
 import gleamroom/wait
 
 pub fn join_adds_participant_and_emits_joined_test() {
-  let state = room.new_state()
+  let state = open_state()
   let id = room.participant_id("p1")
 
   let #(next, event) = room.apply_command(state, room.Join(id, "Alice"))
 
-  assert room.snapshot(next) == [room.Participant(id, "Alice", True)]
-  assert event == room.ParticipantJoined(room.Participant(id, "Alice", True), 1)
+  assert room.snapshot(next)
+    == [room.Participant(id, "Alice", True, room.Player)]
+  assert event
+    == room.ParticipantJoined(
+      room.Participant(id, "Alice", True, room.Player),
+      1,
+    )
 }
 
 pub fn duplicate_join_is_rejected_and_state_is_unchanged_test() {
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(id, "Alice"))
 
   let #(next, event) = room.apply_command(state, room.Join(id, "Alice again"))
 
@@ -28,7 +33,7 @@ pub fn duplicate_join_is_rejected_and_state_is_unchanged_test() {
 
 pub fn join_with_blank_display_name_is_rejected_and_state_is_unchanged_test() {
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
 
   let #(next, event) = room.apply_command(state, room.Join(id, "   "))
 
@@ -38,7 +43,7 @@ pub fn join_with_blank_display_name_is_rejected_and_state_is_unchanged_test() {
 
 pub fn join_with_display_name_over_the_length_limit_is_rejected_test() {
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
   let too_long = string.repeat("a", 65)
 
   let #(next, event) = room.apply_command(state, room.Join(id, too_long))
@@ -49,19 +54,23 @@ pub fn join_with_display_name_over_the_length_limit_is_rejected_test() {
 
 pub fn join_with_display_name_at_the_length_limit_is_accepted_test() {
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
   let at_limit = string.repeat("a", 64)
 
   let #(next, event) = room.apply_command(state, room.Join(id, at_limit))
 
-  assert room.snapshot(next) == [room.Participant(id, at_limit, True)]
+  assert room.snapshot(next)
+    == [room.Participant(id, at_limit, True, room.Player)]
   assert event
-    == room.ParticipantJoined(room.Participant(id, at_limit, True), 1)
+    == room.ParticipantJoined(
+      room.Participant(id, at_limit, True, room.Player),
+      1,
+    )
 }
 
 pub fn join_beyond_the_participant_limit_is_rejected_and_state_is_unchanged_test() {
   let full_state =
-    int.range(from: 1, to: 65, with: room.new_state(), run: fn(state, n) {
+    int.range(from: 1, to: 65, with: open_state(), run: fn(state, n) {
       let id = room.participant_id("p" <> int.to_string(n))
       let #(next, _) = room.apply_command(state, room.Join(id, "Name"))
       next
@@ -77,7 +86,7 @@ pub fn join_beyond_the_participant_limit_is_rejected_and_state_is_unchanged_test
 
 pub fn join_at_the_participant_limit_is_accepted_test() {
   let almost_full_state =
-    int.range(from: 1, to: 64, with: room.new_state(), run: fn(state, n) {
+    int.range(from: 1, to: 64, with: open_state(), run: fn(state, n) {
       let id = room.participant_id("p" <> int.to_string(n))
       let #(next, _) = room.apply_command(state, room.Join(id, "Name"))
       next
@@ -89,12 +98,15 @@ pub fn join_at_the_participant_limit_is_accepted_test() {
 
   assert list.length(room.snapshot(next)) == 64
   assert event
-    == room.ParticipantJoined(room.Participant(last_id, "Last", True), 64)
+    == room.ParticipantJoined(
+      room.Participant(last_id, "Last", True, room.Player),
+      64,
+    )
 }
 
 pub fn leave_removes_participant_and_emits_left_test() {
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(id, "Alice"))
 
   let #(next, event) = room.apply_command(state, room.Leave(id))
 
@@ -104,7 +116,7 @@ pub fn leave_removes_participant_and_emits_left_test() {
 
 pub fn leave_of_unknown_participant_is_rejected_and_state_is_unchanged_test() {
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
 
   let #(next, event) = room.apply_command(state, room.Leave(id))
 
@@ -115,44 +127,48 @@ pub fn leave_of_unknown_participant_is_rejected_and_state_is_unchanged_test() {
 pub fn snapshot_preserves_multiple_participants_test() {
   let alice = room.participant_id("p1")
   let bob = room.participant_id("p2")
-  let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(alice, "Alice"))
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
 
   assert room.snapshot(state)
     == [
-      room.Participant(alice, "Alice", True),
-      room.Participant(bob, "Bob", True),
+      room.Participant(alice, "Alice", True, room.Player),
+      room.Participant(bob, "Bob", True, room.Player),
     ]
 }
 
 pub fn actor_join_and_snapshot_round_trip_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let id = room.participant_id("p1")
   let session = process.new_subject()
 
   let assert Ok(event) = room.dispatch(subject, room.Join(id, "Alice"), session)
 
-  assert event == room.ParticipantJoined(room.Participant(id, "Alice", True), 1)
-  assert room.get_snapshot(subject) == Ok([room.Participant(id, "Alice", True)])
+  assert event
+    == room.ParticipantJoined(
+      room.Participant(id, "Alice", True, room.Player),
+      1,
+    )
+  assert room.get_snapshot(subject)
+    == Ok([room.Participant(id, "Alice", True, room.Player)])
 }
 
 pub fn independent_room_actors_do_not_share_state_test() {
-  let assert Ok(room_a) = room.start()
-  let assert Ok(room_b) = room.start()
+  let assert Ok(room_a) = start_open()
+  let assert Ok(room_b) = start_open()
   let id = room.participant_id("p1")
   let session = process.new_subject()
 
   let assert Ok(_) = room.dispatch(room_a.data, room.Join(id, "Alice"), session)
 
   assert room.get_snapshot(room_a.data)
-    == Ok([room.Participant(id, "Alice", True)])
+    == Ok([room.Participant(id, "Alice", True, room.Player)])
   assert room.get_snapshot(room_b.data) == Ok([])
 }
 
 pub fn join_broadcasts_to_other_subscribers_but_not_the_joiner_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
@@ -167,11 +183,14 @@ pub fn join_broadcasts_to_other_subscribers_but_not_the_joiner_test() {
   // value, not re-broadcast to himself asynchronously.
   assert process.receive(bob_session, 100) == Error(Nil)
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(bob, "Bob", True), 2))
+    == Ok(room.ParticipantJoined(
+      room.Participant(bob, "Bob", True, room.Player),
+      2,
+    ))
 }
 
 pub fn leave_broadcasts_to_remaining_subscribers_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
@@ -192,8 +211,7 @@ pub fn buzz_order_matches_acceptance_order_test() {
   let alice = room.participant_id("a")
   let bob = room.participant_id("b")
   let carol = room.participant_id("c")
-  let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(alice, "Alice"))
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
   let #(state, _) = room.apply_command(state, room.Join(carol, "Carol"))
 
@@ -201,9 +219,9 @@ pub fn buzz_order_matches_acceptance_order_test() {
   let #(state, alice_event) = room.apply_command(state, room.Buzz(alice, 1))
   let #(state, carol_event) = room.apply_command(state, room.Buzz(carol, 1))
 
-  assert bob_event == room.BuzzAccepted(bob, "Bob", 1, 1, 4)
-  assert alice_event == room.BuzzAccepted(alice, "Alice", 2, 1, 5)
-  assert carol_event == room.BuzzAccepted(carol, "Carol", 3, 1, 6)
+  assert bob_event == room.BuzzAccepted(bob, "Bob", 1, 1, room.Locked, 4)
+  assert alice_event == room.BuzzAccepted(alice, "Alice", 2, 1, room.Locked, 5)
+  assert carol_event == room.BuzzAccepted(carol, "Carol", 3, 1, room.Locked, 6)
   assert room.buzz_snapshot(state)
     == [
       room.BuzzResult(bob, "Bob", 1),
@@ -214,7 +232,7 @@ pub fn buzz_order_matches_acceptance_order_test() {
 
 pub fn duplicate_buzz_is_rejected_and_state_unchanged_test() {
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(id, "Alice"))
   let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
 
   let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
@@ -225,7 +243,7 @@ pub fn duplicate_buzz_is_rejected_and_state_unchanged_test() {
 
 pub fn buzz_from_unjoined_participant_is_rejected_test() {
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
 
   let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
 
@@ -233,20 +251,29 @@ pub fn buzz_from_unjoined_participant_is_rejected_test() {
   assert event == room.BuzzRejected(id, room.BuzzerNotJoined)
 }
 
-pub fn reset_round_clears_buzzes_and_permits_rebuzz_test() {
+/// 次の問題は buzz を空にし、受付前（Waiting）から始める（#768）。司会が
+/// 受付を開くまで押せない。
+pub fn next_question_clears_buzzes_and_waits_for_the_host_test() {
+  let host = room.participant_id("host")
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.JoinAsHost(host, "H"))
+  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
   let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
 
-  let #(reset_state, reset_event) =
-    room.apply_command(state, room.ResetRound(1))
+  let #(next_state, event) =
+    room.apply_command(state, room.NextQuestion(host, 1))
 
-  assert reset_event == room.RoundReset(2, 3)
-  assert room.buzz_snapshot(reset_state) == []
-  assert reset_state.round_id == 2
+  assert event == room.RoundReset(2, 4)
+  assert room.buzz_snapshot(next_state) == []
+  assert next_state.round_id == 2
+  assert next_state.phase == room.Waiting
+  let #(_, early) = room.apply_command(next_state, room.Buzz(id, 2))
+  assert early == room.BuzzRejected(id, room.NotAccepting)
 
-  let #(_, rebuzz_event) = room.apply_command(reset_state, room.Buzz(id, 2))
-  assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1, 2, 4)
+  let #(opened, _) =
+    room.apply_command(next_state, room.OpenAcceptance(host, 2))
+  let #(_, rebuzz_event) = room.apply_command(opened, room.Buzz(id, 2))
+  assert rebuzz_event == room.BuzzAccepted(id, "Alice", 1, 2, room.Locked, 6)
 }
 
 pub fn buzz_history_survives_the_buzzer_leaving_test() {
@@ -255,8 +282,7 @@ pub fn buzz_history_survives_the_buzzer_leaving_test() {
   // pins the inverse of poker's leaving_participant_is_dropped_from_a_later_reveal_test.
   let alice = room.participant_id("p1")
   let bob = room.participant_id("p2")
-  let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(alice, "Alice"))
   let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
   let #(state, _) = room.apply_command(state, room.Buzz(bob, 1))
 
@@ -267,7 +293,7 @@ pub fn buzz_history_survives_the_buzzer_leaving_test() {
 }
 
 pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
@@ -280,42 +306,42 @@ pub fn actor_buzz_broadcasts_ordering_to_other_subscribers_test() {
 
   let assert Ok(event) = room.dispatch(subject, room.Buzz(bob, 1), bob_session)
 
-  assert event == room.BuzzAccepted(bob, "Bob", 1, 1, 3)
+  assert event == room.BuzzAccepted(bob, "Bob", 1, 1, room.Locked, 3)
   assert process.receive(alice_session, 100)
-    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, 3))
+    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, room.Locked, 3))
   // Bob also receives his own accepted buzz asynchronously (#143), on top
   // of the synchronous `dispatch` return value already asserted above.
   assert process.receive(bob_session, 100)
-    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, 3))
+    == Ok(room.BuzzAccepted(bob, "Bob", 1, 1, room.Locked, 3))
 }
 
-pub fn actor_reset_round_clears_buzz_snapshot_test() {
-  let assert Ok(started) = room.start()
+pub fn actor_next_question_clears_buzz_snapshot_test() {
+  let assert Ok(started) = start_open()
   let subject = started.data
+  let host = room.participant_id("host")
+  let host_session = process.new_subject()
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
+  let assert Ok(_) = room.join_as_creator(subject, host, "Host", host_session)
   let assert Ok(_) =
     room.dispatch(subject, room.Join(alice, "Alice"), alice_session)
   let assert Ok(_) = room.dispatch(subject, room.Buzz(alice, 1), alice_session)
-  // Buzz also broadcasts an async echo back to the issuer (#143); drain it
-  // before asserting on RoundReset's own async echo below.
-  let assert Ok(room.BuzzAccepted(display_name: "Alice", position: 1, ..)) =
-    process.receive(alice_session, 100)
+  let _ = drain(host_session, [])
 
   let assert Ok(event) =
-    room.dispatch(subject, room.ResetRound(1), alice_session)
+    room.dispatch(subject, room.NextQuestion(host, 1), host_session)
 
-  assert event == room.RoundReset(2, 3)
-  let assert Ok(room.Snapshot(buzzes:, ..)) = room.get_state(subject)
+  assert event == room.RoundReset(2, 4)
+  let assert Ok(room.Snapshot(buzzes:, phase:, ..)) = room.get_state(subject)
   assert buzzes == []
-  // RoundReset is on the same issuer-inclusive `broadcast_all` branch as
-  // Buzz (#465), so the issuer also receives an async second copy on top
-  // of the synchronous `dispatch` return value already asserted above.
-  assert process.receive(alice_session, 100) == Ok(room.RoundReset(2, 3))
+  assert phase == room.Waiting
+  // RoundReset is on the same issuer-inclusive branch as Buzz (#465), so
+  // the host also receives an async second copy.
+  assert process.receive(host_session, 100) == Ok(room.RoundReset(2, 4))
 }
 
 pub fn departed_subscriber_receives_no_further_broadcasts_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
@@ -339,11 +365,14 @@ pub fn departed_subscriber_receives_no_further_broadcasts_test() {
 
   assert process.receive(bob_session, 100) == Error(Nil)
   assert process.receive(alice_session, 100)
-    == Ok(room.ParticipantJoined(room.Participant(carol, "Carol", True), 4))
+    == Ok(room.ParticipantJoined(
+      room.Participant(carol, "Carol", True, room.Player),
+      4,
+    ))
 }
 
 pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice_old = room.participant_id("connection-1")
   let alice_old_session = process.new_subject()
@@ -365,7 +394,10 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // Reconnect gets a distinct `ParticipantId`; the server does not correlate
   // it with the connection that dropped.
   assert event
-    == Ok(room.ParticipantJoined(room.Participant(alice_new, "Alice", True), 4))
+    == Ok(room.ParticipantJoined(
+      room.Participant(alice_new, "Alice", True, room.Player),
+      4,
+    ))
   assert alice_new != alice_old
 
   // The snapshot delivered on rejoin reflects current room state: the old
@@ -373,13 +405,13 @@ pub fn rejoin_after_leave_is_a_new_transient_identity_with_current_snapshot_test
   // active Room process, not tied to any one connection), and presence
   // reflects only the reconnected participant.
   assert room.get_snapshot(subject)
-    == Ok([room.Participant(alice_new, "Alice", True)])
+    == Ok([room.Participant(alice_new, "Alice", True, room.Player)])
   let assert Ok(room.Snapshot(buzzes:, ..)) = room.get_state(subject)
   assert buzzes == [room.BuzzResult(alice_old, "Alice", 1)]
 }
 
 pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice_old = room.participant_id("connection-1")
   let alice_old_session = process.new_subject()
@@ -396,8 +428,8 @@ pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() 
 
   assert room.get_snapshot(subject)
     == Ok([
-      room.Participant(alice_old, "Alice", True),
-      room.Participant(alice_new, "Alice", True),
+      room.Participant(alice_old, "Alice", True, room.Player),
+      room.Participant(alice_new, "Alice", True, room.Player),
     ])
 
   let assert Ok(_) =
@@ -406,12 +438,12 @@ pub fn rejoin_before_old_connections_leave_keeps_both_identities_present_test() 
   // Once the stale connection's `Leave` is processed, only the reconnected
   // identity remains present.
   assert room.get_snapshot(subject)
-    == Ok([room.Participant(alice_new, "Alice", True)])
+    == Ok([room.Participant(alice_new, "Alice", True, room.Player)])
 }
 
 pub fn independent_room_actors_do_not_share_buzz_state_test() {
-  let assert Ok(room_a) = room.start()
-  let assert Ok(room_b) = room.start()
+  let assert Ok(room_a) = start_open()
+  let assert Ok(room_b) = start_open()
   let id = room.participant_id("p1")
   let session = process.new_subject()
   let assert Ok(_) = room.dispatch(room_a.data, room.Join(id, "Alice"), session)
@@ -443,7 +475,7 @@ pub fn independent_room_actors_do_not_share_buzz_state_test() {
 /// 1 つ置くほうが確実。#766 以降は、まず切断中になり、復帰の猶予が切れて
 /// から消える。猶予を短くした room で両方の段階を確かめる。
 pub fn a_participant_whose_session_dies_is_removed_test() {
-  let assert Ok(started) = room.start_with_grace(100)
+  let assert Ok(started) = room.start_accepting_with_grace(100)
   let subject = started.data
 
   let survivor = room.participant_id("survivor")
@@ -463,8 +495,8 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
     })
 
   let both = [
-    room.Participant(survivor, "Survivor", True),
-    room.Participant(doomed, "Doomed", True),
+    room.Participant(survivor, "Survivor", True, room.Player),
+    room.Participant(doomed, "Doomed", True, room.Player),
   ]
   wait.until(fn() { room.get_snapshot(subject) == Ok(both) }, "2 人とも join し終わる")
 
@@ -475,8 +507,8 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
     fn() {
       room.get_snapshot(subject)
       == Ok([
-        room.Participant(survivor, "Survivor", True),
-        room.Participant(doomed, "Doomed", False),
+        room.Participant(survivor, "Survivor", True, room.Player),
+        room.Participant(doomed, "Doomed", False, room.Player),
       ])
     },
     "死んだ接続の参加者が切断中になる",
@@ -486,7 +518,7 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
   wait.until(
     fn() {
       room.get_snapshot(subject)
-      == Ok([room.Participant(survivor, "Survivor", True)])
+      == Ok([room.Participant(survivor, "Survivor", True, room.Player)])
     },
     "死んだ接続の参加者が片付く",
   )
@@ -502,7 +534,7 @@ pub fn a_participant_whose_session_dies_is_removed_test() {
 /// 上書きし、接続が最終的に死んでも1回目の参加者（`alice_old`）が
 /// `state.room.participants` に残り続ける「幽霊参加者」になっていた。
 pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test() {
-  let assert Ok(started) = room.start_with_grace(50)
+  let assert Ok(started) = room.start_accepting_with_grace(50)
   let subject = started.data
 
   // room が空になって自己停止しないよう、無関係な生存者を先に join させておく
@@ -530,9 +562,9 @@ pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test
     fn() {
       room.get_snapshot(subject)
       == Ok([
-        room.Participant(survivor, "Survivor", True),
-        room.Participant(alice_old, "Alice", True),
-        room.Participant(alice_new, "Alice", True),
+        room.Participant(survivor, "Survivor", True, room.Player),
+        room.Participant(alice_old, "Alice", True, room.Player),
+        room.Participant(alice_new, "Alice", True, room.Player),
       ])
     },
     "同一接続からの再joinで両方のIDが一時的に併存する",
@@ -543,7 +575,7 @@ pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test
   wait.until(
     fn() {
       room.get_snapshot(subject)
-      == Ok([room.Participant(survivor, "Survivor", True)])
+      == Ok([room.Participant(survivor, "Survivor", True, room.Player)])
     },
     "接続が死ねば再joinで増えた分も含めて全員が片付く",
   )
@@ -559,7 +591,7 @@ pub fn ghost_participant_from_same_connection_rejoin_is_cleaned_up_on_death_test
 /// 追跡していない pid（room 自身の pid）で `SessionDown` を直接送ることで
 /// 同じ帰結（sessions に一致するエントリが無い → 何も変わらない）を検証する。
 pub fn session_down_for_an_untracked_pid_is_a_no_op_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let assert Ok(room_pid) = process.subject_owner(subject)
 
@@ -573,7 +605,8 @@ pub fn session_down_for_an_untracked_pid_is_a_no_op_test() {
 
   // no-op なので room は生きたままで、参加者も変わらない。
   assert process.is_alive(room_pid)
-  assert room.get_snapshot(subject) == Ok([room.Participant(id, "Alice", True)])
+  assert room.get_snapshot(subject)
+    == Ok([room.Participant(id, "Alice", True, room.Player)])
 }
 
 /// 接続プロセスがクラッシュしても room actor が生き残ること（#69）。
@@ -586,7 +619,7 @@ pub fn session_down_for_an_untracked_pid_is_a_no_op_test() {
 /// 正しくは `process.monitor`（片方向）。対象の終了をメッセージで受け取るだけで、
 /// 監視元は影響を受けない。
 pub fn a_crashing_session_does_not_take_down_the_room_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let assert Ok(room_pid) = process.subject_owner(subject)
 
@@ -620,8 +653,8 @@ pub fn a_crashing_session_does_not_take_down_the_room_test() {
     fn() {
       room.get_snapshot(subject)
       == Ok([
-        room.Participant(survivor, "Survivor", True),
-        room.Participant(doomed, "Doomed", False),
+        room.Participant(survivor, "Survivor", True, room.Player),
+        room.Participant(doomed, "Doomed", False, room.Player),
       ])
     },
     "落ちた参加者が切断中になり、残りは使える",
@@ -639,7 +672,7 @@ pub fn a_crashing_room_does_not_take_down_the_sessions_test() {
   // （実際に Exit(Killed) で 3 件落ちた）。
   let room_ready = process.new_subject()
   process.spawn_unlinked(fn() {
-    let assert Ok(started) = room.start()
+    let assert Ok(started) = start_open()
     process.send(room_ready, started.data)
     process.sleep(3000)
   })
@@ -686,7 +719,7 @@ pub fn a_crashing_room_does_not_take_down_the_sessions_test() {
 ///   - 各参加者が受け取った `BuzzAccepted` の位置が snapshot と一致する
 ///   - snapshot は位置の昇順
 pub fn concurrent_buzzes_get_unique_consecutive_positions_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let count = 8
 
@@ -772,7 +805,7 @@ fn fill_round_with_churn(state: room.RoomState, count: Int) -> room.RoomState {
 pub fn buzz_beyond_round_limit_is_rejected_and_order_kept_test() {
   let anchor = room.participant_id("anchor")
   let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+    room.apply_command(open_state(), room.Join(anchor, "Anchor"))
   let state = fill_round_with_churn(state, 128)
   assert list.length(room.buzz_snapshot(state)) == 128
 
@@ -785,34 +818,39 @@ pub fn buzz_beyond_round_limit_is_rejected_and_order_kept_test() {
 pub fn buzz_at_round_limit_minus_one_is_still_accepted_test() {
   let anchor = room.participant_id("anchor")
   let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+    room.apply_command(open_state(), room.Join(anchor, "Anchor"))
   let state = fill_round_with_churn(state, 127)
 
   let #(next, event) = room.apply_command(state, room.Buzz(anchor, 1))
 
   // 1 join + 127 x (join, buzz, leave) = revision 382 before this buzz.
-  assert event == room.BuzzAccepted(anchor, "Anchor", 128, 1, 383)
+  assert event == room.BuzzAccepted(anchor, "Anchor", 128, 1, room.Locked, 383)
   assert list.length(room.buzz_snapshot(next)) == 128
 }
 
-pub fn reset_round_lifts_round_limit_test() {
+pub fn next_question_lifts_round_limit_test() {
+  let host = room.participant_id("host")
   let anchor = room.participant_id("anchor")
-  let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(anchor, "Anchor"))
+  let #(state, _) = room.apply_command(open_state(), room.JoinAsHost(host, "H"))
+  let #(state, _) = room.apply_command(state, room.Join(anchor, "Anchor"))
   let state = fill_round_with_churn(state, 128)
-  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 2))
 
   let #(_, event) = room.apply_command(state, room.Buzz(anchor, 2))
 
-  // 1 join + 128 x 3 = 385, the reset is 386.
-  assert event == room.BuzzAccepted(anchor, "Anchor", 1, 2, 387)
+  // 2 joins + 128 x 3 = 386, next question 387, open 388.
+  assert event == room.BuzzAccepted(anchor, "Anchor", 1, 2, room.Locked, 389)
 }
 
 /// 前の round を名指しした buzz は拒否され、状態も revision も変わらない（#765）。
 pub fn buzz_for_a_stale_round_is_rejected_and_state_unchanged_test() {
+  let host = room.participant_id("host")
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "Alice"))
-  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(open_state(), room.JoinAsHost(host, "H"))
+  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 2))
 
   let #(next, event) = room.apply_command(state, room.Buzz(id, 1))
 
@@ -820,47 +858,53 @@ pub fn buzz_for_a_stale_round_is_rejected_and_state_unchanged_test() {
   assert event == room.BuzzRejected(id, room.BuzzStaleRound)
 }
 
-/// 同じ round への2回目の reset は新しい round を始めない（#765）。2人が同時に
-/// reset を押しても、始まったばかりの round の buzz を消さない。
-pub fn second_reset_of_the_same_round_is_rejected_test() {
+/// 同じ round への2回目の「次の問題」は新しい round を始めない（#765, #768）。
+/// 二重クリックや再送で、始まったばかりの問題の buzz を消さない。
+pub fn second_next_question_for_the_same_round_is_rejected_test() {
+  let host = room.participant_id("host")
   let alice = room.participant_id("a")
-  let bob = room.participant_id("b")
-  let #(state, _) =
-    room.apply_command(room.new_state(), room.Join(alice, "Alice"))
-  let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
-  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(open_state(), room.JoinAsHost(host, "H"))
+  let #(state, _) = room.apply_command(state, room.Join(alice, "Alice"))
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 2))
   let #(state, _) = room.apply_command(state, room.Buzz(alice, 2))
 
-  let #(next, event) = room.apply_command(state, room.ResetRound(1))
+  let #(next, event) = room.apply_command(state, room.NextQuestion(host, 1))
 
   assert next == state
-  assert event == room.ResetRejected(room.ResetStaleRound)
+  assert event == room.CommandRejected(room.StaleRound)
   assert room.buzz_snapshot(next) == [room.BuzzResult(alice, "Alice", 1)]
 }
 
 /// 受理された変更だけが revision を1ずつ進める（#765）。
 pub fn only_accepted_changes_advance_the_revision_test() {
+  let host = room.participant_id("host")
   let id = room.participant_id("p1")
-  let state = room.new_state()
+  let state = open_state()
   assert state.revision == 0
+  let #(state, _) = room.apply_command(state, room.JoinAsHost(host, "H"))
   let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
-  assert state.revision == 1
-  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
-  assert state.revision == 1
-  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
-  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
   assert state.revision == 2
-  let #(state, _) = room.apply_command(state, room.ResetRound(1))
-  let #(state, _) = room.apply_command(state, room.ResetRound(1))
+  let #(state, _) = room.apply_command(state, room.Join(id, "Alice"))
+  assert state.revision == 2
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
+  let #(state, _) = room.apply_command(state, room.Buzz(id, 1))
   assert state.revision == 3
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(state, _) = room.apply_command(state, room.NextQuestion(id, 2))
+  assert state.revision == 4
   assert state.round_id == 2
 }
 
 /// `room.join` のスナップショットは自分の join を含み、以後に購読経由で
 /// 届く配信は必ずその revision の次から始まる（#765, #43）。
 pub fn join_snapshot_is_taken_with_the_join_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
+  let host = room.participant_id("host")
+  let host_session = process.new_subject()
+  let assert Ok(_) = room.join_as_creator(subject, host, "Host", host_session)
   let alice = room.participant_id("p1")
   let alice_session = process.new_subject()
   let bob = room.participant_id("p2")
@@ -872,24 +916,30 @@ pub fn join_snapshot_is_taken_with_the_join_test() {
   let assert Ok(room.JoinReply(event, snapshot, _token, _)) =
     room.join(subject, bob, "Bob", bob_session)
 
-  assert event == room.ParticipantJoined(room.Participant(bob, "Bob", True), 3)
-  assert snapshot.revision == 3
+  assert event
+    == room.ParticipantJoined(
+      room.Participant(bob, "Bob", True, room.Player),
+      4,
+    )
+  assert snapshot.revision == 4
   assert snapshot.round_id == 1
   assert snapshot.participants
     == [
-      room.Participant(alice, "Alice", True),
-      room.Participant(bob, "Bob", True),
+      room.Participant(host, "Host", True, room.Host),
+      room.Participant(alice, "Alice", True, room.Player),
+      room.Participant(bob, "Bob", True, room.Player),
     ]
   assert snapshot.buzzes == [room.BuzzResult(alice, "Alice", 1)]
   // 参加より前の変更は bob の購読には届かない。
   assert process.receive(bob_session, 50) == Error(Nil)
 
-  let assert Ok(_) = room.dispatch(subject, room.ResetRound(1), alice_session)
-  assert process.receive(bob_session, 100) == Ok(room.RoundReset(2, 4))
+  let assert Ok(_) =
+    room.dispatch(subject, room.NextQuestion(host, 1), host_session)
+  assert process.receive(bob_session, 100) == Ok(room.RoundReset(2, 5))
 
   let assert Ok(again) = room.get_state(subject)
   assert again.instance_id == snapshot.instance_id
-  assert again.revision == 4
+  assert again.revision == 5
 }
 
 // --- #766: 短時間の切断からの復帰 -------------------------------------------
@@ -911,21 +961,21 @@ fn join_with_token(
 
 pub fn disconnect_and_reconnect_are_revisioned_presence_changes_test() {
   let id = room.participant_id("p1")
-  let #(state, _) = room.apply_command(room.new_state(), room.Join(id, "A"))
+  let #(state, _) = room.apply_command(open_state(), room.Join(id, "A"))
   let #(state, event) = room.apply_command(state, room.Disconnect(id))
   assert event == room.ParticipantDisconnected(id, 2)
-  assert room.snapshot(state) == [room.Participant(id, "A", False)]
+  assert room.snapshot(state) == [room.Participant(id, "A", False, room.Player)]
   // 既に切断中なら何も変えない（revision も進めない）。
   let #(same, again) = room.apply_command(state, room.Disconnect(id))
   assert again == room.PresenceRejected(id)
   assert same == state
   let #(state, event) = room.apply_command(state, room.Reconnect(id))
   assert event == room.ParticipantReconnected(id, 3)
-  assert room.snapshot(state) == [room.Participant(id, "A", True)]
+  assert room.snapshot(state) == [room.Participant(id, "A", True, room.Player)]
 }
 
 pub fn resume_within_grace_keeps_the_participant_and_their_buzz_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("alice")
   let bob = room.participant_id("bob")
@@ -946,12 +996,18 @@ pub fn resume_within_grace_keeps_the_participant_and_their_buzz_test() {
 
   let new_session = process.new_subject()
   let assert Ok(room.Resumed(resumed_id, resumed)) =
-    room.resume_session(subject, token, snapshot.instance_id, new_session)
+    room.resume_session(
+      subject,
+      token,
+      option.None,
+      snapshot.instance_id,
+      new_session,
+    )
   assert resumed_id == alice
   assert resumed.participants
     == [
-      room.Participant(alice, "Alice", True),
-      room.Participant(bob, "Bob", True),
+      room.Participant(alice, "Alice", True, room.Player),
+      room.Participant(bob, "Bob", True, room.Player),
     ]
   assert resumed.buzzes == [room.BuzzResult(alice, "Alice", 1)]
   assert process.receive(bob_session, 100)
@@ -965,7 +1021,7 @@ pub fn resume_within_grace_keeps_the_participant_and_their_buzz_test() {
 }
 
 pub fn the_replaced_connection_can_no_longer_act_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("alice")
   let old_session = process.new_subject()
@@ -974,26 +1030,32 @@ pub fn the_replaced_connection_can_no_longer_act_test() {
   // 切断を検知する前に、複製したタブなどが同じ token で戻る。
   let new_session = process.new_subject()
   let assert Ok(room.Resumed(..)) =
-    room.resume_session(subject, token, snapshot.instance_id, new_session)
+    room.resume_session(
+      subject,
+      token,
+      option.None,
+      snapshot.instance_id,
+      new_session,
+    )
   assert process.receive(old_session, 100) == Ok(room.SessionReplaced)
 
   // 古い接続のコマンド・遅れた Detach・Leave はどれも効かない。
   assert room.dispatch(subject, room.Buzz(alice, 1), old_session)
     == Ok(room.BuzzRejected(alice, room.BuzzerNotJoined))
-  assert room.dispatch(subject, room.ResetRound(1), old_session)
-    == Ok(room.ResetRejected(room.ResetNotJoined))
+  assert room.dispatch(subject, room.NextQuestion(alice, 1), old_session)
+    == Ok(room.CommandRejected(room.CommandNotJoined))
   room.detach(subject, alice, old_session)
   assert room.dispatch(subject, room.Leave(alice), old_session)
     == Ok(room.LeaveRejected(alice, room.NotJoined))
   assert room.get_snapshot(subject)
-    == Ok([room.Participant(alice, "Alice", True)])
+    == Ok([room.Participant(alice, "Alice", True, room.Player)])
   // 新しい接続は使える。
   let assert Ok(room.BuzzAccepted(..)) =
     room.dispatch(subject, room.Buzz(alice, 1), new_session)
 }
 
 pub fn a_stale_grace_timer_does_not_remove_a_resumed_participant_test() {
-  let assert Ok(started) = room.start_with_grace(50)
+  let assert Ok(started) = room.start_accepting_with_grace(50)
   let subject = started.data
   let alice = room.participant_id("alice")
   let session = process.new_subject()
@@ -1002,15 +1064,21 @@ pub fn a_stale_grace_timer_does_not_remove_a_resumed_participant_test() {
   room.detach(subject, alice, session)
   let resumed_session = process.new_subject()
   let assert Ok(room.Resumed(..)) =
-    room.resume_session(subject, token, snapshot.instance_id, resumed_session)
+    room.resume_session(
+      subject,
+      token,
+      option.None,
+      snapshot.instance_id,
+      resumed_session,
+    )
   // 1 回目の切断のタイマー（前の世代）が満了しても外れない。
   process.sleep(150)
   assert room.get_snapshot(subject)
-    == Ok([room.Participant(alice, "Alice", True)])
+    == Ok([room.Participant(alice, "Alice", True, room.Player)])
 }
 
 pub fn resume_is_rejected_for_wrong_room_unknown_or_expired_token_test() {
-  let assert Ok(started) = room.start_with_grace(50)
+  let assert Ok(started) = room.start_accepting_with_grace(50)
   let subject = started.data
   let alice = room.participant_id("alice")
   let bob = room.participant_id("bob")
@@ -1021,11 +1089,18 @@ pub fn resume_is_rejected_for_wrong_room_unknown_or_expired_token_test() {
   let #(bob_token, _) = join_with_token(subject, bob, "Bob", bob_session)
   let other = process.new_subject()
 
-  assert room.resume_session(subject, alice_token, "another-instance", other)
+  assert room.resume_session(
+      subject,
+      alice_token,
+      option.None,
+      "another-instance",
+      other,
+    )
     == Ok(room.ResumeRejected(room.RoomGone))
   assert room.resume_session(
       subject,
       "not-a-token",
+      option.None,
       snapshot.instance_id,
       other,
     )
@@ -1034,7 +1109,13 @@ pub fn resume_is_rejected_for_wrong_room_unknown_or_expired_token_test() {
   // 明示的な退出の後は戻れない。
   let assert Ok(room.ParticipantLeft(..)) =
     room.dispatch(subject, room.Leave(bob), bob_session)
-  assert room.resume_session(subject, bob_token, snapshot.instance_id, other)
+  assert room.resume_session(
+      subject,
+      bob_token,
+      option.None,
+      snapshot.instance_id,
+      other,
+    )
     == Ok(room.ResumeRejected(room.ResumeExpired))
 
   // 猶予切れの後は grace_expiry_removes_the_participant_but_keeps_their_buzz_test。
@@ -1042,7 +1123,7 @@ pub fn resume_is_rejected_for_wrong_room_unknown_or_expired_token_test() {
 }
 
 pub fn grace_expiry_removes_the_participant_but_keeps_their_buzz_test() {
-  let assert Ok(started) = room.start_with_grace(50)
+  let assert Ok(started) = room.start_accepting_with_grace(50)
   let subject = started.data
   let alice = room.participant_id("alice")
   let bob = room.participant_id("bob")
@@ -1057,7 +1138,8 @@ pub fn grace_expiry_removes_the_participant_but_keeps_their_buzz_test() {
   room.detach(subject, alice, alice_session)
   wait.until(
     fn() {
-      room.get_snapshot(subject) == Ok([room.Participant(bob, "Bob", True)])
+      room.get_snapshot(subject)
+      == Ok([room.Participant(bob, "Bob", True, room.Player)])
     },
     "猶予が切れた参加者が外れる",
   )
@@ -1066,6 +1148,7 @@ pub fn grace_expiry_removes_the_participant_but_keeps_their_buzz_test() {
   assert room.resume_session(
       subject,
       token,
+      option.None,
       snapshot.instance_id,
       process.new_subject(),
     )
@@ -1073,7 +1156,7 @@ pub fn grace_expiry_removes_the_participant_but_keeps_their_buzz_test() {
 }
 
 pub fn the_room_stops_when_the_last_grace_expires_test() {
-  let assert Ok(started) = room.start_with_grace(50)
+  let assert Ok(started) = room.start_accepting_with_grace(50)
   let subject = started.data
   let assert Ok(pid) = process.subject_owner(subject)
   let alice = room.participant_id("alice")
@@ -1088,7 +1171,7 @@ pub fn the_room_stops_when_the_last_grace_expires_test() {
 }
 
 pub fn presence_commands_are_not_accepted_from_outside_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("alice")
   let session = process.new_subject()
@@ -1096,11 +1179,11 @@ pub fn presence_commands_are_not_accepted_from_outside_test() {
   assert room.dispatch(subject, room.Disconnect(alice), session)
     == Ok(room.PresenceRejected(alice))
   assert room.get_snapshot(subject)
-    == Ok([room.Participant(alice, "Alice", True)])
+    == Ok([room.Participant(alice, "Alice", True, room.Player)])
 }
 
 pub fn resume_tokens_are_never_broadcast_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let alice = room.participant_id("alice")
   let bob = room.participant_id("bob")
@@ -1113,6 +1196,7 @@ pub fn resume_tokens_are_never_broadcast_test() {
     room.resume_session(
       subject,
       bob_token,
+      option.None,
       snapshot.instance_id,
       process.new_subject(),
     )
@@ -1134,7 +1218,7 @@ fn drain(
 }
 
 pub fn departed_participants_are_tracked_within_a_bound_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
   let first = room.participant_id("churn-0")
   let first_session = process.new_subject()
@@ -1151,9 +1235,21 @@ pub fn departed_participants_are_tracked_within_a_bound_test() {
     })
   let other = process.new_subject()
   // 古い退出者の記録は上限を超えた分から捨てられ、最近の退出者は残る。
-  assert room.resume_session(subject, first_token, snapshot.instance_id, other)
+  assert room.resume_session(
+      subject,
+      first_token,
+      option.None,
+      snapshot.instance_id,
+      other,
+    )
     == Ok(room.ResumeRejected(room.InvalidToken))
-  assert room.resume_session(subject, last_token, snapshot.instance_id, other)
+  assert room.resume_session(
+      subject,
+      last_token,
+      option.None,
+      snapshot.instance_id,
+      other,
+    )
     == Ok(room.ResumeRejected(room.ResumeExpired))
 }
 
@@ -1162,7 +1258,7 @@ pub fn departed_participants_are_tracked_within_a_bound_test() {
 /// 部屋を作った参加者にだけ司会 token が発行される。2人目以降は作成者の
 /// 経路を通っても受け取れず、通常の join（招待）は常に受け取らない。
 pub fn only_the_creator_receives_the_host_token_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
 
   let assert Ok(room.JoinReply(
@@ -1192,7 +1288,7 @@ pub fn only_the_creator_receives_the_host_token_test() {
 
 /// 拒否された作成者の join には token が付かず、司会の席も空いたまま。
 pub fn a_rejected_creator_join_issues_no_host_token_test() {
-  let assert Ok(started) = room.start()
+  let assert Ok(started) = start_open()
   let subject = started.data
 
   let assert Ok(room.JoinReply(
@@ -1239,4 +1335,420 @@ pub fn a_joined_room_outlives_the_empty_room_grace_test() {
 
   process.sleep(80)
   assert process.is_alive(pid)
+}
+
+fn start_open() {
+  room.start_accepting_with_grace(room.default_participant_grace_ms)
+}
+
+/// Acceptance already open, no host: for tests about buzz ordering and
+/// limits that do not involve the host (#768).
+fn open_state() -> room.RoomState {
+  room.RoomState(..room.new_state(), phase: room.Open)
+}
+
+// --- #768: 役割・受付の段階・司会の操作 ---------------------------------------
+
+fn hosted_room() -> #(room.RoomState, room.ParticipantId, room.ParticipantId) {
+  let host = room.participant_id("host")
+  let alice = room.participant_id("alice")
+  let #(state, _) =
+    room.apply_command(room.new_state(), room.JoinAsHost(host, "Host"))
+  let #(state, _) = room.apply_command(state, room.Join(alice, "Alice"))
+  #(state, host, alice)
+}
+
+pub fn the_host_opens_and_the_first_buzz_locks_test() {
+  let #(state, host, alice) = hosted_room()
+  let bob = room.participant_id("bob")
+  let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
+  assert state.phase == room.Waiting
+
+  let #(state, opened) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert opened == room.PhaseChanged(room.Open, 1, 4)
+
+  let #(state, first) = room.apply_command(state, room.Buzz(bob, 1))
+  assert first == room.BuzzAccepted(bob, "Bob", 1, 1, room.Locked, 5)
+  // 回答者が決まった後の buzz も順番に積まれ、回答者は変わらない。
+  let #(state, second) = room.apply_command(state, room.Buzz(alice, 1))
+  assert second == room.BuzzAccepted(alice, "Alice", 2, 1, room.Locked, 6)
+  assert state.phase == room.Locked
+
+  let #(state, skipped) = room.apply_command(state, room.Skip(host, 1))
+  assert skipped == room.PhaseChanged(room.Waiting, 1, 7)
+  // 閉じた問題の結果は次の問題まで残る。
+  assert list.length(room.buzz_snapshot(state)) == 2
+  // 押順が残ったまま開き直すと、先頭ではない人が回答者になる。開き直す
+  // には次の問題へ進む。
+  let #(same, reopened) =
+    room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert reopened == room.CommandRejected(room.InvalidPhase)
+  assert same == state
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(_, opened) = room.apply_command(state, room.OpenAcceptance(host, 2))
+  assert opened == room.PhaseChanged(room.Open, 2, 9)
+}
+
+pub fn the_host_can_close_acceptance_before_anyone_buzzes_test() {
+  let #(state, host, alice) = hosted_room()
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  let #(state, closed) =
+    room.apply_command(state, room.CloseAcceptance(host, 1))
+  assert closed == room.PhaseChanged(room.Waiting, 1, 4)
+  let #(_, late) = room.apply_command(state, room.Buzz(alice, 1))
+  assert late == room.BuzzRejected(alice, room.NotAccepting)
+}
+
+/// 二重クリックや再送で段階が二重に進まない。2回目は拒否され revision も
+/// 進まない。
+pub fn repeated_host_commands_do_not_transition_twice_test() {
+  let #(state, host, _alice) = hosted_room()
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  let #(same, again) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert again == room.CommandRejected(room.InvalidPhase)
+  assert same == state
+
+  let #(state, _) = room.apply_command(state, room.CloseAcceptance(host, 1))
+  let #(same, again) = room.apply_command(state, room.CloseAcceptance(host, 1))
+  assert again == room.CommandRejected(room.InvalidPhase)
+  assert same == state
+  let #(_, skip_waiting) = room.apply_command(state, room.Skip(host, 1))
+  assert skip_waiting == room.CommandRejected(room.InvalidPhase)
+}
+
+/// 司会の操作は司会だけ。参加者が送っても拒否され、状態は変わらない。
+/// 司会は押せない。
+pub fn only_the_host_runs_the_questions_and_the_host_does_not_buzz_test() {
+  let #(state, host, alice) = hosted_room()
+  let commands = [
+    room.OpenAcceptance(alice, 1),
+    room.CloseAcceptance(alice, 1),
+    room.Skip(alice, 1),
+    room.NextQuestion(alice, 1),
+    room.TransferHost(alice, alice),
+    room.EndSession(alice),
+  ]
+  list.each(commands, fn(command) {
+    let #(next, event) = room.apply_command(state, command)
+    assert event == room.CommandRejected(room.Forbidden)
+    assert next == state
+  })
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  let #(_, host_buzz) = room.apply_command(state, room.Buzz(host, 1))
+  assert host_buzz == room.BuzzRejected(host, room.HostCannotBuzz)
+}
+
+pub fn a_host_command_for_an_old_round_is_stale_test() {
+  let #(state, host, _alice) = hosted_room()
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(next, event) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert event == room.CommandRejected(room.StaleRound)
+  assert next == state
+}
+
+/// 終了後は読み取りだけ。押す・司会の操作・新しい参加はどれも拒否される。
+pub fn after_ending_the_session_everything_is_read_only_test() {
+  let #(state, host, alice) = hosted_room()
+  let #(state, _) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  let #(state, ended) = room.apply_command(state, room.EndSession(host))
+  assert ended == room.PhaseChanged(room.Finished, 1, 4)
+
+  let #(_, buzz) = room.apply_command(state, room.Buzz(alice, 1))
+  assert buzz == room.BuzzRejected(alice, room.BuzzSessionFinished)
+  let #(_, next_question) =
+    room.apply_command(state, room.NextQuestion(host, 1))
+  assert next_question == room.CommandRejected(room.SessionFinished)
+  let #(_, again) = room.apply_command(state, room.EndSession(host))
+  assert again == room.CommandRejected(room.SessionFinished)
+  let newcomer = room.participant_id("late")
+  let #(_, join) = room.apply_command(state, room.Join(newcomer, "Late"))
+  assert join == room.JoinRejected(newcomer, room.JoinSessionFinished)
+}
+
+pub fn questions_are_limited_per_session_test() {
+  let #(state, host, _alice) = hosted_room()
+  let state = room.RoomState(..state, round_id: room.max_rounds)
+  let #(next, event) =
+    room.apply_command(state, room.NextQuestion(host, room.max_rounds))
+  assert event == room.CommandRejected(room.SessionFull)
+  assert next == state
+}
+
+pub fn the_host_role_moves_only_to_a_connected_player_test() {
+  let #(state, host, alice) = hosted_room()
+  let bob = room.participant_id("bob")
+  let #(state, _) = room.apply_command(state, room.Join(bob, "Bob"))
+  let #(away, _) = room.apply_command(state, room.Disconnect(bob))
+  let #(_, to_disconnected) =
+    room.apply_command(away, room.TransferHost(host, bob))
+  assert to_disconnected == room.CommandRejected(room.InvalidTarget)
+  let #(_, to_self) = room.apply_command(state, room.TransferHost(host, host))
+  assert to_self == room.CommandRejected(room.InvalidTarget)
+  let nobody = room.participant_id("nobody")
+  let #(_, to_unknown) =
+    room.apply_command(state, room.TransferHost(host, nobody))
+  assert to_unknown == room.CommandRejected(room.InvalidTarget)
+
+  let #(state, moved) =
+    room.apply_command(state, room.TransferHost(host, alice))
+  assert moved == room.HostTransferred(host, alice, 4)
+  assert room.snapshot(state)
+    == [
+      room.Participant(host, "Host", True, room.Player),
+      room.Participant(alice, "Alice", True, room.Host),
+      room.Participant(bob, "Bob", True, room.Player),
+    ]
+  // 元の司会はもう司会の操作ができない。
+  let #(_, old_host) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert old_host == room.CommandRejected(room.Forbidden)
+}
+
+pub fn a_host_who_goes_away_stops_acceptance_test() {
+  let #(state, host, alice) = hosted_room()
+  let #(open, _) = room.apply_command(state, room.OpenAcceptance(host, 1))
+  let #(paused, event) = room.apply_command(open, room.HostAway(False))
+  assert event == room.PhaseChanged(room.Waiting, 1, 4)
+  assert paused.phase == room.Waiting
+
+  // 回答者が決まった後の切断では止めない。退出なら止める。
+  let #(locked, _) = room.apply_command(open, room.Buzz(alice, 1))
+  let #(same, kept) = room.apply_command(locked, room.HostAway(False))
+  assert kept == room.CommandRejected(room.InvalidPhase)
+  assert same == locked
+  let #(left, _) = room.apply_command(locked, room.HostAway(True))
+  assert left.phase == room.Waiting
+}
+
+// --- #768: actor（司会の切断・退出・復帰・移譲、会場表示） --------------------
+
+fn start_hosted() -> #(
+  process.Subject(room.Message),
+  room.ParticipantId,
+  process.Subject(room.RoomEvent),
+  String,
+  String,
+) {
+  let assert Ok(started) = room.start_with_grace(50)
+  let subject = started.data
+  let host = room.participant_id("host")
+  let session = process.new_subject()
+  let assert Ok(room.JoinReply(
+    room.ParticipantJoined(..),
+    snapshot,
+    option.Some(_),
+    option.Some(host_token),
+  )) = room.join_as_creator(subject, host, "Host", session)
+  #(subject, host, session, host_token, snapshot.instance_id)
+}
+
+pub fn a_display_sees_changes_but_cannot_act_test() {
+  let #(subject, host, host_session, _, _) = start_hosted()
+  let display = process.new_subject()
+  let assert Ok(room.Watching(snapshot)) = room.watch(subject, display)
+  assert snapshot.phase == room.Waiting
+  assert list.length(snapshot.participants) == 1
+
+  let assert Ok(room.PhaseChanged(room.Open, 1, 2)) =
+    room.dispatch(subject, room.OpenAcceptance(host, 1), host_session)
+  assert process.receive(display, 100) == Ok(room.PhaseChanged(room.Open, 1, 2))
+
+  // 会場表示の接続からのコマンドは、誰の名前で送っても拒否される。
+  assert room.dispatch(subject, room.NextQuestion(host, 1), display)
+    == Ok(room.CommandRejected(room.Forbidden))
+  assert room.dispatch(subject, room.Buzz(host, 1), display)
+    == Ok(room.CommandRejected(room.Forbidden))
+  let assert Ok(room.Snapshot(phase: room.Open, round_id: 1, ..)) =
+    room.get_state(subject)
+  // 会場表示は参加者一覧に載らない。
+  assert room.get_snapshot(subject)
+    == Ok([room.Participant(host, "Host", True, room.Host)])
+}
+
+pub fn displays_are_limited_per_room_test() {
+  let #(subject, _, _, _, _) = start_hosted()
+  int.range(from: 0, to: 8, with: Nil, run: fn(_, _) {
+    let assert Ok(room.Watching(_)) = room.watch(subject, process.new_subject())
+    Nil
+  })
+  assert room.watch(subject, process.new_subject()) == Ok(room.DisplaysFull)
+}
+
+pub fn a_display_that_closes_stops_receiving_test() {
+  let #(subject, host, host_session, _, _) = start_hosted()
+  let display = process.new_subject()
+  let assert Ok(room.Watching(_)) = room.watch(subject, display)
+  room.unwatch(subject, display)
+  let assert Ok(_) =
+    room.dispatch(subject, room.OpenAcceptance(host, 1), host_session)
+  assert process.receive(display, 50) == Error(Nil)
+}
+
+/// 司会が切れたら受付中のまま放置しない。他の参加者に知らせる。
+pub fn a_disconnected_host_stops_acceptance_test() {
+  let #(subject, host, host_session, _, _) = start_hosted()
+  let alice = room.participant_id("alice")
+  let alice_session = process.new_subject()
+  let _ = join_with_token(subject, alice, "Alice", alice_session)
+  let assert Ok(_) =
+    room.dispatch(subject, room.OpenAcceptance(host, 1), host_session)
+  let _ = drain(alice_session, [])
+
+  room.detach(subject, host, host_session)
+  // drain は最後の通知から 50 ms 待つので、猶予（50 ms）切れの退出通知まで
+  // 拾うことがある。この2通だけを順に受け取る。
+  assert process.receive(alice_session, 100)
+    == Ok(room.ParticipantDisconnected(host, 4))
+  assert process.receive(alice_session, 100)
+    == Ok(room.PhaseChanged(room.Waiting, 1, 5))
+}
+
+/// 司会は猶予が切れて一覧から外れても、司会 token で司会として戻れる。
+/// resume token だけでは戻れない（猶予切れ）。
+pub fn the_host_comes_back_with_the_host_token_after_the_grace_test() {
+  let #(subject, host, host_session, host_token, instance) = start_hosted()
+  let alice = room.participant_id("alice")
+  let alice_session = process.new_subject()
+  let _ = join_with_token(subject, alice, "Alice", alice_session)
+
+  room.detach(subject, host, host_session)
+  wait.until(
+    fn() {
+      room.get_snapshot(subject)
+      == Ok([room.Participant(alice, "Alice", True, room.Player)])
+    },
+    "司会の猶予が切れて一覧から外れる",
+  )
+  let _ = drain(alice_session, [])
+
+  let back = process.new_subject()
+  assert room.resume_session(
+      subject,
+      "wrong-resume-token",
+      option.Some("forged-host-token"),
+      instance,
+      back,
+    )
+    == Ok(room.ResumeRejected(room.InvalidToken))
+  let assert Ok(room.Resumed(id, snapshot)) =
+    room.resume_session(
+      subject,
+      "wrong-resume-token",
+      option.Some(host_token),
+      instance,
+      back,
+    )
+  assert id == host
+  assert list.contains(
+    snapshot.participants,
+    room.Participant(host, "Host", True, room.Host),
+  )
+  let assert [room.ParticipantJoined(room.Participant(role: room.Host, ..), _)] =
+    drain(alice_session, [])
+  // 戻った司会は進行を続けられる。
+  let assert Ok(room.PhaseChanged(room.Open, 1, _)) =
+    room.dispatch(subject, room.OpenAcceptance(host, 1), back)
+}
+
+/// 移譲すると、新しい司会の接続にだけ新しい token が届き、元の token は
+/// 使えなくなる。
+pub fn transferring_the_host_issues_a_new_token_to_the_new_host_only_test() {
+  let #(subject, host, host_session, old_token, instance) = start_hosted()
+  let alice = room.participant_id("alice")
+  let alice_session = process.new_subject()
+  let bob = room.participant_id("bob")
+  let bob_session = process.new_subject()
+  let _ = join_with_token(subject, alice, "Alice", alice_session)
+  let _ = join_with_token(subject, bob, "Bob", bob_session)
+  let _ = drain(alice_session, [])
+  let _ = drain(bob_session, [])
+  let _ = drain(host_session, [])
+
+  let assert Ok(room.HostTransferred(host, alice, 4)) =
+    room.dispatch(subject, room.TransferHost(host, alice), host_session)
+  let alice_events = drain(alice_session, [])
+  let assert [room.HostTransferred(..), room.HostAssigned(new_token)] =
+    alice_events
+  assert new_token != old_token
+  let bob_events = drain(bob_session, [])
+  assert bob_events == [room.HostTransferred(host, alice, 4)]
+  assert !string.contains(string.inspect(bob_events), new_token)
+
+  // 元の token では司会として戻れない（参加者としての resume token も無い
+  // ので拒否される）。新しい司会は新しい token で戻れる。
+  room.detach(subject, alice, alice_session)
+  assert room.resume_session(
+      subject,
+      "none",
+      option.Some(old_token),
+      instance,
+      process.new_subject(),
+    )
+    == Ok(room.ResumeRejected(room.InvalidToken))
+  let assert Ok(room.Resumed(id, _)) =
+    room.resume_session(
+      subject,
+      "none",
+      option.Some(new_token),
+      instance,
+      process.new_subject(),
+    )
+  assert id == alice
+}
+
+/// 司会が自分で退出したら、回答者が決まった後でも受付を止める。席は残る
+/// ので、token を持っていれば戻れる。
+pub fn a_host_who_leaves_stops_acceptance_but_keeps_the_seat_test() {
+  let #(subject, host, host_session, host_token, instance) = start_hosted()
+  let alice = room.participant_id("alice")
+  let alice_session = process.new_subject()
+  let _ = join_with_token(subject, alice, "Alice", alice_session)
+  let assert Ok(_) =
+    room.dispatch(subject, room.OpenAcceptance(host, 1), host_session)
+  let assert Ok(room.BuzzAccepted(phase: room.Locked, ..)) =
+    room.dispatch(subject, room.Buzz(alice, 1), alice_session)
+  let _ = drain(alice_session, [])
+
+  let assert Ok(room.ParticipantLeft(..)) =
+    room.dispatch(subject, room.Leave(host), host_session)
+  assert drain(alice_session, [])
+    == [room.ParticipantLeft(host, 5), room.PhaseChanged(room.Waiting, 1, 6)]
+  let assert Ok(room.Resumed(id, _)) =
+    room.resume_session(
+      subject,
+      "none",
+      option.Some(host_token),
+      instance,
+      process.new_subject(),
+    )
+  assert id == host
+}
+
+/// 一覧から外れた司会の席は参加者で埋めない。満員近くでも司会は token で
+/// 戻れて、戻った後も上限を超えない。
+pub fn a_vacant_host_seat_is_kept_free_from_new_players_test() {
+  let #(subject, host, host_session, host_token, instance) = start_hosted()
+  // 司会と合わせて上限（64人）まで埋める。
+  int.range(from: 1, to: 64, with: Nil, run: fn(_, i) {
+    let id = room.participant_id("p-" <> int.to_string(i))
+    let _ = join_with_token(subject, id, "P", process.new_subject())
+    Nil
+  })
+  let assert Ok(room.ParticipantLeft(..)) =
+    room.dispatch(subject, room.Leave(host), host_session)
+
+  // 司会が抜けて1人分空いたが、それは司会の席。
+  let late = room.participant_id("late")
+  let assert Ok(room.JoinReply(room.JoinRejected(_, room.RoomFull), ..)) =
+    room.join(subject, late, "Late", process.new_subject())
+
+  let assert Ok(room.Resumed(id, snapshot)) =
+    room.resume_session(
+      subject,
+      "none",
+      option.Some(host_token),
+      instance,
+      process.new_subject(),
+    )
+  assert id == host
+  assert list.length(snapshot.participants) == 64
 }

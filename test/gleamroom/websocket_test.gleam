@@ -7,7 +7,8 @@ import gleamroom/websocket
 import gleamroom/wire
 
 pub fn room_event_to_server_message_participant_joined_test() {
-  let participant = room.Participant(room.participant_id("p1"), "Alice", True)
+  let participant =
+    room.Participant(room.participant_id("p1"), "Alice", True, room.Player)
 
   assert websocket.room_event_to_server_message(
       room.ParticipantJoined(participant, 3),
@@ -16,7 +17,12 @@ pub fn room_event_to_server_message_participant_joined_test() {
     == Some(protocol.ParticipantJoined(
       "i1",
       3,
-      protocol.Participant(wire.participant_id("p1"), "Alice", True),
+      protocol.Participant(
+        wire.participant_id("p1"),
+        "Alice",
+        True,
+        protocol.PlayerRole,
+      ),
     ))
 }
 
@@ -30,7 +36,14 @@ pub fn room_event_to_server_message_participant_left_test() {
 
 pub fn room_event_to_server_message_buzz_accepted_test() {
   assert websocket.room_event_to_server_message(
-      room.BuzzAccepted(room.participant_id("p1"), "Alice", 1, 2, 5),
+      room.BuzzAccepted(
+        room.participant_id("p1"),
+        "Alice",
+        1,
+        2,
+        room.Locked,
+        5,
+      ),
       "i1",
     )
     == Some(protocol.BuzzAccepted(
@@ -40,6 +53,7 @@ pub fn room_event_to_server_message_buzz_accepted_test() {
       wire.participant_id("p1"),
       "Alice",
       1,
+      protocol.Locked,
     ))
 }
 
@@ -49,12 +63,51 @@ pub fn room_event_to_server_message_round_reset_test() {
 }
 
 /// 拒否は依頼元への直接応答だけで返し、配信しない（#765）。
-pub fn room_event_to_server_message_reset_rejected_is_not_broadcast_test() {
+pub fn room_event_to_server_message_command_rejected_is_not_broadcast_test() {
   assert websocket.room_event_to_server_message(
-      room.ResetRejected(room.ResetStaleRound),
+      room.CommandRejected(room.StaleRound),
       "i1",
     )
     == None
+}
+
+pub fn room_event_to_server_message_phase_and_host_test() {
+  let p1 = room.participant_id("p1")
+  let p2 = room.participant_id("p2")
+  assert websocket.room_event_to_server_message(
+      room.PhaseChanged(room.Open, 2, 7),
+      "i1",
+    )
+    == Some(protocol.PhaseChanged("i1", 7, 2, protocol.Open))
+  assert websocket.room_event_to_server_message(
+      room.HostTransferred(p1, p2, 8),
+      "i1",
+    )
+    == Some(protocol.HostTransferred(
+      "i1",
+      8,
+      wire.participant_id("p1"),
+      wire.participant_id("p2"),
+    ))
+  assert websocket.room_event_to_server_message(room.HostAssigned("h"), "i1")
+    == Some(protocol.HostAssigned("h"))
+}
+
+pub fn command_reject_code_and_message_test() {
+  assert websocket.command_reject_code_and_message(room.Forbidden).0
+    == "forbidden"
+  assert websocket.command_reject_code_and_message(room.InvalidPhase).0
+    == "invalid_phase"
+  assert websocket.command_reject_code_and_message(room.SessionFinished).0
+    == "session_finished"
+  assert websocket.command_reject_code_and_message(room.SessionFull).0
+    == "session_full"
+  assert websocket.command_reject_code_and_message(room.InvalidTarget).0
+    == "invalid_target"
+  assert websocket.buzz_reject_code_and_message(room.NotAccepting).0
+    == "not_accepting"
+  assert websocket.buzz_reject_code_and_message(room.HostCannotBuzz).0
+    == "forbidden"
 }
 
 pub fn buzz_reject_code_and_message_stale_round_test() {
@@ -161,10 +214,16 @@ pub fn not_joined_message_test() {
 }
 
 pub fn to_wire_participant_test() {
-  let participant = room.Participant(room.participant_id("p1"), "Alice", True)
+  let participant =
+    room.Participant(room.participant_id("p1"), "Alice", True, room.Player)
 
   assert websocket.to_wire_participant(participant)
-    == protocol.Participant(wire.participant_id("p1"), "Alice", True)
+    == protocol.Participant(
+      wire.participant_id("p1"),
+      "Alice",
+      True,
+      protocol.PlayerRole,
+    )
 }
 
 pub fn to_wire_participant_id_test() {

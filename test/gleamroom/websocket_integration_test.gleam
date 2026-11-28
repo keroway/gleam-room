@@ -68,45 +68,74 @@ fn wait_for_queue(pid: process.Pid, count: Int, label: String) -> Nil {
 
 pub fn ws_roundtrip_join_buzz_reset_test() {
   let assert Ok(#(port, _)) = gleamroom.start_on_ephemeral_port()
+  let #(host, host_buffer) = handshake(port, 50)
   let #(socket, buffer) = handshake(port, 50)
 
   // 部屋を作った本人には、発行された部屋コードと司会 token が返る（#767）。
-  send_client_message(socket, create_message("Alice"))
+  // 作った本人は司会になる（#768）。
+  send_client_message(host, create_message("Host"))
+  let #(create_reply, host_buffer) = recv_text_message(host, host_buffer)
+  assert string.contains(create_reply, "\"type\":\"state\"")
+  let room_code = string_field(create_reply, "room_id")
+  assert string.length(room_code) == 6
+  assert string_field(create_reply, "host_token") != ""
+  assert string_field(create_reply, "self_role") == "host"
+  assert string_field(create_reply, "phase") == "waiting"
+  assert string.contains(create_reply, "\"round_id\":1")
+  assert string.contains(create_reply, "\"revision\":1")
+
+  send_client_message(socket, join_message(room_code, "Alice"))
   let #(join_reply, buffer) = recv_text_message(socket, buffer)
-  assert string.contains(join_reply, "\"type\":\"state\"")
-  assert string.length(string_field(join_reply, "room_id")) == 6
-  assert string_field(join_reply, "host_token") != ""
-  assert string.contains(join_reply, "\"display_name\":\"Alice\"")
-  assert string.contains(join_reply, "\"round_id\":1")
-  assert string.contains(join_reply, "\"revision\":1")
+  assert string_field(join_reply, "self_role") == "player"
+  assert !string.contains(join_reply, "host_token")
+  let #(_joined, host_buffer) = recv_text_message(host, host_buffer)
+
+  // 受付前は押せない（#768）。
+  send_client_message(socket, buzz_message(1))
+  let #(early, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(early, "\"code\":\"not_accepting\"")
+
+  let host_buffer = host_opens(host, host_buffer, 1)
+  let #(opened, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(opened, "\"type\":\"phase_changed\"")
+  assert string.contains(opened, "\"phase\":\"open\"")
+  assert string.contains(opened, "\"revision\":3")
 
   send_client_message(socket, buzz_message(1))
   let #(buzz_reply, buffer) = recv_text_message(socket, buffer)
   assert string.contains(buzz_reply, "\"type\":\"buzz_accepted\"")
   assert string.contains(buzz_reply, "\"display_name\":\"Alice\"")
   assert string.contains(buzz_reply, "\"position\":1")
-  assert string.contains(buzz_reply, "\"revision\":2")
+  assert string.contains(buzz_reply, "\"phase\":\"locked\"")
+  assert string.contains(buzz_reply, "\"revision\":4")
   // The room actor also broadcasts `buzz_accepted` back to the buzzer's own
   // session (#143: this is what lets a late reply after a `dispatch`
   // timeout still reach the client), so a second, identical copy of the
   // frame above follows on the wire. The client already treats this as
-  // idempotent (dedup by buzz position); drain it here so it does not
-  // shadow the `round_reset` assertion below.
+  // idempotent; drain it here so it does not shadow the assertion below.
   let #(buzz_echo, buffer) = recv_text_message(socket, buffer)
   assert buzz_echo == buzz_reply
+  let #(_seen_by_host, host_buffer) = recv_text_message(host, host_buffer)
 
+  // 参加者は次の問題に進められない（#768）。
   send_client_message(socket, reset_message(1))
-  let #(reset_reply, buffer) = recv_text_message(socket, buffer)
+  let #(forbidden, buffer) = recv_text_message(socket, buffer)
+  assert string.contains(forbidden, "\"code\":\"forbidden\"")
+
+  send_client_message(host, reset_message(1))
+  let #(reset_reply, host_buffer) = recv_text_message(host, host_buffer)
   assert string.contains(reset_reply, "\"type\":\"round_reset\"")
   assert string.contains(reset_reply, "\"round_id\":2")
-  assert string.contains(reset_reply, "\"revision\":3")
-  // `RoundReset` is on the same issuer-inclusive `broadcast_all` branch as
-  // `Buzz` (#143, #465), so it also echoes back a second, identical copy;
-  // pin that the same way `buzz_echo` above already is.
-  let #(reset_echo, _buffer) = recv_text_message(socket, buffer)
+  assert string.contains(reset_reply, "\"revision\":5")
+  // `RoundReset` is on the same issuer-inclusive branch as `Buzz` (#143,
+  // #465), so it also echoes back a second, identical copy.
+  let #(reset_echo, _host_buffer) = recv_text_message(host, host_buffer)
   assert reset_echo == reset_reply
+  let #(seen_by_player, _buffer) = recv_text_message(socket, buffer)
+  assert seen_by_player == reset_reply
 
   tcp_close(socket)
+  tcp_close(host)
 }
 
 /// room actor が join 後に死ぬと、接続は再 join できるようになる（#100）。
@@ -599,7 +628,7 @@ fn buzz_message(round_id: Int) -> json.Json {
 
 fn reset_message(round_id: Int) -> json.Json {
   json.object([
-    #("type", json.string("reset")),
+    #("type", json.string("next_question")),
     #("round_id", json.int(round_id)),
   ])
 }
@@ -732,9 +761,10 @@ pub fn ws_room_broadcast_does_not_keep_silent_connection_alive_test() {
   let port = start_server_with_heartbeat_interval(300)
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let #(room_code, alice_buffer) =
-    create_and_drain(alice, alice_buffer, "Alice")
-  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
+  // 次の問題を送れるのは司会だけなので、Bob が部屋を作る（#768）。
+  let #(room_code, _bob_buffer) = create_and_drain(bob, bob_buffer, "Bob")
+  let alice_buffer =
+    join_room_and_drain(alice, alice_buffer, room_code, "Alice")
 
   send_resets(bob, 10)
 
@@ -867,6 +897,21 @@ pub fn ws_silent_connection_without_broadcast_times_out_test() {
   tcp_close(alice)
 }
 
+/// 司会が受付を開く（#768）。受理の配信と直接応答の2通を読み捨てる。
+fn host_opens(host: TcpSocket, buffer: BitArray, round_id: Int) -> BitArray {
+  send_client_message(
+    host,
+    json.object([
+      #("type", json.string("open")),
+      #("round_id", json.int(round_id)),
+    ]),
+  )
+  let #(first, buffer) = recv_text_message(host, buffer)
+  assert string.contains(first, "\"type\":\"phase_changed\"")
+  let #(_second, buffer) = recv_text_message(host, buffer)
+  buffer
+}
+
 /// 部屋を作って参加し、発行された部屋コードを返す（#767）。
 fn create_and_drain(
   socket: TcpSocket,
@@ -895,15 +940,17 @@ pub fn ws_reply_and_broadcast_carry_the_same_revision_test() {
   let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(joined, "\"type\":\"participant_joined\"")
   assert string.contains(joined, "\"revision\":2")
+  let alice_buffer = host_opens(alice, alice_buffer, 1)
+  let #(_opened, bob_buffer) = recv_text_message(bob, bob_buffer)
 
   send_client_message(bob, with_request_id("buzz", 1, "b1"))
   let #(broadcast_copy, bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.starts_with(broadcast_copy, "{\"type\":\"buzz_accepted\"")
-  assert string.contains(broadcast_copy, "\"revision\":3")
+  assert string.contains(broadcast_copy, "\"revision\":4")
   let #(reply, _bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.starts_with(reply, "{\"type\":\"reply\",\"request_id\":\"b1\"")
   assert string.contains(reply, "\"type\":\"buzz_accepted\"")
-  assert string.contains(reply, "\"revision\":3")
+  assert string.contains(reply, "\"revision\":4")
   let #(seen_by_alice, _alice_buffer) = recv_text_message(alice, alice_buffer)
   assert seen_by_alice == broadcast_copy
 
@@ -918,22 +965,22 @@ pub fn ws_second_reset_of_the_same_round_is_stale_test() {
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(_, alice_buffer) = create_and_drain(alice, alice_buffer, "Alice")
 
-  send_client_message(alice, with_request_id("reset", 1, "r1"))
+  send_client_message(alice, with_request_id("next_question", 1, "r1"))
   let #(_broadcast_copy, alice_buffer) = recv_text_message(alice, alice_buffer)
   let #(first, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(first, "\"request_id\":\"r1\"")
   assert string.contains(first, "\"round_id\":2")
 
-  send_client_message(alice, with_request_id("reset", 1, "r2"))
+  send_client_message(alice, with_request_id("next_question", 1, "r2"))
   let #(second, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(second, "\"request_id\":\"r2\"")
   assert string.contains(second, "\"code\":\"stale_round\"")
 
-  // 古い round への buzz も拒否される。
+  // 司会は押せない（#768）。古い round への buzz の拒否は room_test で確かめる。
   send_client_message(alice, with_request_id("buzz", 1, "b1"))
-  let #(stale_buzz, alice_buffer) = recv_text_message(alice, alice_buffer)
-  assert string.contains(stale_buzz, "\"request_id\":\"b1\"")
-  assert string.contains(stale_buzz, "\"code\":\"stale_round\"")
+  let #(host_buzz, alice_buffer) = recv_text_message(alice, alice_buffer)
+  assert string.contains(host_buzz, "\"request_id\":\"b1\"")
+  assert string.contains(host_buzz, "\"code\":\"forbidden\"")
 
   // 拒否は revision を進めない: sync の state は reset 後の revision 2 のまま。
   send_client_message(alice, json.object([#("type", json.string("sync"))]))
@@ -998,9 +1045,11 @@ pub fn ws_reply_does_not_overtake_queued_broadcasts_test() {
   let #(bob, bob_buffer) = handshake(port, 50)
   let #(room_code, alice_buffer) =
     create_and_drain(alice, alice_buffer, "Alice")
-  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
+  let bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
   let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
   assert string.contains(joined, "\"revision\":2")
+  let alice_buffer = host_opens(alice, alice_buffer, 1)
+  let #(_opened, _bob_buffer) = recv_text_message(bob, bob_buffer)
 
   let assert Ok(room_subject) =
     registry.find(registry_subject, registry.room_id(room_code))
@@ -1008,12 +1057,12 @@ pub fn ws_reply_does_not_overtake_queued_broadcasts_test() {
   suspend_process(room_pid)
   send_client_message(bob, with_request_id("buzz", 1, "b1"))
   wait_for_queue(room_pid, 1, "Bob の buzz が room に届く")
-  send_client_message(alice, with_request_id("reset", 1, "r1"))
+  send_client_message(alice, with_request_id("next_question", 1, "r1"))
   wait_for_queue(room_pid, 2, "Alice の reset が room に届く")
   resume_process(room_pid)
 
-  // buzz の配信(3)、reset の配信コピー(4)、reset の応答(4) の順。
-  assert collect_revisions(alice, alice_buffer, 3, []) == [3, 4, 4]
+  // buzz の配信(4)、次の問題の配信コピー(5)、その応答(5) の順。
+  assert collect_revisions(alice, alice_buffer, 3, []) == [4, 5, 5]
   tcp_close(alice)
   tcp_close(bob)
 }
@@ -1036,21 +1085,24 @@ pub fn ws_sync_state_is_sent_before_newer_queued_broadcasts_test() {
     )
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let #(room_code, alice_buffer) =
-    create_and_drain(alice, alice_buffer, "Alice")
+  // 次の問題に進められるのは司会だけなので、Bob が部屋を作る（#768）。
+  let #(room_code, bob_buffer) = create_and_drain(bob, bob_buffer, "Bob")
   let assert Ok(room_subject) =
     registry.find(registry_subject, registry.room_id(room_code))
   let assert Ok(room_pid) = process.subject_owner(room_subject)
-  // この時点で room が監視しているのは Alice の接続だけ。
-  let assert [alice_connection] = monitored_pids(room_pid)
-  let _bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
-  let #(joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  // この時点で room が監視しているのは Bob の接続だけ。
+  let assert [bob_connection] = monitored_pids(room_pid)
+  let alice_buffer =
+    join_room_and_drain(alice, alice_buffer, room_code, "Alice")
+  let assert [alice_connection] =
+    list.filter(monitored_pids(room_pid), fn(pid) { pid != bob_connection })
+  let #(joined, _bob_buffer) = recv_text_message(bob, bob_buffer)
   assert string.contains(joined, "\"revision\":2")
 
   suspend_process(room_pid)
   send_client_message(alice, json.object([#("type", json.string("sync"))]))
   wait_for_queue(room_pid, 1, "Alice の sync が room に届く")
-  send_client_message(bob, with_request_id("reset", 1, "r1"))
+  send_client_message(bob, with_request_id("next_question", 1, "r1"))
   wait_for_queue(room_pid, 2, "Bob の reset が room に届く")
   suspend_process(alice_connection)
   resume_process(room_pid)
@@ -1147,10 +1199,16 @@ pub fn ws_resume_keeps_the_participant_and_their_buzz_test() {
   let port = start_buzzer_server()
   let #(alice, alice_buffer) = handshake(port, 50)
   let #(bob, bob_buffer) = handshake(port, 50)
-  let #(room_code, token, instance, alice_id, alice_buffer) =
-    create_for_resume(alice, alice_buffer, "Alice")
-  let bob_buffer = join_room_and_drain(bob, bob_buffer, room_code, "Bob")
-  let #(_joined, alice_buffer) = recv_text_message(alice, alice_buffer)
+  // Bob が司会として部屋を作って受付を開き、Alice が参加者として押す（#768）。
+  let #(room_code, bob_buffer) = create_and_drain(bob, bob_buffer, "Bob")
+  send_client_message(alice, join_message(room_code, "Alice"))
+  let #(joined_state, alice_buffer) = recv_text_message(alice, alice_buffer)
+  let token = string_field(joined_state, "resume_token")
+  let instance = string_field(joined_state, "room_instance_id")
+  let alice_id = string_field(joined_state, "self_id")
+  let #(_joined, bob_buffer) = recv_text_message(bob, bob_buffer)
+  let bob_buffer = host_opens(bob, bob_buffer, 1)
+  let #(_opened, alice_buffer) = recv_text_message(alice, alice_buffer)
 
   send_client_message(alice, with_request_id("buzz", 1, "b1"))
   let #(_, alice_buffer) = recv_text_message(alice, alice_buffer)
@@ -1355,4 +1413,75 @@ pub fn ws_create_after_joining_is_rejected_test() {
   let assert Ok(registry.HealthSnapshot(rooms: 1, ..)) =
     registry.health(registry_subject)
   tcp_close(socket)
+}
+
+// --- #768: 会場表示と司会の復帰 ---------------------------------------------
+
+/// 会場表示は参加者にならず（self_id が無い）、進行は見えるが操作できない。
+pub fn ws_display_watches_but_cannot_act_test() {
+  let port = start_buzzer_server()
+  let #(host, host_buffer) = handshake(port, 50)
+  let #(display, display_buffer) = handshake(port, 50)
+  let #(room_code, host_buffer) = create_and_drain(host, host_buffer, "Host")
+
+  send_client_message(
+    display,
+    json.object([
+      #("type", json.string("watch")),
+      #("v", json.int(2)),
+      #("room_id", json.string(room_code)),
+    ]),
+  )
+  let #(state, display_buffer) = recv_text_message(display, display_buffer)
+  assert string.contains(state, "\"type\":\"state\"")
+  assert string_field(state, "self_role") == "display"
+  assert !string.contains(state, "self_id")
+  assert !string.contains(state, "token")
+
+  let _host_buffer = host_opens(host, host_buffer, 1)
+  let #(opened, display_buffer) = recv_text_message(display, display_buffer)
+  assert string.contains(opened, "\"phase\":\"open\"")
+
+  send_client_message(display, with_request_id("next_question", 1, "d1"))
+  let #(rejected, display_buffer) = recv_text_message(display, display_buffer)
+  assert string.contains(rejected, "\"request_id\":\"d1\"")
+  assert string.contains(rejected, "\"code\":\"forbidden\"")
+  send_client_message(display, with_request_id("buzz", 1, "d2"))
+  let #(rejected, _display_buffer) = recv_text_message(display, display_buffer)
+  assert string.contains(rejected, "\"code\":\"forbidden\"")
+  tcp_close(display)
+  tcp_close(host)
+}
+
+/// 司会は保存した司会 token を resume に添えて、司会として戻る。
+pub fn ws_host_resumes_with_the_host_token_test() {
+  let port = start_buzzer_server()
+  let #(host, host_buffer) = handshake(port, 50)
+  send_client_message(host, create_message("Host"))
+  let #(created, _host_buffer) = recv_text_message(host, host_buffer)
+  let room_code = string_field(created, "room_id")
+  let host_token = string_field(created, "host_token")
+  let resume_token = string_field(created, "resume_token")
+  let instance = string_field(created, "room_instance_id")
+  tcp_close(host)
+
+  let #(again, again_buffer) = handshake(port, 50)
+  send_client_message(
+    again,
+    json.object([
+      #("type", json.string("resume")),
+      #("v", json.int(2)),
+      #("room_id", json.string(room_code)),
+      #("room_instance_id", json.string(instance)),
+      #("resume_token", json.string(resume_token)),
+      #("host_token", json.string(host_token)),
+    ]),
+  )
+  let #(state, again_buffer) = recv_text_message(again, again_buffer)
+  assert string_field(state, "self_role") == "host"
+  // 司会 token は作成の応答でだけ渡す。
+  assert !string.contains(state, host_token)
+  let again_buffer = host_opens(again, again_buffer, 1)
+  let _ = again_buffer
+  tcp_close(again)
 }

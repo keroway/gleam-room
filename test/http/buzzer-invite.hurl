@@ -26,6 +26,13 @@ body not contains "resume-secret"
 HEAD {{base}}/r/K7M2QX
 HTTP 200
 
+# 会場表示（#768）も同じページ。どの部屋を見るかは JS がパスから読む。
+GET {{base}}/r/K7M2QX/display
+HTTP 200
+[Asserts]
+header "Referrer-Policy" == "no-referrer"
+body contains "会場表示"
+
 # 招待パスの下に余計な階層があれば 404、GET/HEAD 以外は 405。
 GET {{base}}/r/K7M2QX/extra
 HTTP 404

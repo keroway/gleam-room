@@ -144,6 +144,12 @@ pub fn routing_serves_the_expected_paths_test() {
   let assert Ok(invite_post) = request_with_method(port, "/r/ABC234", http.Post)
   assert invite_post.status == 405
 
+  // 会場表示 `/r/<部屋コード>/display` も同じページ（#768）。
+  let assert Ok(#(display_status, display_body)) =
+    get(port, "/r/ABC234/display")
+  assert display_status == 200
+  assert display_body == body
+
   // 未知のパスは 404。
   let assert Ok(#(missing_status, _)) = get(port, "/nope")
   assert missing_status == 404

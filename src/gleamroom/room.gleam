@@ -26,11 +26,39 @@ pub fn participant_id_to_string(id: ParticipantId) -> String {
   value
 }
 
+/// A participant's role (#768, ADR 0010). The host runs the questions and
+/// does not buzz; a player buzzes. A display is not a participant at all, so
+/// it has no role here.
+pub type Role {
+  Host
+  Player
+}
+
+/// Where the current question stands (#768, docs/buzzer-session.md
+/// "Acceptance phases"). Only the host moves it, except that the first buzz
+/// while `Open` locks it and a host who goes away stops acceptance.
+pub type Phase {
+  /// Not accepting buzzes: before a question, or after it was closed.
+  Waiting
+  /// Accepting buzzes. The first accepted buzz moves to `Locked`.
+  Open
+  /// Someone buzzed first and is the answerer (position 1). Later buzzes are
+  /// still queued in order.
+  Locked
+  /// The session ended. Read-only from here on.
+  Finished
+}
+
 /// `connected` is False while the participant's connection is gone but the
 /// participant is still within the resume grace period (#766). They keep
 /// their id, buzzes and place in the list until the grace expires.
 pub type Participant {
-  Participant(id: ParticipantId, display_name: String, connected: Bool)
+  Participant(
+    id: ParticipantId,
+    display_name: String,
+    connected: Bool,
+    role: Role,
+  )
 }
 
 /// One accepted buzz, in the order the Room actor's mailbox processed it.
@@ -54,21 +82,44 @@ pub type RoomState {
     buzzes: List(BuzzResult),
     round_id: Int,
     revision: Int,
+    phase: Phase,
   )
 }
 
 pub fn new_state() -> RoomState {
-  RoomState(participants: [], buzzes: [], round_id: 1, revision: 0)
+  RoomState(
+    participants: [],
+    buzzes: [],
+    round_id: 1,
+    revision: 0,
+    phase: Waiting,
+  )
 }
 
-/// `Buzz` and `ResetRound` name the round the client saw. A command for any
+/// Round-scoped commands name the round the client saw. A command for any
 /// other round is rejected, so a button pressed on an outdated screen cannot
 /// affect a newer round (#765).
+///
+/// The host commands (#768) name the participant who sent them (`by`); the
+/// room checks that this participant is the host. Who `by` is comes from the
+/// connection the command arrived on, never from the client.
 pub type RoomCommand {
   Join(id: ParticipantId, display_name: String)
+  /// The room's creator joining, or the host coming back after their grace
+  /// ran out (#768). Issued only by the actor itself.
+  JoinAsHost(id: ParticipantId, display_name: String)
   Leave(id: ParticipantId)
   Buzz(id: ParticipantId, round_id: Int)
-  ResetRound(round_id: Int)
+  OpenAcceptance(by: ParticipantId, round_id: Int)
+  CloseAcceptance(by: ParticipantId, round_id: Int)
+  /// Closes the question without an answer (`Waiting`).
+  Skip(by: ParticipantId, round_id: Int)
+  /// Starts the next question: a new `round_id`, an empty buzz queue,
+  /// `Waiting`. Replaces the MVP's `ResetRound`, which anyone could send.
+  NextQuestion(by: ParticipantId, round_id: Int)
+  /// Gives the host role to a connected player; `by` becomes a player.
+  TransferHost(by: ParticipantId, to: ParticipantId)
+  EndSession(by: ParticipantId)
   /// The participant's connection went away. They stay in the room, marked
   /// disconnected, until they resume or the grace period expires (#766).
   /// Issued only by the actor itself, never accepted through `dispatch`.
@@ -76,12 +127,19 @@ pub type RoomCommand {
   /// A disconnected participant attached a new connection (#766). Issued
   /// only by the actor itself.
   Reconnect(id: ParticipantId)
+  /// The host is no longer there to run the question (#768). Acceptance is
+  /// not left running without a host: `Open` moves to `Waiting`. With
+  /// `include_locked` (the host left for good) `Locked` does too. Issued only
+  /// by the actor itself.
+  HostAway(include_locked: Bool)
 }
 
 pub type JoinRejectReason {
   AlreadyJoined
   InvalidDisplayName
   RoomFull
+  /// The session has ended (#768); nobody new can join.
+  JoinSessionFinished
 }
 
 pub type LeaveRejectReason {
@@ -94,15 +152,31 @@ pub type BuzzRejectReason {
   RoundFull
   /// The buzz named a round that is not the current one (#765).
   BuzzStaleRound
+  /// The phase is `Waiting`: the host has not opened acceptance (#768).
+  NotAccepting
+  /// The session has ended (#768).
+  BuzzSessionFinished
+  /// The host does not buzz (#768).
+  HostCannotBuzz
 }
 
-pub type ResetRejectReason {
-  /// The reset named a round that is not the current one, e.g. another
-  /// participant already reset it (#765).
-  ResetStaleRound
-  /// The reset came from a connection that is not any participant's current
-  /// connection, e.g. one replaced by a resume (#766).
-  ResetNotJoined
+/// Why a host command (#768), or an internal transition, was not applied.
+pub type CommandRejectReason {
+  /// The sender is not the host (a player, or a display).
+  Forbidden
+  /// The command named a round that is not the current one (#765).
+  StaleRound
+  /// Not allowed in the current phase, e.g. opening while already `Open`.
+  InvalidPhase
+  /// The session has ended.
+  SessionFinished
+  /// `NextQuestion` beyond `max_rounds`.
+  SessionFull
+  /// `TransferHost` to someone who is not a connected player.
+  InvalidTarget
+  /// The command came from a connection that is not any participant's
+  /// current connection, e.g. one replaced by a resume (#766).
+  CommandNotJoined
 }
 
 /// Accepted events carry the `revision` they produced (#765); rejections
@@ -112,17 +186,24 @@ pub type RoomEvent {
   JoinRejected(id: ParticipantId, reason: JoinRejectReason)
   ParticipantLeft(id: ParticipantId, revision: Int)
   LeaveRejected(id: ParticipantId, reason: LeaveRejectReason)
+  /// `phase` is the phase after this buzz: the first buzz while `Open` locks.
   BuzzAccepted(
     id: ParticipantId,
     display_name: String,
     position: Int,
     round_id: Int,
+    phase: Phase,
     revision: Int,
   )
   BuzzRejected(id: ParticipantId, reason: BuzzRejectReason)
-  /// `round_id` is the new round that starts with this reset.
+  /// `round_id` is the new question that starts with `NextQuestion`. The
+  /// phase is `Waiting` and the buzz queue is empty.
   RoundReset(round_id: Int, revision: Int)
-  ResetRejected(reason: ResetRejectReason)
+  /// The acceptance phase changed (#768) for the current `round_id`.
+  PhaseChanged(phase: Phase, round_id: Int, revision: Int)
+  /// The host role moved from `from` to `to` (#768).
+  HostTransferred(from: ParticipantId, to: ParticipantId, revision: Int)
+  CommandRejected(reason: CommandRejectReason)
   ParticipantDisconnected(id: ParticipantId, revision: Int)
   ParticipantReconnected(id: ParticipantId, revision: Int)
   /// `Disconnect`/`Reconnect` did not apply (unknown participant, or already
@@ -132,6 +213,9 @@ pub type RoomEvent {
   /// connection (#766). The receiver must stop using the room. Never
   /// broadcast, and carries no state change.
   SessionReplaced
+  /// Sent only to the connection of the participant who just became host
+  /// (#768): the new host token. Never broadcast or logged.
+  HostAssigned(host_token: String)
 }
 
 /// A consistent view of the room at one revision: what a joining or
@@ -142,6 +226,7 @@ pub type Snapshot {
     instance_id: String,
     round_id: Int,
     revision: Int,
+    phase: Phase,
     participants: List(Participant),
     buzzes: List(BuzzResult),
   )
@@ -156,17 +241,132 @@ pub fn apply_command(
   command: RoomCommand,
 ) -> #(RoomState, RoomEvent) {
   case command {
-    Join(id, display_name) -> apply_join(state, id, display_name)
+    Join(id, display_name) -> apply_join(state, id, display_name, Player)
+    JoinAsHost(id, display_name) -> apply_join(state, id, display_name, Host)
     Leave(id) -> apply_leave(state, id)
     Buzz(id, round_id) -> apply_buzz(state, id, round_id)
-    ResetRound(round_id) -> apply_reset_round(state, round_id)
+    OpenAcceptance(by, round_id) ->
+      host_command(state, by, round_id, fn(phase) {
+        case phase, state.buzzes {
+          // 閉じた問題（Skip・司会の退出）の押順が残っている間は開き直さない。
+          // 開くと、残った押順の後ろに新しい BUZZ が積まれ、先頭ではない人が
+          // 回答者になる。次の問題（NextQuestion）で押順を消してから開く。
+          Waiting, [] -> Ok(set_phase(state, Open))
+          _, _ -> Error(InvalidPhase)
+        }
+      })
+    CloseAcceptance(by, round_id) ->
+      host_command(state, by, round_id, fn(phase) {
+        case phase {
+          Open -> Ok(set_phase(state, Waiting))
+          _ -> Error(InvalidPhase)
+        }
+      })
+    Skip(by, round_id) ->
+      host_command(state, by, round_id, fn(phase) {
+        case phase {
+          Open | Locked -> Ok(set_phase(state, Waiting))
+          _ -> Error(InvalidPhase)
+        }
+      })
+    NextQuestion(by, round_id) ->
+      host_command(state, by, round_id, fn(_phase) {
+        case state.round_id >= max_rounds {
+          True -> Error(SessionFull)
+          False -> {
+            let next_round = state.round_id + 1
+            let revision = next_revision(state)
+            Ok(#(
+              RoomState(
+                ..state,
+                buzzes: [],
+                round_id: next_round,
+                phase: Waiting,
+                revision:,
+              ),
+              RoundReset(next_round, revision),
+            ))
+          }
+        }
+      })
+    TransferHost(by, to) ->
+      host_command(state, by, state.round_id, fn(_phase) {
+        apply_transfer_host(state, by, to)
+      })
+    EndSession(by) ->
+      host_command(state, by, state.round_id, fn(_phase) {
+        Ok(set_phase(state, Finished))
+      })
     Disconnect(id) -> apply_presence(state, id, False)
     Reconnect(id) -> apply_presence(state, id, True)
+    HostAway(include_locked) ->
+      case state.phase, include_locked {
+        Open, _ | Locked, True -> set_phase(state, Waiting)
+        _, _ -> #(state, CommandRejected(InvalidPhase))
+      }
   }
 }
 
 fn next_revision(state: RoomState) -> Int {
   state.revision + 1
+}
+
+fn set_phase(state: RoomState, phase: Phase) -> #(RoomState, RoomEvent) {
+  let revision = next_revision(state)
+  #(
+    RoomState(..state, phase:, revision:),
+    PhaseChanged(phase, state.round_id, revision),
+  )
+}
+
+/// The checks every host command shares, in this order: the sender is the
+/// host (`Forbidden`), the session is still running (`SessionFinished`), the
+/// command names the current round (`StaleRound`). `apply` then checks the
+/// phase and produces the change.
+fn host_command(
+  state: RoomState,
+  by: ParticipantId,
+  round_id: Int,
+  apply: fn(Phase) -> Result(#(RoomState, RoomEvent), CommandRejectReason),
+) -> #(RoomState, RoomEvent) {
+  let outcome = case find_participant(state, by) {
+    Ok(Participant(role: Host, ..)) ->
+      case state.phase, round_id == state.round_id {
+        Finished, _ -> Error(SessionFinished)
+        _, False -> Error(StaleRound)
+        phase, True -> apply(phase)
+      }
+    _ -> Error(Forbidden)
+  }
+  case outcome {
+    Ok(change) -> change
+    Error(reason) -> #(state, CommandRejected(reason))
+  }
+}
+
+fn apply_transfer_host(
+  state: RoomState,
+  by: ParticipantId,
+  to: ParticipantId,
+) -> Result(#(RoomState, RoomEvent), CommandRejectReason) {
+  case find_participant(state, to) {
+    Ok(Participant(role: Player, connected: True, ..)) -> {
+      let revision = next_revision(state)
+      let participants =
+        list.map(state.participants, fn(p) {
+          case p.id == to, p.id == by {
+            True, _ -> Participant(..p, role: Host)
+            _, True -> Participant(..p, role: Player)
+            _, _ -> p
+          }
+        })
+      Ok(#(
+        RoomState(..state, participants:, revision:),
+        HostTransferred(by, to, revision),
+      ))
+    }
+    _ -> Error(InvalidTarget)
+  }
 }
 
 /// Domain-level ceiling on `display_name`, independent of the WebSocket
@@ -187,13 +387,18 @@ const max_participants = 64
 /// so a resident participant plus join/buzz/leave churn could otherwise grow
 /// one round's history without bound, and every new joiner's state snapshot
 /// carries all of it (#691). Reaching it rejects further buzzes with
-/// `RoundFull` until `ResetRound`; existing positions never change.
+/// `RoundFull` until `NextQuestion`; existing positions never change.
 const max_buzzes_per_round = 128
+
+/// Ceiling on questions per session (#768, docs/buzzer-session.md "Limits").
+/// `NextQuestion` from the last one is rejected with `SessionFull`.
+pub const max_rounds = 200
 
 fn apply_join(
   state: RoomState,
   id: ParticipantId,
   display_name: String,
+  role: Role,
 ) -> #(RoomState, RoomEvent) {
   case
     find_participant(state, id),
@@ -207,9 +412,13 @@ fn apply_join(
     // Kept as a defensive branch for a future multi-connection/reconnect
     // model where a ParticipantId could be reused (#52).
     Ok(_), True, _ -> #(state, JoinRejected(id, AlreadyJoined))
+    Error(Nil), True, _ if state.phase == Finished -> #(
+      state,
+      JoinRejected(id, JoinSessionFinished),
+    )
     Error(Nil), True, True -> #(state, JoinRejected(id, RoomFull))
     Error(Nil), True, False -> {
-      let participant = Participant(id, display_name, connected: True)
+      let participant = Participant(id, display_name, connected: True, role:)
       let revision = next_revision(state)
       let next =
         RoomState(
@@ -230,11 +439,8 @@ fn is_valid_display_name(display_name: String) -> Bool {
 
 fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
-    // Unreachable from the current websocket layer: Leave is only sent from
-    // `on_close` when `state.room` holds the handle from a prior successful
-    // Join, so the id is always still a participant. Kept as a defensive
-    // branch for a future explicit "leave without disconnecting" protocol
-    // message, which does not exist yet (#52).
+    // Reached when a connection replaced by a resume sends `leave`; the
+    // actor's `authorize` answers that before it gets here (#766).
     Error(Nil) -> #(state, LeaveRejected(id, NotJoined))
     Ok(_) -> {
       let remaining = list.filter(state.participants, fn(p) { p.id != id })
@@ -247,34 +453,43 @@ fn apply_leave(state: RoomState, id: ParticipantId) -> #(RoomState, RoomEvent) {
   }
 }
 
-/// Accepts at most one buzz per participant per round. Ordering comes from
-/// the Room actor's mailbox processing order (one command at a time), so no
-/// client-supplied or wall-clock timestamp is ever consulted to decide who
-/// was first.
+/// Accepts at most one buzz per participant per round, and only while the
+/// host accepts buzzes (#768). Ordering comes from the Room actor's mailbox
+/// processing order (one command at a time), so no client-supplied or
+/// wall-clock timestamp is ever consulted to decide who was first. The first
+/// accepted buzz while `Open` locks the question; later buzzes are queued.
 fn apply_buzz(
   state: RoomState,
   id: ParticipantId,
   round_id: Int,
 ) -> #(RoomState, RoomEvent) {
   case find_participant(state, id) {
-    // Unreachable from the current websocket layer: Buzz is only sent when
-    // `state.room` holds the handle from a prior successful Join, so the id
-    // is always still a participant. Kept as a defensive branch for the same
-    // reason as `apply_leave`'s NotJoined branch above (#52).
+    // Reached when a connection replaced by a resume sends `buzz`; the
+    // actor's `authorize` answers that before it gets here (#766).
     Error(Nil) -> #(state, BuzzRejected(id, BuzzerNotJoined))
-    Ok(_) if round_id != state.round_id -> #(
+    Ok(Participant(role: Host, ..)) -> #(
       state,
-      BuzzRejected(id, BuzzStaleRound),
+      BuzzRejected(id, HostCannotBuzz),
     )
     Ok(participant) ->
-      case has_buzzed(state, id) {
-        True -> #(state, BuzzRejected(id, AlreadyBuzzed))
-        False ->
-          case list.length(state.buzzes) >= max_buzzes_per_round {
-            True -> #(state, BuzzRejected(id, RoundFull))
-            False -> {
+      case state.phase, round_id == state.round_id {
+        Finished, _ -> #(state, BuzzRejected(id, BuzzSessionFinished))
+        _, False -> #(state, BuzzRejected(id, BuzzStaleRound))
+        Waiting, True -> #(state, BuzzRejected(id, NotAccepting))
+        _, True ->
+          case
+            has_buzzed(state, id),
+            list.length(state.buzzes) >= max_buzzes_per_round
+          {
+            True, _ -> #(state, BuzzRejected(id, AlreadyBuzzed))
+            False, True -> #(state, BuzzRejected(id, RoundFull))
+            False, False -> {
               let position = list.length(state.buzzes) + 1
               let revision = next_revision(state)
+              let phase = case state.phase {
+                Open -> Locked
+                phase -> phase
+              }
               let next =
                 RoomState(
                   ..state,
@@ -282,6 +497,7 @@ fn apply_buzz(
                     BuzzResult(id, participant.display_name, position),
                     ..state.buzzes
                   ],
+                  phase:,
                   revision:,
                 )
               #(
@@ -291,33 +507,13 @@ fn apply_buzz(
                   participant.display_name,
                   position,
                   state.round_id,
+                  phase,
                   revision,
                 ),
               )
             }
           }
       }
-  }
-}
-
-/// Only the round the client saw can be reset. Two participants pressing
-/// reset at once therefore start exactly one new round; the second gets
-/// `ResetStaleRound` instead of wiping the buzzes of the round that just began
-/// (#765).
-fn apply_reset_round(
-  state: RoomState,
-  round_id: Int,
-) -> #(RoomState, RoomEvent) {
-  case round_id == state.round_id {
-    False -> #(state, ResetRejected(ResetStaleRound))
-    True -> {
-      let next_round = state.round_id + 1
-      let revision = next_revision(state)
-      #(
-        RoomState(..state, buzzes: [], round_id: next_round, revision:),
-        RoundReset(next_round, revision),
-      )
-    }
   }
 }
 
@@ -377,6 +573,7 @@ pub fn full_snapshot(state: RoomState, instance_id: String) -> Snapshot {
     instance_id:,
     round_id: state.round_id,
     revision: state.revision,
+    phase: state.phase,
     participants: snapshot(state),
     buzzes: buzz_snapshot(state),
   )
@@ -396,6 +593,9 @@ pub const default_empty_room_grace_ms = 60_000
 /// are dropped oldest first, so churn cannot grow the room without bound
 /// (#766, docs/buzzer-session.md "Limits").
 const max_tracked_participants = 128
+
+/// Ceiling on displays per room (#768, docs/buzzer-session.md "Limits").
+const max_displays = 8
 
 /// The answer to `join`: the event, a snapshot taken in the same mailbox
 /// message (#765), the resume token issued to the joiner (#766), and the host
@@ -420,6 +620,13 @@ pub type ResumeRejectReason {
   /// The token was never issued by this room instance (or was dropped by
   /// `max_tracked_participants`).
   InvalidToken
+}
+
+/// The answer to `Watch` (#768).
+pub type WatchReply {
+  Watching(snapshot: Snapshot)
+  /// `max_displays` displays are already attached.
+  DisplaysFull
 }
 
 pub type ResumeReply {
@@ -463,12 +670,22 @@ pub type Message {
   /// 既存の参加者として新しい接続を付け直す（#766）。`instance_id` は
   /// クライアントが前回受け取った room の世代で、違えば `RoomGone`。
   /// 同じ参加者に別の接続が付いていれば、それを `SessionReplaced` で外す。
+  ///
+  /// `host_token` が現在の司会 token と一致すれば、司会として戻る（#768）。
+  /// 司会は参加者の猶予に縛られず、猶予切れで一覧から外れた後でも、部屋が
+  /// 続いている限り戻れる。一致しなければ `token`（resume token）で判定する。
   Resume(
     token: String,
+    host_token: option.Option(String),
     instance_id: String,
     session: Subject(RoomEvent),
     reply_to: Subject(ResumeReply),
   )
+  /// 会場表示として配信を受け始める（#768）。参加者ではないので一覧に
+  /// 載らず、token も持たない。上限は `max_displays`。
+  Watch(session: Subject(RoomEvent), reply_to: Subject(WatchReply))
+  /// 会場表示の接続が閉じた（#768）。
+  Unwatch(session: Subject(RoomEvent))
   /// 接続が閉じた（#766）。`session` がその参加者の現在の接続のときだけ
   /// 切断中にして猶予タイマーを始める。古い接続からの遅れた通知は無視する。
   Detach(id: ParticipantId, session: Subject(RoomEvent))
@@ -549,15 +766,21 @@ type ActorState {
     /// resume token → ParticipantId の文字列表現。
     tokens: Dict(String, String),
     next_issue: Int,
-    /// 部屋を作った参加者に発行した司会 token（#767）。権限の確認に使うのは
-    /// 役割を入れる #768 から。配信・スナップショット・ログには出さない。
+    /// 司会の席（#767 / #768）。司会が一覧から外れても（猶予切れ・退出）
+    /// 席は残り、token を持つ人が戻れる。token は配信・スナップショット・
+    /// ログには出さない。
     host: option.Option(HostSeat),
+    /// 会場表示の接続（#768）。参加者ではないので `members` とは別に持つ。
+    displays: List(Attachment),
   )
 }
 
-/// The host capability of this room instance (#767, ADR 0010).
+/// The host capability of this room instance (#767, #768, ADR 0010). Which
+/// participant holds the role is in `RoomState` (`Participant.role`); the
+/// seat keeps what is needed to come back after leaving the list: the token
+/// and the name to rejoin under.
 type HostSeat {
-  HostSeat(token: String, participant_key: String)
+  HostSeat(token: String, participant_key: String, display_name: String)
 }
 
 /// Starts one isolated room actor with empty state. Each call produces an
@@ -581,6 +804,27 @@ pub fn start_with_timings(
   participant_grace_ms: Int,
   empty_room_grace_ms: Int,
 ) -> actor.StartResult(Subject(Message)) {
+  start_room(participant_grace_ms, empty_room_grace_ms, new_state())
+}
+
+/// `start_with_grace` with acceptance already `Open` and no host. Test-only
+/// (#768): tests about buzz ordering, presence and resume can buzz without
+/// first seating a host and opening a question.
+pub fn start_accepting_with_grace(
+  participant_grace_ms: Int,
+) -> actor.StartResult(Subject(Message)) {
+  start_room(
+    participant_grace_ms,
+    default_empty_room_grace_ms,
+    RoomState(..new_state(), phase: Open),
+  )
+}
+
+fn start_room(
+  participant_grace_ms: Int,
+  empty_room_grace_ms: Int,
+  initial: RoomState,
+) -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(subject) {
     // 接続プロセスの死を signal ではなくメッセージとして受ける（#56）。
     // **monitor を使う。link ではない**（#69）。
@@ -601,16 +845,19 @@ pub fn start_with_timings(
       })
     // 作られたまま誰も参加しない部屋を回収する（#767）。
     process.send_after(subject, empty_room_grace_ms, EmptyRoomGrace)
-    actor.initialised(ActorState(
-      self: subject,
-      instance_id: random_string(),
-      room: new_state(),
-      participant_grace_ms:,
-      members: dict.new(),
-      tokens: dict.new(),
-      next_issue: 0,
-      host: option.None,
-    ))
+    actor.initialised(
+      ActorState(
+        self: subject,
+        instance_id: random_string(),
+        room: initial,
+        participant_grace_ms:,
+        members: dict.new(),
+        tokens: dict.new(),
+        next_issue: 0,
+        host: option.None,
+        displays: [],
+      ),
+    )
     |> actor.selecting(selector)
     |> actor.returning(subject)
     |> Ok
@@ -640,8 +887,13 @@ fn handle_message(
       actor.continue(next_state)
     }
     JoinWithSnapshot(id, display_name, session, as_host, reply_to) -> {
-      let #(next_state, event) =
-        run_command(state, Join(id, display_name), session)
+      // 司会の席が空いているときの作成者の join だけが司会になる（#767 / #768）。
+      let as_host = as_host && state.host == option.None
+      let command = case as_host {
+        True -> JoinAsHost(id, display_name)
+        False -> Join(id, display_name)
+      }
+      let #(next_state, event) = run_command(state, command, session)
       let #(next_state, resume_token, host_token) = case event {
         ParticipantJoined(participant, _) -> {
           let key = participant_id_to_string(participant.id)
@@ -649,18 +901,22 @@ fn handle_message(
             dict.get(next_state.members, key)
             |> option.from_result
             |> option.map(fn(member) { member.token })
-          let #(next_state, host_token) = case as_host, next_state.host {
-            True, option.None -> {
+          let #(next_state, host_token) = case as_host {
+            True -> {
               let token = random_string()
               #(
                 ActorState(
                   ..next_state,
-                  host: option.Some(HostSeat(token:, participant_key: key)),
+                  host: option.Some(HostSeat(
+                    token:,
+                    participant_key: key,
+                    display_name: participant.display_name,
+                  )),
                 ),
                 option.Some(token),
               )
             }
-            _, _ -> #(next_state, option.None)
+            False -> #(next_state, option.None)
           }
           #(next_state, resume_token, host_token)
         }
@@ -677,11 +933,33 @@ fn handle_message(
       )
       actor.continue(next_state)
     }
-    Resume(token, instance_id, session, reply_to) -> {
-      let #(next_state, reply) = resume(state, token, instance_id, session)
+    Resume(token, host_token, instance_id, session, reply_to) -> {
+      let #(next_state, reply) =
+        resume(state, token, host_token, instance_id, session)
       process.send(reply_to, reply)
       actor.continue(next_state)
     }
+    Watch(session, reply_to) ->
+      case list.length(state.displays) >= max_displays {
+        True -> {
+          process.send(reply_to, DisplaysFull)
+          actor.continue(state)
+        }
+        False -> {
+          let attachment = attach(session, "display")
+          let state =
+            ActorState(..state, displays: [attachment, ..state.displays])
+          process.send(
+            reply_to,
+            Watching(full_snapshot(state.room, state.instance_id)),
+          )
+          actor.continue(state)
+        }
+      }
+    Unwatch(session) ->
+      actor.continue(
+        remove_displays(state, fn(display) { display.session == session }),
+      )
     Detach(id, session) -> {
       let key = participant_id_to_string(id)
       case dict.get(state.members, key) {
@@ -725,6 +1003,13 @@ fn handle_message(
       actor.continue(state)
     }
     SessionDown(pid) -> {
+      let state =
+        remove_displays(state, fn(display) {
+          case display.monitor {
+            option.Some(#(owner, _)) -> owner == pid
+            option.None -> False
+          }
+        })
       let keys =
         state.members
         |> dict.values
@@ -770,32 +1055,44 @@ fn handle_message(
 /// left, cannot buzz, reset or leave on the participant's behalf.
 /// `Disconnect`/`Reconnect` are the actor's own transitions and are never
 /// accepted from outside.
+///
+/// A display's connection is not a participant: every command from it is
+/// `Forbidden` (#768). Whether the sender may run a host command is decided
+/// afterwards by `apply_command`, from the sender's role.
 fn authorize(
   state: ActorState,
   command: RoomCommand,
   session: Subject(RoomEvent),
 ) -> Result(Nil, RoomEvent) {
-  case command {
-    Join(..) -> Ok(Nil)
-    Leave(id) ->
+  let is_display =
+    list.any(state.displays, fn(display) { display.session == session })
+  case command, is_display {
+    Join(..), _ -> Ok(Nil)
+    // 内部の遷移。外から送られても受け付けない。
+    JoinAsHost(..), _ | HostAway(..), _ -> Error(CommandRejected(Forbidden))
+    Disconnect(id), _ | Reconnect(id), _ -> Error(PresenceRejected(id))
+    _, True -> Error(CommandRejected(Forbidden))
+    Leave(id), False ->
       case is_current_session(state, id, session) {
         True -> Ok(Nil)
         False -> Error(LeaveRejected(id, NotJoined))
       }
-    Buzz(id, _) ->
+    Buzz(id, _), False ->
       case is_current_session(state, id, session) {
         True -> Ok(Nil)
         False -> Error(BuzzRejected(id, BuzzerNotJoined))
       }
-    ResetRound(_) ->
-      case
-        dict.values(state.members)
-        |> list.any(fn(member) { has_session(member, session) })
-      {
+    OpenAcceptance(by, _), False
+    | CloseAcceptance(by, _), False
+    | Skip(by, _), False
+    | NextQuestion(by, _), False
+    | TransferHost(by, _), False
+    | EndSession(by), False
+    ->
+      case is_current_session(state, by, session) {
         True -> Ok(Nil)
-        False -> Error(ResetRejected(ResetNotJoined))
+        False -> Error(CommandRejected(CommandNotJoined))
       }
-    Disconnect(id) | Reconnect(id) -> Error(PresenceRejected(id))
   }
 }
 
@@ -835,6 +1132,21 @@ fn run_command(
   session: Subject(RoomEvent),
 ) -> #(ActorState, RoomEvent) {
   let #(next_room, event) = apply_command(state.room, command)
+  let #(next_room, event) = case event {
+    // 一覧から外れた司会の席は空けておく（#768）。参加者で埋まると、司会が
+    // token を持っていても戻れなくなる。
+    ParticipantJoined(Participant(id:, role: Player, ..), _)
+      if state.host != option.None
+    ->
+      case
+        host_seat_vacant(state)
+        && list.length(next_room.participants) >= max_participants
+      {
+        True -> #(state.room, JoinRejected(id, RoomFull))
+        False -> #(next_room, event)
+      }
+    _ -> #(next_room, event)
+  }
   let state = ActorState(..state, room: next_room)
   let state = case event {
     ParticipantJoined(participant, _) ->
@@ -847,7 +1159,81 @@ fn run_command(
     _ -> state
   }
   broadcast(state, except: session, event: event)
+  let state = case event {
+    // 司会が自分で退出したら、受付を開いたままにしない（#768）。
+    ParticipantLeft(id, _) if command == Leave(id) ->
+      case is_seated_host(state, id) {
+        True -> host_away(state, True)
+        False -> state
+      }
+    // 役割が移ったことを全員に知らせてから、新しい司会に token を渡す。
+    HostTransferred(_, to, _) -> seat_host(state, to)
+    _ -> state
+  }
   #(state, event)
+}
+
+/// Whether `id` holds the host seat (#768). The seat survives the host
+/// leaving the participant list, so this is not the same as having the
+/// `Host` role in `RoomState`.
+fn is_seated_host(state: ActorState, id: ParticipantId) -> Bool {
+  case state.host {
+    option.Some(seat) -> seat.participant_key == participant_id_to_string(id)
+    option.None -> False
+  }
+}
+
+/// Whether the host has left the participant list (grace ran out or they
+/// left) but still holds the seat, so they can come back with the host token.
+fn host_seat_vacant(state: ActorState) -> Bool {
+  case state.host {
+    option.Some(seat) ->
+      !list.any(state.room.participants, fn(p) {
+        participant_id_to_string(p.id) == seat.participant_key
+      })
+    option.None -> False
+  }
+}
+
+/// Stops acceptance because the host is gone (#768) and tells everyone.
+fn host_away(state: ActorState, include_locked: Bool) -> ActorState {
+  case apply_command(state.room, HostAway(include_locked)) {
+    #(next_room, PhaseChanged(..) as event) -> {
+      let state = ActorState(..state, room: next_room)
+      broadcast_to_attached(state, option.None, event)
+      state
+    }
+    _ -> state
+  }
+}
+
+/// Moves the host seat to `to` with a fresh token and sends it to `to`'s
+/// connection only (#768). The previous token stops working.
+fn seat_host(state: ActorState, to: ParticipantId) -> ActorState {
+  let key = participant_id_to_string(to)
+  let display_name =
+    list.find(state.room.participants, fn(p) { p.id == to })
+    |> result.map(fn(p) { p.display_name })
+    |> result.unwrap("")
+  let token = random_string()
+  case dict.get(state.members, key) {
+    Ok(Member(attachment: option.Some(attachment), ..)) ->
+      process.send(attachment.session, HostAssigned(token))
+    _ -> Nil
+  }
+  ActorState(
+    ..state,
+    host: option.Some(HostSeat(token:, participant_key: key, display_name:)),
+  )
+}
+
+fn remove_displays(
+  state: ActorState,
+  matches: fn(Attachment) -> Bool,
+) -> ActorState {
+  let #(removed, kept) = list.partition(state.displays, matches)
+  list.each(removed, fn(display) { release_attachment(option.Some(display)) })
+  ActorState(..state, displays: kept)
 }
 
 /// Registers a newly joined participant: a fresh token, generation 1, and a
@@ -887,7 +1273,10 @@ fn drop_oldest_departed(state: ActorState) -> ActorState {
       let oldest =
         state.members
         |> dict.values
-        |> list.filter(fn(member) { member.departed })
+        // 司会の席の参加者は、一覧から外れていても戻れるので消さない（#768）。
+        |> list.filter(fn(member) {
+          member.departed && !is_seated_host(state, member.id)
+        })
         |> list.sort(fn(a, b) { int.compare(a.issued, b.issued) })
         |> list.first
       case oldest {
@@ -973,7 +1362,12 @@ fn disconnect(state: ActorState, key: String) -> ActorState {
         state.participant_grace_ms,
         GraceExpired(key, member.generation),
       )
-      state
+      // 司会が切れたら、受付中のまま放置しない（#768）。回答者が決まった
+      // 後（Locked）はそのまま残し、戻った司会が続けられるようにする。
+      case is_seated_host(state, member.id) {
+        True -> host_away(state, False)
+        False -> state
+      }
     }
     Error(Nil) -> state
   }
@@ -991,24 +1385,38 @@ fn depart(state: ActorState, member: Member) -> ActorState {
 fn resume(
   state: ActorState,
   token: String,
+  host_token: option.Option(String),
   instance_id: String,
   session: Subject(RoomEvent),
 ) -> #(ActorState, ResumeReply) {
-  let member = case instance_id == state.instance_id {
-    False -> Error(RoomGone)
-    True ->
+  let seat = case state.host, host_token {
+    option.Some(seat), option.Some(given) if seat.token == given ->
+      option.Some(seat)
+    _, _ -> option.None
+  }
+  let member = case instance_id == state.instance_id, seat {
+    False, _ -> Error(RoomGone)
+    // 司会は猶予が切れて一覧から外れていても、席の token で戻れる（#768）。
+    True, option.Some(seat) ->
+      case dict.get(state.members, seat.participant_key) {
+        Ok(Member(departed: True, ..) as member) ->
+          rejoin_host(state, member, seat, session)
+        Ok(member) -> Ok(#(state, member))
+        Error(Nil) -> Error(InvalidToken)
+      }
+    True, option.None ->
       case
         dict.get(state.tokens, token)
         |> result.try(dict.get(state.members, _))
       {
         Error(Nil) -> Error(InvalidToken)
         Ok(Member(departed: True, ..)) -> Error(ResumeExpired)
-        Ok(member) -> Ok(member)
+        Ok(member) -> Ok(#(state, member))
       }
   }
   case member {
     Error(reason) -> #(state, ResumeRejected(reason))
-    Ok(member) -> {
+    Ok(#(state, member)) -> {
       let key = participant_id_to_string(member.id)
       // 同じ参加者に付いている接続（複製したタブなど）は外す。新しい方が勝つ。
       case member.attachment {
@@ -1042,6 +1450,31 @@ fn resume(
   }
 }
 
+/// Puts the host back on the participant list after their grace ran out or
+/// they left (#768). The rest of `resume` then attaches the connection.
+fn rejoin_host(
+  state: ActorState,
+  member: Member,
+  seat: HostSeat,
+  session: Subject(RoomEvent),
+) -> Result(#(ActorState, Member), ResumeRejectReason) {
+  case apply_command(state.room, JoinAsHost(member.id, seat.display_name)) {
+    #(next_room, ParticipantJoined(..) as event) -> {
+      let member = Member(..member, departed: False)
+      let state =
+        ActorState(
+          ..state,
+          room: next_room,
+          members: dict.insert(state.members, seat.participant_key, member),
+        )
+      broadcast_to_attached(state, option.Some(session), event)
+      Ok(#(state, member))
+    }
+    // 満員・終了済みなど。司会として戻れる場所が無い。
+    _ -> Error(ResumeExpired)
+  }
+}
+
 /// Notifies attached connections about a state change. `BuzzAccepted`/
 /// `RoundReset` reach every connection, *including* the one that issued the
 /// command (#143: the issuing session's synchronous `reply_to` can be lost on
@@ -1056,8 +1489,10 @@ fn broadcast(
   event event: RoomEvent,
 ) -> Nil {
   case event {
-    BuzzAccepted(..) | RoundReset(..) ->
-      broadcast_to_attached(state, option.None, event)
+    BuzzAccepted(..)
+    | RoundReset(..)
+    | PhaseChanged(..)
+    | HostTransferred(..) -> broadcast_to_attached(state, option.None, event)
     ParticipantJoined(..)
     | ParticipantLeft(..)
     | ParticipantDisconnected(..)
@@ -1066,9 +1501,10 @@ fn broadcast(
     JoinRejected(_, _)
     | LeaveRejected(_, _)
     | BuzzRejected(_, _)
-    | ResetRejected(_)
+    | CommandRejected(_)
     | PresenceRejected(_)
-    | SessionReplaced -> Nil
+    | SessionReplaced
+    | HostAssigned(_) -> Nil
   }
 }
 
@@ -1087,6 +1523,8 @@ fn broadcast_to_attached(
       option.None -> Nil
     }
   })
+  // 会場表示は何も送らないので、自分の操作の配信を除く必要は無い（#768）。
+  list.each(state.displays, fn(display) { process.send(display.session, event) })
 }
 
 /// Sends a command to a running room actor and waits for the resulting
@@ -1161,15 +1599,30 @@ pub fn join_as_creator(
 pub fn resume_session(
   subject: Subject(Message),
   token: String,
+  host_token: option.Option(String),
   instance_id: String,
   session: Subject(RoomEvent),
 ) -> Result(ResumeReply, Nil) {
   call.try_call(
     subject,
     call.default_timeout,
-    Resume(token, instance_id, session, _),
+    Resume(token, host_token, instance_id, session, _),
     "room.resume",
   )
+}
+
+/// Starts receiving the room's changes as a display (#768). See `Watch`.
+pub fn watch(
+  subject: Subject(Message),
+  session: Subject(RoomEvent),
+) -> Result(WatchReply, Nil) {
+  call.try_call(subject, call.default_timeout, Watch(session, _), "room.watch")
+}
+
+/// Tells the room that a display's connection closed (#768). Asynchronous,
+/// like `detach`.
+pub fn unwatch(subject: Subject(Message), session: Subject(RoomEvent)) -> Nil {
+  process.send(subject, Unwatch(session))
 }
 
 /// Tells the room that the connection owning `session` closed (#766).

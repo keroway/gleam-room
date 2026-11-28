@@ -56,7 +56,8 @@ participant.
 | read snapshot / receive events | ✓ | ✓ | ✓ |
 
 Rejected commands get `forbidden` (wrong role), `stale_round` (old
-`round_id`), or `invalid_phase`. Hiding buttons in the UI is a convenience
+`round_id`), or `invalid_phase`; the checks run in that order, after
+`session_finished`. A buzz while `Waiting` is `not_accepting`. Hiding buttons in the UI is a convenience
 only; the actor checks every command.
 
 The MVP `Reset` command does not exist in v2. Its replacement is the host's
@@ -75,8 +76,37 @@ host until someone resumes with the token or the room stops.
 **As of #767:** the `HostToken` is issued by the room actor to the
 creator's first join (the `create` reply) and to no one else; a join through
 an invite never receives one. The creator's browser keeps it in
-`sessionStorage` next to the resume token. No command checks it yet; roles
-and host resume arrive with #768.
+`sessionStorage` next to the resume token.
+
+**As implemented in #768:**
+
+- Roles live in `RoomState` (`Participant.role`); the room checks the
+  sender's role inside `apply_command`. Who the sender is comes from the
+  connection the command arrived on (the participant's current connection),
+  never from the message. The `HostToken` is therefore not sent with each
+  command; it is used only to come back as host (`resume` with
+  `host_token`).
+- The actor keeps a host *seat* (token, participant, name) separate from the
+  role. It survives the host leaving the participant list: when the host's
+  grace runs out or the host leaves explicitly, the room continues without a
+  host, and a `resume` with the seat's token puts the host back on the list
+  as host (same `ParticipantId`). The seat's participant is never dropped by
+  the departed-participant bound. While the host is off the list, the seat
+  still counts toward the participant limit (64): a player join that would
+  take the last place is rejected `room_full`, so the host can always come
+  back.
+- `TransferHost`: the target must be a connected player. Everyone receives
+  `host_transferred`; then the new host's connection alone receives
+  `host_assigned` with a fresh token, and the old token stops working. The
+  former host's browser deletes its saved host token when it sees the
+  transfer.
+- A display attaches with `watch` and is kept in a separate list (up to 8).
+  It receives every broadcast. Any command arriving on a display's
+  connection is answered `forbidden` by the room.
+- Phase commands implemented here: `OpenAcceptance`, `CloseAcceptance`,
+  `Skip`, `NextQuestion`, `TransferHost`, `EndSession`. Judging
+  (`JudgeCorrect`/`JudgeIncorrect`/`NextCandidate`/`Reopen`/`CorrectResult`)
+  and scores are #769.
 
 ## Acceptance phases
 
@@ -97,8 +127,8 @@ and host resume arrive with #768.
 | Phase | Buzz | Host commands |
 |---|---|---|
 | `Waiting` | rejected `not_accepting` | `OpenAcceptance`, `NextQuestion`, `CorrectResult`, `TransferHost`, `EndSession` |
-| `Open` | accepted, queued; the first one moves to `Locked` and becomes the answerer | `CloseAcceptance`, `Skip`, `NextQuestion`, ... |
-| `Locked` | accepted and queued (position assigned), does not change the answerer | `JudgeCorrect`, `JudgeIncorrect`, `Skip`, `NextQuestion`, ... |
+| `Open` | accepted, queued; the first one moves to `Locked` and becomes the answerer | `CloseAcceptance`, `Skip`, `NextQuestion`, `TransferHost`, `EndSession` |
+| `Locked` | accepted and queued (position assigned), does not change the answerer | `JudgeCorrect`, `JudgeIncorrect`, `Skip`, `NextQuestion`, `TransferHost`, `EndSession` |
 | `Finished` | rejected `session_finished` | none except `Leave`; export stays available |
 
 Rules:
@@ -111,7 +141,14 @@ Rules:
   and cannot buzz again in it. The host then chooses `NextCandidate` (next
   non-excluded entry in the queue becomes answerer, stays `Locked`; if none,
   back to `Open`) or `Reopen` (clear the queue, keep exclusions, `Open`).
-- `Skip`: closes the question with no points.
+- `Skip`: closes the question with no points. The buzz order stays on
+  screen until `NextQuestion` (#768). While a closed question's order is
+  still there (after `Skip`, or the host leaving a locked question),
+  `OpenAcceptance` is rejected `invalid_phase`: reopening would queue new
+  buzzes behind the old ones and make someone other than the first buzzer
+  the answerer. The host moves on with `NextQuestion`.
+- `CloseAcceptance` is only for `Open` (nobody buzzed yet); once locked, the
+  host closes with `Skip` or a judgment (#768).
 - `NextQuestion`: increments `RoundId`, clears queue and exclusions,
   `Waiting`.
 - `CorrectResult` may change a judgment of any recorded question while the
@@ -124,10 +161,9 @@ Rules:
 ## Revision and stale notifications (#765)
 
 **Implemented** (#765). Wire details are in
-[`docs/mvp.md`](mvp.md#suggested-wire-protocol). Until #768 adds roles, the
-MVP `reset` stays available to every participant; it now names the round
-(`round_id`) and starts the next one, so it already behaves like the later
-host-only `NextQuestion` with respect to `RoundId`.
+[`docs/mvp.md`](mvp.md#suggested-wire-protocol). Since #768 the MVP `reset`
+is gone; the host's `next_question` names the round (`round_id`) and starts
+the next one.
 
 - Every *accepted* state change increments `Revision` by 1. The direct reply
   to the sender and the broadcast to everyone carry the same
@@ -152,8 +188,8 @@ host-only `NextQuestion` with respect to `RoundId`.
 ## Connections, disconnect and resume (#766)
 
 **Implemented in #766** for Players (wire details in
-[`docs/mvp.md`](mvp.md#reconnect)). Host and Display parts below are applied
-when those roles exist (#768).
+[`docs/mvp.md`](mvp.md#reconnect)). The Host and Display parts below are
+implemented in #768.
 
 Server side, per participant: `Connected(generation)` or
 `Disconnected(generation, since)`.
@@ -180,8 +216,10 @@ Server side, per participant: `Connected(generation)` or
 7. **Explicit leave**: same as grace expiry, immediately.
 8. **Resume failure** reasons, all shown in the UI with a "join as new
    participant" action: `room_gone` (unknown code or different instance,
-   e.g. after a server restart), `resume_expired`, `invalid_token`,
-   `session_finished`.
+   e.g. after a server restart), `resume_expired`, `invalid_token`.
+   `session_finished` answers a *join* after `EndSession`; a resume of a
+   participant still on the list is accepted, so a phone that blinks after
+   the end can see (and later export) the results (#768).
 
 As implemented in #766:
 
@@ -189,7 +227,6 @@ As implemented in #766:
   `resume_token`; the joining `state` carries `resume_token`; participants
   carry `connected`; `participant_disconnected` / `participant_reconnected`
   are revisioned like other changes; `leave` is the explicit leave.
-  `session_finished` waits for `EndSession` (#768).
 - The browser resumes only when the saved room id **and** display name match
   what it is about to join, so editing the name joins as a new person.
 - The "current connection" is the session subject attached by the latest
@@ -202,12 +239,19 @@ As implemented in #766:
   that the oldest departed entries are dropped (their tokens then answer
   `invalid_token`).
 
-Host: steps 2–5 apply with the `HostToken`; step 6 does not apply (the host
-role is held until `TransferHost`, explicit leave, or room stop). While the
-host is disconnected, the phase is moved to `Waiting` if it was `Open`
-(acceptance is not left running without a host); `Locked` stays `Locked`.
+Host: steps 2–5 apply; the host's browser sends its `HostToken` with the
+resume. Step 6 removes the host from the list like anyone else, but the host
+*seat* is kept (see "Roles and permissions"), so the host can still come back
+with the token while the room lives. While the host is disconnected, the
+phase is moved to `Waiting` if it was `Open` (acceptance is not left running
+without a host); `Locked` stays `Locked`. An explicit leave by the host also
+moves `Locked` to `Waiting`.
 
-Display: no token, no grace. A disconnected display simply re-attaches.
+The room still stops when its participant list becomes empty, so a host left
+alone who stays away past the grace ends the room.
+
+Display: no token, no grace. A disconnected display simply re-attaches
+(`watch` again).
 
 ## Creating a room and inviting (#767)
 
@@ -263,9 +307,9 @@ Display: no token, no grace. A disconnected display simply re-attaches.
 | Limit | Value | Notes |
 |---|---|---|
 | participants (Players, including those within grace) | 64 | existing `max_participants` |
-| Displays per room | 8 | new |
+| Displays per room | 8 | #768: `room.max_displays`; the 9th `watch` is answered `displays_full` |
 | participants tracked per room instance (including departed) | 128 | #766: the oldest departed entries are dropped first, so joining is never blocked; bounds departed players kept for scores |
-| questions (`RoundId`) per session | 200 | `NextQuestion` beyond it is rejected `session_full` |
+| questions (`RoundId`) per session | 200 | `room.max_rounds` (#768); `NextQuestion` beyond it is rejected `session_full` |
 | buzz queue per question | 128 | existing `max_buzzes_per_round` |
 | participant grace | 60 s | after the server sees the disconnect (detection itself takes up to 60 s, #764); `room.default_participant_grace_ms` (#766) |
 | empty-room grace | 60 s | from room start, for a room nobody joined; `room.default_empty_room_grace_ms` (#767) |
@@ -296,10 +340,10 @@ generic session/permission framework.
 
 | Item | Decided here | Left to |
 |---|---|---|
-| exact wire field names, error code strings | shape and codes above | #765 (sync, done), #766 (resume, done), #768 (roles) |
+| exact wire field names, error code strings | shape and codes above | #765 (sync, done), #766 (resume, done), #768 (roles, done) |
 | keepalive interval / timeout | — (done) | #764 (merged, PR #772) |
 | `sync` request rate limit | must exist | done in #765: counts toward the normal 30-per-window limit; the client sends at most one until the next `state` |
 | QR generation library | local only, no external service | done in #767: in-page encoder, no dependency |
-| host / player / display screen layout | roles and permissions | #768 |
+| host / player / display screen layout | roles and permissions | done in #768: one page; the host sees a control panel and no BUZZ, players see BUZZ and a short how-to, `/r/<code>/display` shows phase, answerer and order in large type |
 | CSV columns and formula-injection escaping | client-side export only | #769 |
 | deployment target | single BEAM node | #770 |

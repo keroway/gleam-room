@@ -148,7 +148,8 @@ Responsible for the authoritative state of one active room:
 - Participant membership/presence.
 - Current round state.
 - Buzzer ordering.
-- Reset transitions.
+- Acceptance phases and the host's commands (#768; the MVP's reset became
+  the host's "next question").
 - Producing domain events to subscribers.
 
 One room should be isolated from failures/state in other rooms.
@@ -173,7 +174,7 @@ Example command concepts:
 Join(participant)
 Leave(participant_id)
 Buzz(participant_id)
-ResetRound
+OpenAcceptance / NextQuestion / ... (host only, #768)
 ```
 
 Example event concepts:
@@ -231,7 +232,8 @@ Expected capabilities:
 - Show participants/basic status.
 - Large buzzer button.
 - Display ordered buzzer results.
-- Host/reset control can initially be simplified; authentication is out of scope.
+- Host control: since #768 the creator is the host, checked by the room;
+  authentication (accounts) remains out of scope.
 
 ## Persistence
 
