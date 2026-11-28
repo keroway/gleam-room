@@ -143,6 +143,15 @@ pub fn ws_rejoins_after_room_actor_dies_test() {
   assert string.contains(buzz_reply, "\"type\":\"error\"")
   assert string.contains(buzz_reply, "\"code\":\"room_busy\"")
 
+  // registry が終了通知を処理する前に join すると、死んだ subject を引いて
+  // `room_unavailable` になりうる。登録が消えるのを待ってから送る。
+  wait.until(
+    fn() {
+      registry.find(registry_subject, registry.room_id(room_code))
+      == Error(registry.RoomNotFound)
+    },
+    "終了した部屋の登録が消える",
+  )
   send_client_message(socket, join_message(room_code, "Alice"))
   let #(rejoin_reply, _buffer) = recv_text_message(socket, buffer)
   assert string.contains(rejoin_reply, "\"code\":\"room_not_found\"")

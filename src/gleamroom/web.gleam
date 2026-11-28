@@ -100,7 +100,7 @@ pub fn index_html() -> String {
   <label>招待URL <input id=\"invite-url\" readonly></label>
   <p><button type=\"button\" id=\"copy-invite\">招待URLをコピー</button> <span id=\"copy-result\" role=\"status\" aria-live=\"polite\"></span></p>
   <div id=\"invite-qr\" role=\"img\" aria-label=\"招待URLのQRコード\"></div>
-  <p>スマホのカメラでQRコードを読み取るか、招待URLを送ってください。招待から入った人は名前を入れるだけで参加できます。</p>
+  <p><span id=\"invite-qr-hint\">スマホのカメラでQRコードを読み取るか、招待URLを送ってください。</span>招待から入った人は名前を入れるだけで参加できます。</p>
 </section>
 
 <h2>参加者</h2>
@@ -133,6 +133,7 @@ pub fn index_html() -> String {
   const copyButton = document.getElementById(\"copy-invite\");
   const copyResultEl = document.getElementById(\"copy-result\");
   const inviteQrEl = document.getElementById(\"invite-qr\");
+  const inviteQrHintEl = document.getElementById(\"invite-qr-hint\");
   const buzzButton = document.getElementById(\"buzz\");
   const resetButton = document.getElementById(\"reset\");
   const leaveButton = document.getElementById(\"leave\");
@@ -279,6 +280,13 @@ pub fn index_html() -> String {
 
   function renderQr(text) {
     const matrix = qrMatrix(text);
+    // URL が長すぎて QR に収まらないときは、空の枠と読み取り案内を残さず
+    // URL の送付だけを案内する。
+    inviteQrEl.hidden = matrix === null;
+    inviteQrHintEl.textContent =
+      matrix === null
+        ? \"招待URLをコピーして送ってください。\"
+        : \"スマホのカメラでQRコードを読み取るか、招待URLを送ってください。\";
     if (matrix === null) {
       inviteQrEl.replaceChildren();
       return;
@@ -314,13 +322,18 @@ pub fn index_html() -> String {
   }
 
   function invitedRoomFromPath() {
-    const match = /^[/]r[/]([^/]+)$/.exec(location.pathname ?? \"\");
+    // サーバは空のパス要素を無視するので、末尾の / も同じ招待として扱う。
+    const match = /^[/]r[/]([^/]+)[/]?$/.exec(location.pathname ?? \"\");
     if (!match) return null;
+    let roomId;
     try {
-      return decodeURIComponent(match[1]).trim().toUpperCase() || null;
+      roomId = decodeURIComponent(match[1]).trim().toUpperCase();
     } catch (_) {
       return null;
     }
+    // サーバが受け付けないコードなら招待として扱わず、通常の画面を出す
+    // （部屋コード欄と作成フォームを隠したまま行き詰まらないように）。
+    return roomId !== \"\" && byteLength(roomId) <= 64 ? roomId : null;
   }
 
   // 押下済みかどうかはサーバの buzz 一覧と、現ラウンドへの応答待ちの buzz
@@ -620,6 +633,8 @@ pub fn index_html() -> String {
         `${RESUME_FAILURES[message.code]}。「参加する」で新しい参加者として参加できます`,
         \"resume-failed\",
       );
+      // 部屋ごと終わっているなら、新しく作る導線を出す（#767）。
+      if (message.code === \"room_gone\") createForm.hidden = false;
       return;
     }
     if (message.code === \"session_replaced\") {
@@ -731,9 +746,19 @@ pub fn index_html() -> String {
   });
 
   copyButton.addEventListener(\"click\", () => {
+    // navigator.clipboard は https（と localhost）でしか使えない。LAN 内の
+    // http で開いたスマホでもコピーできるよう、選択してからの copy に落とす。
     const fallback = () => {
       inviteUrlInput.select?.();
-      copyResultEl.textContent = \"自動でコピーできませんでした。選択された招待URLをコピーしてください\";
+      let copied = false;
+      try {
+        copied = document.execCommand?.(\"copy\") === true;
+      } catch (_) {
+        copied = false;
+      }
+      copyResultEl.textContent = copied
+        ? \"招待URLをコピーしました\"
+        : \"自動でコピーできませんでした。選択された招待URLをコピーしてください\";
     };
     const clipboard = globalThis.navigator?.clipboard;
     if (!clipboard?.writeText) {

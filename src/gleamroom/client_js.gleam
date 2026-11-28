@@ -304,6 +304,11 @@ pub const shared =
 /// an external QR service. It defines `qrMatrix(text, mask?)`; the client
 /// tests (`test/client/qr.test.mjs`) compare its output with reference
 /// matrices.
+///
+/// Adapted from Project Nayuki's QR Code generator library (MIT License). The
+/// notice below is part of the served JS on purpose: the MIT License requires
+/// it in every copy, and the page is the copy that gets distributed. See also
+/// `THIRD_PARTY_NOTICES.md`.
 pub const qr_code =
   "
   // 招待 URL の QR コード（#767）。外部サービスへ URL を送らないよう、ページ内で
@@ -311,6 +316,29 @@ pub const qr_code =
   // 型番 1〜10 に限った最小の実装にしている（JIS X 0510 / ISO/IEC 18004）。
   // 戻り値は行ごとの真偽値の配列（true が暗）。収まらなければ null。
   // mask を指定しなければ減点が最小のマスクを選ぶ。
+  //
+  // Project Nayuki の QR Code generator library を、この用途に必要な部分だけに
+  // 絞って書き直したもの。
+  //
+  // QR Code generator library
+  // Copyright (c) Project Nayuki. (MIT License)
+  // https://www.nayuki.io/page/qr-code-generator-library
+  //
+  // Permission is hereby granted, free of charge, to any person obtaining a copy of
+  // this software and associated documentation files (the \"Software\"), to deal in
+  // the Software without restriction, including without limitation the rights to
+  // use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+  // the Software, and to permit persons to whom the Software is furnished to do so,
+  // subject to the following conditions:
+  // - The above copyright notice and this permission notice shall be included in
+  //   all copies or substantial portions of the Software.
+  // - The Software is provided \"as is\", without warranty of any kind, express or
+  //   implied, including but not limited to the warranties of merchantability,
+  //   fitness for a particular purpose and noninfringement. In no event shall the
+  //   authors or copyright holders be liable for any claim, damages or other
+  //   liability, whether in an action of contract, tort or otherwise, arising from,
+  //   out of or in connection with the Software or the use or other dealings in the
+  //   Software.
   const QR_EC_CODEWORDS_PER_BLOCK = [0, 10, 16, 26, 18, 24, 16, 18, 22, 22, 26];
   const QR_EC_BLOCKS = [0, 1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
 

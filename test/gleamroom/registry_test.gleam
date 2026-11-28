@@ -739,6 +739,31 @@ pub fn create_gives_up_when_no_free_code_is_found_test() {
   assert registry.find(started.data, first_id) == Ok(first)
 }
 
+/// 引き直しは8回まで。8回目に空きが出れば作れ、9回目にしか出なければ諦める。
+pub fn create_draws_at_most_eight_codes_test() {
+  let taken = list.repeat("AAAAAA", 7)
+  let codes =
+    code_sequence(
+      list.flatten([
+        ["AAAAAA"],
+        taken,
+        ["BBBBBB"],
+        taken,
+        ["AAAAAA", "CCCCCC"],
+      ]),
+    )
+  let assert Ok(started) =
+    registry.start_with_code_generator(fn() { next_code(codes) })
+
+  let assert Ok(_) = registry.create(started.data)
+  let assert Ok(#(eighth_draw, _)) = registry.create(started.data)
+  assert registry.room_id_to_string(eighth_draw) == "BBBBBB"
+  assert registry.create(started.data) == Error(room_registry.Unavailable)
+  // 9回目の候補は諦めた作成では引かれず、次の作成の最初の候補になる。
+  let assert Ok(#(next, _)) = registry.create(started.data)
+  assert registry.room_id_to_string(next) == "CCCCCC"
+}
+
 pub fn create_respects_the_room_limit_test() {
   let assert Ok(started) = registry.start_with_max_rooms(1)
 

@@ -4,6 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { startClient } from "./harness.mjs";
+import { clientJsConst } from "./extract.mjs";
 import { buzzerState, INSTANCE, lastSent } from "./buzzer-wire.mjs";
 
 const RESUME_KEY = "gleamroom.buzzer.resume";
@@ -18,6 +19,18 @@ function send(socket, message) {
 function saved(client) {
   const raw = client.storage.get(RESUME_KEY);
   return raw === undefined ? null : JSON.parse(raw);
+}
+
+const qrMatrix = new Function(`${clientJsConst("qr_code")}; return qrMatrix;`)();
+
+function qrPath(text, quietZone = 4) {
+  let d = "";
+  qrMatrix(text).forEach((row, y) => {
+    row.forEach((dark, x) => {
+      if (dark) d += `M${x + quietZone} ${y + quietZone}h1v1h-1z`;
+    });
+  });
+  return d;
 }
 
 function created(client, displayName = "Host") {
@@ -66,10 +79,14 @@ test("招待 URL・QR・ログに token が出ない", () => {
   const client = startClient();
   try {
     const socket = created(client);
+    const url = client.node("invite-url").value;
+    assert.equal(url, `http://127.0.0.1:4000/r/${CODE}`);
+    assert.ok(!url.includes(RESUME_TOKEN) && !url.includes(HOST_TOKEN));
+    // QR の座標には token が平文で出ないので、描いた暗モジュールが「部屋コード
+    // だけの招待 URL」の QR と一致することで、token を符号化していないと確かめる。
     const [svg] = client.node("invite-qr").children;
     const path = svg.children.find((child) => child.id === "path");
-    const shown = [client.node("invite-url").value, path.getAttribute("d")].join(" ");
-    assert.ok(!shown.includes(RESUME_TOKEN) && !shown.includes(HOST_TOKEN));
+    assert.equal(path.getAttribute("d"), qrPath(url));
     // 形の崩れたメッセージは丸ごとログに書くが、token の値は伏せる。
     send(socket, { type: "state", resume_token: RESUME_TOKEN, host_token: HOST_TOKEN });
     const logs = client.logs.join("\n");
@@ -246,6 +263,92 @@ test("コピーできない環境では URL を選択して手でコピーする
     client.click("copy-invite");
     assert.equal(client.node("invite-url").selected, true);
     assert.match(client.textOf("copy-result"), /コピーできませんでした/);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("コピー API が使えない http でも、選択してのコピーでコピーできる", () => {
+  const commands = [];
+  const client = startClient({
+    execCommand: (command) => {
+      commands.push(command);
+      return true;
+    },
+  });
+  try {
+    created(client);
+    client.click("copy-invite");
+    assert.deepEqual(commands, ["copy"]);
+    assert.equal(client.node("invite-url").selected, true);
+    assert.equal(client.textOf("copy-result"), "招待URLをコピーしました");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("末尾に / が付いた招待 URL も同じ部屋の招待として扱う", () => {
+  const client = startClient({ pathname: `/r/${CODE}/` });
+  try {
+    assert.equal(client.node("room-id").value, CODE);
+    assert.equal(client.node("room-label").hidden, true);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("サーバが受け付けない長さの部屋コードは招待として扱わない", () => {
+  const client = startClient({ pathname: `/r/${"A".repeat(65)}` });
+  try {
+    assert.notEqual(client.node("room-label").hidden, true, "部屋コード欄が隠れたまま");
+    assert.notEqual(client.node("create-form").hidden, true, "作成フォームが隠れたまま");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("前回の部屋が終了していたら、新しく作る導線を出す", () => {
+  const storage = {
+    [RESUME_KEY]: JSON.stringify({
+      room_id: CODE,
+      display_name: "N",
+      room_instance_id: INSTANCE,
+      resume_token: RESUME_TOKEN,
+    }),
+  };
+  const client = startClient({ pathname: `/r/${CODE}`, storage });
+  try {
+    const socket = client.latestSocket();
+    socket.handlers.open?.();
+    send(socket, { type: "error", code: "room_gone", message: "x" });
+    assert.match(client.textOf("status"), /前回の部屋は終了しています/);
+    assert.equal(client.node("create-form").hidden, false);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("URL が長すぎて QR に収まらないときは、QR と読み取り案内を出さない", () => {
+  // 型番10-M の上限（213バイト）を超えるホスト名。
+  const host = `${"a".repeat(220)}.example`;
+  const client = startClient({ host });
+  try {
+    created(client);
+    assert.equal(client.node("invite-url").value, `http://${host}/r/${CODE}`);
+    assert.equal(client.node("invite-qr").hidden, true);
+    assert.equal(client.node("invite-qr").children.length, 0);
+    assert.doesNotMatch(client.textOf("invite-qr-hint"), /QR/);
+  } finally {
+    client.dispose();
+  }
+});
+
+test("QR に収まる URL では QR と読み取り案内を出す", () => {
+  const client = startClient();
+  try {
+    created(client);
+    assert.equal(client.node("invite-qr").hidden, false);
+    assert.match(client.textOf("invite-qr-hint"), /QR/);
   } finally {
     client.dispose();
   }

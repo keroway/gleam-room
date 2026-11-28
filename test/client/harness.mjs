@@ -25,13 +25,16 @@ export function flapWithoutJoining(client, rounds) {
 /// `storage` は sessionStorage の初期内容（key → 文字列）。ページを開き直した
 /// 場面（#766 の自動復帰）を作るのに使う。`pathname` は開いたページのパス
 /// （#767 の招待 URL `/r/<部屋コード>`）、`clipboard` は navigator.clipboard の
-/// 代わり（省略時は無し＝コピー API の無い環境）。
+/// 代わり（省略時は無し＝コピー API の無い環境）。`execCommand` は
+/// document.execCommand の代わり（省略時は無し）。`host` は開いたページのホスト。
 export function startClient({
   modulePath,
   functionName,
   storage = {},
   pathname = "/",
+  host = "127.0.0.1:4000",
   clipboard,
+  execCommand,
 } = {}) {
   const knownIds = extractElementIds(modulePath, functionName);
   const nodes = new Map();
@@ -101,8 +104,9 @@ export function startClient({
       },
       createElement: () => makeNode("created"),
       createElementNS: (_namespace, name) => makeNode(name),
+      execCommand,
     },
-    location: { protocol: "http:", host: "127.0.0.1:4000", pathname },
+    location: { protocol: "http:", host, pathname },
     history: {
       replaceState(_state, _title, url) {
         historyUrls.push(url);

@@ -155,9 +155,8 @@ the full MVP acceptance scenario from
 
 1. Open `http://localhost:4000/`, enter a name (e.g. Alice) and press
    「部屋を作る」. The page shows the room code, the invite URL and a QR code.
-2. Open the invite URL in two more tabs/windows (or scan the QR code with a
-   phone on the same network) and join as Bob and Carol by entering only a
-   name. All three should show the same participant presence. Opening
+2. Open the invite URL in two more tabs/windows and join as Bob and Carol by
+   entering only a name. All three should show the same participant presence. Opening
    `/r/` with a code that has no room explains that the room was not found
    and creates nothing.
 3. Reset the round, then press buzz in the order Bob, Alice, Carol. All
@@ -171,6 +170,17 @@ the full MVP acceptance scenario from
    buzz kept) and the others see it reconnect, not a leave/join
    ([`docs/mvp.md`](docs/mvp.md#reconnect), #766). A newly opened tab joins
    as a new participant; the **Leave** button leaves for good.
+
+The invite URL and QR code use the host in the address bar, so a page opened
+at `localhost` invites to `localhost`, which a phone cannot reach. The server
+also listens on the loopback interface only (Mist's default), so scanning the
+QR code with a phone needs a temporary local change that binds a LAN-reachable
+interface (e.g. adding `|> mist.bind("0.0.0.0")` next to `mist.port` in
+`src/gleamroom.gleam`; do not commit it). Allow incoming connections for
+`beam.smp` if the OS firewall asks, then open the page on the computer at its
+LAN address (e.g. `http://192.168.1.10:4000/`) before creating the room. Over
+plain `http` on a LAN address the browser offers no clipboard API; the copy
+button falls back to selecting the URL and copying it the older way.
 
 `test/gleamroom/integration_test.gleam` automates this same scenario against
 the Registry + Room actor boundary (without opening real sockets); run it
@@ -282,4 +292,4 @@ Development is intentionally issue-driven:
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE). Third-party code included in the served page is listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
