@@ -247,9 +247,12 @@ pub fn apply_command(
     Buzz(id, round_id) -> apply_buzz(state, id, round_id)
     OpenAcceptance(by, round_id) ->
       host_command(state, by, round_id, fn(phase) {
-        case phase {
-          Waiting -> Ok(set_phase(state, Open))
-          _ -> Error(InvalidPhase)
+        case phase, state.buzzes {
+          // 閉じた問題（Skip・司会の退出）の押順が残っている間は開き直さない。
+          // 開くと、残った押順の後ろに新しい BUZZ が積まれ、先頭ではない人が
+          // 回答者になる。次の問題（NextQuestion）で押順を消してから開く。
+          Waiting, [] -> Ok(set_phase(state, Open))
+          _, _ -> Error(InvalidPhase)
         }
       })
     CloseAcceptance(by, round_id) ->
@@ -1129,6 +1132,21 @@ fn run_command(
   session: Subject(RoomEvent),
 ) -> #(ActorState, RoomEvent) {
   let #(next_room, event) = apply_command(state.room, command)
+  let #(next_room, event) = case event {
+    // 一覧から外れた司会の席は空けておく（#768）。参加者で埋まると、司会が
+    // token を持っていても戻れなくなる。
+    ParticipantJoined(Participant(id:, role: Player, ..), _)
+      if state.host != option.None
+    ->
+      case
+        host_seat_vacant(state)
+        && list.length(next_room.participants) >= max_participants
+      {
+        True -> #(state.room, JoinRejected(id, RoomFull))
+        False -> #(next_room, event)
+      }
+    _ -> #(next_room, event)
+  }
   let state = ActorState(..state, room: next_room)
   let state = case event {
     ParticipantJoined(participant, _) ->
@@ -1161,6 +1179,18 @@ fn run_command(
 fn is_seated_host(state: ActorState, id: ParticipantId) -> Bool {
   case state.host {
     option.Some(seat) -> seat.participant_key == participant_id_to_string(id)
+    option.None -> False
+  }
+}
+
+/// Whether the host has left the participant list (grace ran out or they
+/// left) but still holds the seat, so they can come back with the host token.
+fn host_seat_vacant(state: ActorState) -> Bool {
+  case state.host {
+    option.Some(seat) ->
+      !list.any(state.room.participants, fn(p) {
+        participant_id_to_string(p.id) == seat.participant_key
+      })
     option.None -> False
   }
 }

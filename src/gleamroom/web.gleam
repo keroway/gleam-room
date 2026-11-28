@@ -199,6 +199,11 @@ pub fn index_html() -> String {
   let selfRole = null;
   // 「部屋を終了する」は取り消せないので、2回押して確定する。
   let endArmed = false;
+  // 「次の問題へ」を短く2回押すと、1回目の round_reset が2回目より先に届いた
+  // 場合に2回目が新しい問題を名指しして、問題が2つ進む。問題が変わった直後は
+  // しばらく押せなくする（#768）。
+  const NEXT_QUESTION_HOLD_MS = 1000;
+  let nextQuestionHoldTimer = null;
   // サーバ権威の状態の位置（#765）。通知は room_instance_id が一致し、
   // revision がちょうど次のものだけを適用する。内容を比べて新旧を推測しない。
   let instanceId = null;
@@ -456,10 +461,13 @@ pub fn index_html() -> String {
     const isHost = joined && selfRole === \"host\";
     hostPanel.hidden = !isHost;
     const running = isHost && phase !== \"finished\";
-    openButton.disabled = !(running && phase === \"waiting\");
-    closeButton.disabled = !(running && phase === \"open\");
-    skipButton.disabled = !(running && (phase === \"open\" || phase === \"locked\"));
-    nextQuestionButton.disabled = !running;
+    // 応答待ちの間は段階の操作を重ねて送らない。
+    const ready = running && !hostCommandPending();
+    // 閉じた問題の押順が残っている間は開き直せない（サーバも拒否する）。
+    openButton.disabled = !(ready && phase === \"waiting\" && buzzes.length === 0);
+    closeButton.disabled = !(ready && phase === \"open\");
+    skipButton.disabled = !(ready && (phase === \"open\" || phase === \"locked\"));
+    nextQuestionButton.disabled = !ready || nextQuestionHoldTimer !== null;
     endButton.disabled = !running;
     if (!running) disarmEnd();
     renderTransferTargets(running);
@@ -483,6 +491,21 @@ pub fn index_html() -> String {
     if (targets.some((p) => p.participant_id === previous)) transferSelect.value = previous;
     else transferSelect.value = targets[0]?.participant_id ?? \"\";
     transferButton.disabled = !running || targets.length === 0;
+  }
+
+  function hostCommandPending() {
+    for (const request of pending.values()) {
+      if (request.type !== \"buzz\") return true;
+    }
+    return false;
+  }
+
+  function holdNextQuestion() {
+    if (nextQuestionHoldTimer !== null) clearTimeout(nextQuestionHoldTimer);
+    nextQuestionHoldTimer = setTimeout(() => {
+      nextQuestionHoldTimer = null;
+      renderRoleView();
+    }, NEXT_QUESTION_HOLD_MS);
   }
 
   function disarmEnd() {
@@ -734,6 +757,7 @@ pub fn index_html() -> String {
         roundId = message.round_id;
         buzzes = [];
         phase = \"waiting\";
+        holdNextQuestion();
         renderBuzzes();
         log(`round reset: next question (round ${roundId})`);
         break;
@@ -936,7 +960,7 @@ pub fn index_html() -> String {
     while (pending.size > MAX_PENDING_REQUESTS) {
       pending.delete(pending.keys().next().value);
     }
-    updateBuzzButton();
+    renderRoleView();
   }
 
   function sendCommand(message) {
@@ -953,7 +977,11 @@ pub fn index_html() -> String {
   openButton.addEventListener(\"click\", () => sendRequest(\"open\"));
   closeButton.addEventListener(\"click\", () => sendRequest(\"close\"));
   skipButton.addEventListener(\"click\", () => sendRequest(\"skip\"));
-  nextQuestionButton.addEventListener(\"click\", () => sendRequest(\"next_question\"));
+  nextQuestionButton.addEventListener(\"click\", () => {
+    // ボタンを無効にするだけでは、無効になる前に入ったクリックを止められない。
+    if (nextQuestionHoldTimer !== null || hostCommandPending()) return;
+    sendRequest(\"next_question\");
+  });
   transferButton.addEventListener(\"click\", () => {
     if (!transferSelect.value) return;
     sendCommand({ type: \"transfer_host\", participant_id: transferSelect.value });

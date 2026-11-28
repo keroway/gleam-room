@@ -281,7 +281,7 @@ may vary for the same code.
 | `binary_frame` | The connection sent a binary WebSocket frame. Only text frames carry protocol meaning. |
 | `rate_limited` | This connection exceeded the maximum number of messages allowed within a heartbeat window (30 messages per 30-second window). |
 | `stale_round` | A `buzz` or host command named a round that is no longer current (#765). Nothing changed; the client already has or will receive the newer round. |
-| `client_outdated` | A `join`, `create` or `resume` did not carry `"v": 2`. The server closes the connection; the page must be reloaded (#765). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
+| `client_outdated` | A `join`, `create` or `resume` did not carry `"v": 2`, or a page served before #768 sent the removed `reset`. The server closes the connection; the page must be reloaded (#765, #768). A v2 page also asks for a reload when a `state` carries a different `protocol_version`. |
 | `frame_too_large` | An incoming text frame exceeded the maximum accepted byte size (2048 bytes). The connection is closed afterward (WebSocket close code 4000, reason `frame_too_large`, for logs/proxies; clients should still decide by this `code`). |
 
 Do not treat these examples as a reason to expose untyped maps throughout the codebase.

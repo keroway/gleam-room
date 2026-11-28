@@ -91,7 +91,10 @@ an invite never receives one. The creator's browser keeps it in
   grace runs out or the host leaves explicitly, the room continues without a
   host, and a `resume` with the seat's token puts the host back on the list
   as host (same `ParticipantId`). The seat's participant is never dropped by
-  the departed-participant bound.
+  the departed-participant bound. While the host is off the list, the seat
+  still counts toward the participant limit (64): a player join that would
+  take the last place is rejected `room_full`, so the host can always come
+  back.
 - `TransferHost`: the target must be a connected player. Everyone receives
   `host_transferred`; then the new host's connection alone receives
   `host_assigned` with a fresh token, and the old token stops working. The
@@ -139,7 +142,11 @@ Rules:
   non-excluded entry in the queue becomes answerer, stays `Locked`; if none,
   back to `Open`) or `Reopen` (clear the queue, keep exclusions, `Open`).
 - `Skip`: closes the question with no points. The buzz order stays on
-  screen until `NextQuestion` (#768).
+  screen until `NextQuestion` (#768). While a closed question's order is
+  still there (after `Skip`, or the host leaving a locked question),
+  `OpenAcceptance` is rejected `invalid_phase`: reopening would queue new
+  buzzes behind the old ones and make someone other than the first buzzer
+  the answerer. The host moves on with `NextQuestion`.
 - `CloseAcceptance` is only for `Open` (nobody buzzed yet); once locked, the
   host closes with `Skip` or a judgment (#768).
 - `NextQuestion`: increments `RoundId`, clears queue and exclusions,

@@ -1024,6 +1024,12 @@ fn handle_sync(
               <> ", reason=sync_timed_out",
           )
           send_room_busy(connection, None)
+          // 会場表示は接続を残したまま handle を捨てると、同じ接続から watch
+          // し直すたびに購読が増えて8枠を使い切る。捨てる前に外す（#768）。
+          case handle.is_display {
+            True -> room.unwatch(handle.subject, handle.session)
+            False -> Nil
+          }
           mist.continue(ConnectionState(..state, room: None))
         }
       }

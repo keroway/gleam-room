@@ -81,10 +81,14 @@ pub fn encode_pong_test() {
   assert protocol.encode_server_message(protocol.Pong) == "{\"type\":\"pong\"}"
 }
 
-/// MVP の reset は v2 には無い（#768）。司会の next_question に置き換わった。
-pub fn decode_reset_is_no_longer_a_message_test() {
-  let assert Error(ProtocolError(code: "invalid_message", ..)) =
-    protocol.decode_client_message("{\"type\":\"reset\",\"round_id\":1}")
+/// MVP の reset は無くなり、司会の next_question に置き換わった（#768）。
+/// reset を送るのは #768 より前に配られたページだけなので、invalid_message
+/// ではなく client_outdated で再読み込みに誘導する。
+pub fn decode_reset_from_an_old_page_is_client_outdated_test() {
+  assert protocol.decode_client_message(
+      "{\"type\":\"reset\",\"round_id\":1,\"request_id\":\"r1\"}",
+    )
+    == Error(protocol.client_outdated_error)
 }
 
 pub fn decode_host_commands_test() {

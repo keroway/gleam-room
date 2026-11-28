@@ -1378,6 +1378,15 @@ pub fn the_host_opens_and_the_first_buzz_locks_test() {
   assert skipped == room.PhaseChanged(room.Waiting, 1, 7)
   // 閉じた問題の結果は次の問題まで残る。
   assert list.length(room.buzz_snapshot(state)) == 2
+  // 押順が残ったまま開き直すと、先頭ではない人が回答者になる。開き直す
+  // には次の問題へ進む。
+  let #(same, reopened) =
+    room.apply_command(state, room.OpenAcceptance(host, 1))
+  assert reopened == room.CommandRejected(room.InvalidPhase)
+  assert same == state
+  let #(state, _) = room.apply_command(state, room.NextQuestion(host, 1))
+  let #(_, opened) = room.apply_command(state, room.OpenAcceptance(host, 2))
+  assert opened == room.PhaseChanged(room.Open, 2, 9)
 }
 
 pub fn the_host_can_close_acceptance_before_anyone_buzzes_test() {
@@ -1585,11 +1594,12 @@ pub fn a_disconnected_host_stops_acceptance_test() {
   let _ = drain(alice_session, [])
 
   room.detach(subject, host, host_session)
-  assert drain(alice_session, [])
-    == [
-      room.ParticipantDisconnected(host, 4),
-      room.PhaseChanged(room.Waiting, 1, 5),
-    ]
+  // drain は最後の通知から 50 ms 待つので、猶予（50 ms）切れの退出通知まで
+  // 拾うことがある。この2通だけを順に受け取る。
+  assert process.receive(alice_session, 100)
+    == Ok(room.ParticipantDisconnected(host, 4))
+  assert process.receive(alice_session, 100)
+    == Ok(room.PhaseChanged(room.Waiting, 1, 5))
 }
 
 /// 司会は猶予が切れて一覧から外れても、司会 token で司会として戻れる。
@@ -1711,4 +1721,34 @@ pub fn a_host_who_leaves_stops_acceptance_but_keeps_the_seat_test() {
       process.new_subject(),
     )
   assert id == host
+}
+
+/// 一覧から外れた司会の席は参加者で埋めない。満員近くでも司会は token で
+/// 戻れて、戻った後も上限を超えない。
+pub fn a_vacant_host_seat_is_kept_free_from_new_players_test() {
+  let #(subject, host, host_session, host_token, instance) = start_hosted()
+  // 司会と合わせて上限（64人）まで埋める。
+  int.range(from: 1, to: 64, with: Nil, run: fn(_, i) {
+    let id = room.participant_id("p-" <> int.to_string(i))
+    let _ = join_with_token(subject, id, "P", process.new_subject())
+    Nil
+  })
+  let assert Ok(room.ParticipantLeft(..)) =
+    room.dispatch(subject, room.Leave(host), host_session)
+
+  // 司会が抜けて1人分空いたが、それは司会の席。
+  let late = room.participant_id("late")
+  let assert Ok(room.JoinReply(room.JoinRejected(_, room.RoomFull), ..)) =
+    room.join(subject, late, "Late", process.new_subject())
+
+  let assert Ok(room.Resumed(id, snapshot)) =
+    room.resume_session(
+      subject,
+      "none",
+      option.Some(host_token),
+      instance,
+      process.new_subject(),
+    )
+  assert id == host
+  assert list.length(snapshot.participants) == 64
 }

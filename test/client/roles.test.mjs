@@ -94,11 +94,11 @@ test("司会には操作パネルが出て BUZZ は出ない。段階に合う�
     assert.deepEqual(enabled(), ["open-acceptance", "next-question"]);
 
     client.click("open-acceptance");
-    assert.deepEqual(
-      { type: lastSent(socket, "open").type, round: lastSent(socket, "open").round_id },
-      { type: "open", round: 1 },
-    );
-    send(socket, phaseChanged(2, "open"));
+    const open = lastSent(socket, "open");
+    assert.deepEqual({ type: open.type, round: open.round_id }, { type: "open", round: 1 });
+    // 応答待ちの間は段階の操作を重ねて送れない。
+    assert.deepEqual(enabled(), []);
+    send(socket, reply(open.request_id, phaseChanged(2, "open")));
     assert.deepEqual(enabled(), ["close-acceptance", "skip", "next-question"]);
 
     send(socket, buzzAccepted(3, { participantId: "alice", displayName: "Alice" }));
@@ -106,11 +106,45 @@ test("司会には操作パネルが出て BUZZ は出ない。段階に合う�
     assert.match(client.textOf("phase"), /回答者：Alice/);
 
     client.click("next-question");
-    assert.equal(lastSent(socket, "next_question").round_id, 1);
-    send(socket, roundReset(4, 2));
+    const next = lastSent(socket, "next_question");
+    assert.equal(next.round_id, 1);
+    send(socket, reply(next.request_id, roundReset(4, 2)));
+    // 問題が変わった直後は「次の問題へ」をしばらく押せない（二重クリック対策）。
+    assert.deepEqual(enabled(), ["open-acceptance"]);
+    client.runTimers();
     assert.deepEqual(enabled(), ["open-acceptance", "next-question"]);
     client.click("open-acceptance");
     assert.equal(lastSent(socket, "open").round_id, 2, "新しい問題の round を名指ししていない");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("「次の問題へ」を素早く2回押しても問題は1つしか進まない", () => {
+  const client = startClient();
+  try {
+    const socket = joinAs(client, asHost({ phase: "locked" }));
+    client.click("next-question");
+    const first = lastSent(socket, "next_question");
+    // 1回目の応答が2回目のクリックより先に届いた場合。
+    send(socket, reply(first.request_id, roundReset(2, 2)));
+    client.click("next-question");
+    const sent = socket.sent.map((raw) => JSON.parse(raw)).filter((m) => m.type === "next_question");
+    assert.equal(sent.length, 1, "2回目のクリックで問題がもう1つ進む");
+  } finally {
+    client.dispose();
+  }
+});
+
+test("閉じた問題の押順が残っている間は受付を開き直せない", () => {
+  const client = startClient();
+  try {
+    joinAs(client, asHost({
+      phase: "waiting",
+      buzzes: [{ participant_id: "alice", display_name: "Alice", position: 1 }],
+    }));
+    assert.equal(client.isDisabled("open-acceptance"), true);
+    assert.equal(client.isDisabled("next-question"), false);
   } finally {
     client.dispose();
   }

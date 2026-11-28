@@ -207,6 +207,7 @@ pub fn decode_client_message(
           }
       }
     Ok(RawResume(_, _, _, _, _)) -> Error(client_outdated_error)
+    Ok(RawLegacyReset) -> Error(client_outdated_error)
     Ok(RawMessage(message)) -> Ok(message)
     Error(error) -> Error(wire.decode_error(error))
   }
@@ -240,6 +241,10 @@ type RawClientMessage {
     token: String,
     host_token: Option(String),
   )
+  /// The MVP `reset`, removed in #768. Only a page served before #768 sends
+  /// it, so it is answered `client_outdated` (the page reloads) instead of
+  /// `invalid_message`.
+  RawLegacyReset
   RawMessage(ClientMessage)
 }
 
@@ -263,6 +268,7 @@ fn raw_client_message_decoder() -> decode.Decoder(RawClientMessage) {
     }
     "sync" -> decode.success(RawMessage(Sync))
     "ping" -> decode.success(RawMessage(Ping))
+    "reset" -> decode.success(RawLegacyReset)
     _ -> decode.failure(RawMessage(Sync), "ClientMessage")
   }
 }
